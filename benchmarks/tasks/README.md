@@ -66,7 +66,7 @@ pwsh benchmarks\tasks\run.ps1 -Summarize benchmarks\tasks\results\<stamp>
 |---|---|---|
 | `-Task <id[]>` | all | Task folder names under `tasks\` |
 | `-Pilot` | off | Only tasks with `"pilot": true` |
-| `-Configuration <name[]>` | all five | `none`, `winapp`, `winui`, `both`, `both-agent` |
+| `-Configuration <name[]>` | all five | `none`, `winapp`, `winui`, `both`, `both-agent`. Runs go task by task (every model and configuration of a task before the next), one iteration at a time, so partial results stay comparable |
 | `-Model <id[]>` | `claude-sonnet-5.5`, `claude-opus-5.5`, `gpt-6.1-sol` | |
 | `-Iterations <n>` | 2 | |
 | `-MaxCredits <n>` | none | Stops launching runs once this invocation has spent `n` AI credits. A run without a credit count counts at the running average (or `creditsPerRunEstimate` before any is measured) |
@@ -75,7 +75,7 @@ pwsh benchmarks\tasks\run.ps1 -Summarize benchmarks\tasks\results\<stamp>
 | `-CopilotVersion <v>` | the version `copilot --version` reports | Every Copilot call uses `--prefer-version <v>`; the build is copied from `%LOCALAPPDATA%\copilot\pkg` |
 | `-Validate` | | Runs `solve.ps1` and a no-op instead of an agent |
 | `-KeepSandbox` | off | Leaves the Sandbox running after the first run, for debugging. Stop it with `wsb stop --id <id>` |
-| `-OutDir <path>` | `results\<timestamp>` | Ignored by git |
+| `-OutDir <path>` | `results\<timestamp>` | Ignored by git. An existing folder resumes: runs already in its `runs.jsonl` (other than harness errors) are skipped, and their credits count toward `-MaxCredits` |
 
 ## What each run does
 

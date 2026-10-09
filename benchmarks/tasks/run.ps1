@@ -107,7 +107,9 @@ if ($Validate) {
     }
 }
 else {
-    foreach ($i in 1..$iterationCount) { foreach ($m in $models) { foreach ($c in $configs) { foreach ($t in $tasks) {
+    # Task-major within each iteration, so stopping early leaves whole tasks comparable across
+    # configurations and models, and iteration 1 complete before iteration 2 starts.
+    foreach ($i in 1..$iterationCount) { foreach ($t in $tasks) { foreach ($m in $models) { foreach ($c in $configs) {
                     $runList.Add([pscustomobject]@{ Task = $t; Configuration = $c; Model = $m; Iteration = $i; Mode = 'agent' })
                 } } } }
 }
@@ -212,7 +214,9 @@ $info = [ordered]@{
     plugins        = $pluginInfo
     maxCredits     = $MaxCredits ? $MaxCredits : $null
 }
-$info | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $OutDir 'run-info.json') -Encoding utf8NoBOM
+$infoPath = Join-Path $OutDir 'run-info.json'
+if (Test-Path $infoPath) { $infoPath = Join-Path $OutDir "run-info-$stamp.json" }
+$info | ConvertTo-Json -Depth 6 | Set-Content $infoPath -Encoding utf8NoBOM
 
 # --- Sandbox plumbing ---------------------------------------------------------------------------
 function Invoke-Wsb {
@@ -273,14 +277,29 @@ $measured = [System.Collections.Generic.List[double]]::new()
 $records = [System.Collections.Generic.List[object]]::new()
 $index = 0
 $sandboxId = $null
+# Resume: an existing runs.jsonl in -OutDir keeps its runs (except harness errors) and its credits.
+$completed = [System.Collections.Generic.HashSet[string]]::new()
+$runKey = { param($task, $config, $model, $iteration, $mode) "$task|$config|$model|$iteration|$mode" }
+if (Test-Path $runsPath) {
+    foreach ($prior in Get-Content $runsPath | Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json }) {
+        if ($prior.taskStatus -in 'harness_error') { continue }
+        [void]$completed.Add((& $runKey $prior.task $prior.configuration $prior.model $prior.iteration $prior.mode))
+        $records.Add($prior)
+        if ($null -ne $prior.aiCredits) { $measured.Add([double]$prior.aiCredits); $spent += [double]$prior.aiCredits }
+        $n = [int]($prior.runId -replace '^(\d+)-.*$', '$1')
+        if ($n -gt $index) { $index = $n }
+    }
+    if ($completed.Count) { Write-Host "Resuming: $($completed.Count) runs already recorded, $([Math]::Round($spent, 1)) credits spent." }
+}
+$pending = @($runList | Where-Object { -not $completed.Contains((& $runKey $_.Task.Id $_.Configuration $_.Model $_.Iteration $_.Mode)) })
 try {
-    foreach ($run in $runList) {
+    foreach ($run in $pending) {
         $index++
         if ($MaxCredits -and $spent -ge $MaxCredits) { Write-Warning "Stopping: spent $([Math]::Round($spent, 1)) of -MaxCredits $MaxCredits."; break }
         $t = $run.Task
         $spec = Get-ConfigurationSpec $run.Configuration
         $runId = '{0:D3}-{1}-{2}-{3}-{4}' -f $index, $t.Id, $run.Configuration, ($run.Model -replace '[^\w.-]', '_'), $run.Iteration
-        Write-Host "[$index/$($runList.Count)] $runId" -ForegroundColor Cyan
+        Write-Host "[$($records.Count + 1)/$($runList.Count)] $runId" -ForegroundColor Cyan
         $runOut = Join-Path $OutDir "runs\$runId"
         $in = Join-Path $stage "$runId\in"
         $check = Join-Path $stage "$runId\check"
