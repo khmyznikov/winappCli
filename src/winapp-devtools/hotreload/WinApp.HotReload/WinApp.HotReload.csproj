@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Out-of-process hot reload engine for 'winapp run' in watch mode. Roslyn is NOT shipped: it is loaded at runtime from the
+    installed .NET SDK (the same compiler and dotnet-watch hot reload service the SDK uses), so analyzers and source
+    generators always match the compiler that built the app. The packages below are compile-time only.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RollForward>LatestMajor</RollForward>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>WinApp.HotReload</AssemblyName>
+    <RootNamespace>WinApp.HotReload</RootNamespace>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <GenerateDependencyFile>false</GenerateDependencyFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\HotReloadProtocol.cs" Link="HotReloadProtocol.cs" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.6.0" ExcludeAssets="runtime" PrivateAssets="all" />
+    <InternalsVisibleTo Include="WinApp.HotReload.Tests" />
+  </ItemGroup>
+</Project>

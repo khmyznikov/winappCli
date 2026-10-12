@@ -54,7 +54,7 @@ foreach ($arch in @('x64', 'arm64')) {
             Assert-Engine ($module -ne [IntPtr]::Zero) "win-$arch LoadLibrary"
             if ($module -ne [IntPtr]::Zero) {
                 try {
-                    foreach ($export in @('DllGetClassObject', 'DllCanUnloadNow')) {
+                    foreach ($export in @('DllGetClassObject', 'DllCanUnloadNow', 'DevToolsTap_GetXamlHotReloadService')) {
                         Assert-Engine ([DevToolsSmoke.Native]::GetProcAddress($module, $export) -ne [IntPtr]::Zero) $export
                     }
                 } finally { [DevToolsSmoke.Native]::FreeLibrary($module) | Out-Null }

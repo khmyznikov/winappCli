@@ -481,8 +481,12 @@ struct TreeCb : IVisualTreeServiceCallback2
         // early return below; delivery happens on a dispatcher turn AFTER this callback completes, so
         // consumers see a finished census and can build UI without re-entering the framework mid-mutation.
         DevToolsTreeWatch_NoteMutation();
-        // Both struct parameters are [in] per xamlom.h, so the framework owns and frees their BSTRs
-        // (Type/Name/SourceInfo). We must NOT SysFreeString them here — that would be a double free.
+        // XAML hands ownership of the element's strings to the callback (Visual Studio's tap frees them too), so
+        // they are freed on every return path; everything kept below is copied first.
+        struct OwnedStrings {
+            VisualElement& e;
+            ~OwnedStrings() { SysFreeString(e.Type); SysFreeString(e.Name); SysFreeString(e.SrcInfo.FileName); SysFreeString(e.SrcInfo.Hash); }
+        } owned{ e };
         if (t == Add) {
             // This catches the async, post-Activate Adds the seed/overlay-scope self-exclusion misses
             // (XamlDiagnostics re-issues different InstanceHandles for the same objects across phases, so
@@ -511,7 +515,8 @@ struct TreeCb : IVisualTreeServiceCallback2
 
             AcquireSRWLockExclusive(&g_censusLock);
             std::wstring treeDelta;
-            if (e.Name && *e.Name) { g_byName[e.Name] = e.Handle; g_nameOf[e.Handle] = e.Name; }
+            // Names live reload generates for elements the user didn't name (__hr_N) are not selectors anyone wrote.
+            if (e.Name && *e.Name && wcsncmp(e.Name, L"__hr_", 5) != 0) { g_byName[e.Name] = e.Handle; g_nameOf[e.Handle] = e.Name; }
             if (e.Type) {
                 if (g_type.find(e.Handle) == g_type.end())
                     g_elemCount.fetch_add(1, std::memory_order_relaxed);

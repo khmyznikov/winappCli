@@ -9,6 +9,7 @@
     <AssemblyName>WinApp.DevTools.Managed</AssemblyName>
     <RootNamespace>WinApp.DevTools.Managed</RootNamespace>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ImplicitUsings>enable</ImplicitUsings>
     <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
     <IsPackable>false</IsPackable>
@@ -23,6 +24,8 @@
     <Compile Include="BindingDiagnosis.cs" />
     <Compile Include="BindingCaptureStore.cs" />
     <Compile Include="StartupHook.cs" />
+    <Compile Include="HotReload\*.cs" />
+    <Compile Include="..\..\hotreload\HotReloadProtocol.cs" Link="HotReload\HotReloadProtocol.cs" />
     <InternalsVisibleTo Include="WinApp.DevTools.Managed.Tests" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260317003" />
   </ItemGroup>

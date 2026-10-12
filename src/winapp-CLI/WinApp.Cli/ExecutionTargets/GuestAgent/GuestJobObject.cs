@@ -102,6 +102,9 @@ internal sealed class GuestJobObject : IDisposable
         }
     }
 
+    /// <summary>Adds an already running process; its children join the job as they start.</summary>
+    public bool Add(SafeHandle process) => !_disposed && PInvoke.AssignProcessToJobObject(_handle, process);
+
     /// <summary>Terminates every process in the job.</summary>
     /// <remarks>
     /// Used only after a graceful stop has been requested and its timeout elapsed, so a

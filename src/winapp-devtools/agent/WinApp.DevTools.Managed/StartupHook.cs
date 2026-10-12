@@ -14,7 +14,11 @@ internal sealed class StartupHook
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetNamedPipeClientProcessId(SafePipeHandle pipe, out uint processId);
 
-    public static void Initialize() => _ = Task.Run(ServeAsync);
+    public static void Initialize()
+    {
+        _ = Task.Run(ServeAsync);
+        WinApp.DevTools.Managed.HotReload.HotReloadAgent.Start();
+    }
 
     // The relay treats a missing pipe name as a missing host, so a listening instance always exists: the next one is
     // created before the current one is handed off or dropped. Instances are uncapped because one lives until both

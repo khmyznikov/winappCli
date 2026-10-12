@@ -1,0 +1,2880 @@
+{
+  "schemaVersion": "1.0",
+  "id": "todo-app-extended",
+  "title": "Authored-edit Todo app (local, build-only, no hot reload) (extended)",
+  "description": [
+    "One person building a Todo app in WinUI 3 the way people actually build one: a page, some",
+    "navigation, a grid, a handler, a view model, a bound list, then some restructuring.",
+    "Every action is exactly ONE authored edit followed by ONE save. Nothing here uses hot reload;",
+    "the baseline being measured is the plain edit -> save -> build loop.",
+    "Some saves are deliberately invalid, because that is what half-finished authoring looks like."
+  ],
+  "app": {
+    "template": "app-template",
+    "assetsFrom": "samples/winui-app/Assets",
+    "projectFile": "TodoBench.csproj",
+    "rootNamespace": "TodoBench"
+  },
+  "dimensions": [
+    {
+      "id": "handler-wiring",
+      "title": "Wiring a Click handler",
+      "options": [
+        "handler-first",
+        "xaml-first"
+      ],
+      "description": [
+        "handler-first: write the C# method, then point the XAML at it. Every save stays buildable.",
+        "xaml-first: type Click=\"AddButton_Click\" first, then go write the method. The first save",
+        "does not build, because the generated connector calls a method that does not exist yet."
+      ]
+    },
+    {
+      "id": "binding-wiring",
+      "title": "Wiring an x:Bind to a view-model property",
+      "options": [
+        "vm-property-first",
+        "binding-first"
+      ],
+      "description": [
+        "vm-property-first: add the property to the view model, then bind to it. Every save builds.",
+        "binding-first: write the x:Bind first, then add the property. The first save fails in the",
+        "XAML compiler, because the binding path cannot be resolved on the source type."
+      ]
+    }
+  ],
+  "variants": [
+    {
+      "id": "code-first",
+      "primary": true,
+      "summary": "Handler before XAML, view-model property before binding. Never saves a broken wiring.",
+      "choices": {
+        "handler-wiring": "handler-first",
+        "binding-wiring": "vm-property-first"
+      }
+    },
+    {
+      "id": "markup-first",
+      "primary": true,
+      "summary": "XAML before handler, binding before property. Passes through an invalid save each time.",
+      "choices": {
+        "handler-wiring": "xaml-first",
+        "binding-wiring": "binding-first"
+      }
+    },
+    {
+      "id": "mixed-handler-first",
+      "primary": false,
+      "summary": "Handler before XAML, but binding before property.",
+      "choices": {
+        "handler-wiring": "handler-first",
+        "binding-wiring": "binding-first"
+      }
+    },
+    {
+      "id": "mixed-markup-first",
+      "primary": false,
+      "summary": "XAML before handler, but view-model property before binding.",
+      "choices": {
+        "handler-wiring": "xaml-first",
+        "binding-wiring": "vm-property-first"
+      }
+    }
+  ],
+  "segments": [
+    {
+      "kind": "common",
+      "phase": "page-and-navigation",
+      "title": "Give the app a page and navigate to it",
+      "actions": [
+        {
+          "id": "a01-create-mainpage-xaml",
+          "title": "Create MainPage.xaml",
+          "intent": "Real UI should not live in the Window; start a Page.",
+          "covers": [
+            "page-creation"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "create-file",
+            "text": [
+              "<?xml version=\"1.0\" encoding=\"utf-8\" ?>",
+              "<Page",
+              "    x:Class=\"TodoBench.MainPage\"",
+              "    xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"",
+              "    xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"",
+              "    xmlns:d=\"http://schemas.microsoft.com/expression/blend/2008\"",
+              "    xmlns:local=\"using:TodoBench\"",
+              "    xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\"",
+              "    mc:Ignorable=\"d\">",
+              "",
+              "    <Grid x:Name=\"RootGrid\" Margin=\"24\">",
+              "    </Grid>",
+              "</Page>"
+            ]
+          }
+        },
+        {
+          "id": "a02-create-mainpage-cs",
+          "title": "Create MainPage.xaml.cs",
+          "intent": "The Page needs its partial class before the XAML compiler will accept it.",
+          "covers": [
+            "page-creation"
+          ],
+          "file": "MainPage.xaml.cs",
+          "edit": {
+            "op": "create-file",
+            "text": [
+              "using Microsoft.UI.Xaml;",
+              "using Microsoft.UI.Xaml.Controls;",
+              "",
+              "namespace TodoBench;",
+              "",
+              "public sealed partial class MainPage : Page",
+              "{",
+              "    public MainPage()",
+              "    {",
+              "        InitializeComponent();",
+              "    }",
+              "}"
+            ]
+          }
+        },
+        {
+          "id": "a03-window-hosts-frame",
+          "title": "Replace the placeholder text with a Frame",
+          "intent": "The Window becomes a shell that hosts pages.",
+          "covers": [
+            "navigation",
+            "x-name"
+          ],
+          "file": "MainWindow.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "        <TextBlock",
+              "            x:Name=\"StartHere\"",
+              "            Margin=\"24\"",
+              "            Text=\"Nothing here yet.\" />"
+            ],
+            "text": [
+              "        <Frame x:Name=\"RootFrame\" />"
+            ]
+          }
+        },
+        {
+          "id": "a04-navigate-to-mainpage",
+          "title": "Navigate the frame to MainPage on startup",
+          "intent": "Without this the shell renders an empty frame.",
+          "covers": [
+            "navigation"
+          ],
+          "file": "MainWindow.xaml.cs",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "        InitializeComponent();"
+            ],
+            "text": [
+              "",
+              "        RootFrame.Navigate(typeof(MainPage));"
+            ]
+          },
+          "checkpoint": {
+            "id": "c1-empty-page-hosted",
+            "kind": "launch",
+            "runtimeState": "Window titled TodoBench opens and is completely empty: the frame is hosting a page that has nothing in it. Nothing is interactive yet.",
+            "uiChecks": [
+              {
+                "target": "RootFrame",
+                "assert": "exists"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "common",
+      "phase": "layout",
+      "title": "Lay the page out in a Grid",
+      "actions": [
+        {
+          "id": "a05-add-row-definitions",
+          "title": "Add three row definitions to the page grid",
+          "intent": "Header row, input row, list row.",
+          "covers": [
+            "grid-rows"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "    <Grid x:Name=\"RootGrid\" Margin=\"24\">"
+            ],
+            "text": [
+              "        <Grid.RowDefinitions>",
+              "            <RowDefinition Height=\"Auto\" />",
+              "            <RowDefinition Height=\"Auto\" />",
+              "            <RowDefinition Height=\"*\" />",
+              "        </Grid.RowDefinitions>"
+            ]
+          }
+        },
+        {
+          "id": "a06-add-header-textblock",
+          "title": "Add the header TextBlock in row 0",
+          "intent": "A named element the code-behind can talk to.",
+          "covers": [
+            "grid-rows",
+            "x-name"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "        </Grid.RowDefinitions>"
+            ],
+            "text": [
+              "",
+              "        <TextBlock",
+              "            x:Name=\"HeaderText\"",
+              "            Grid.Row=\"0\"",
+              "            Style=\"{StaticResource TitleTextBlockStyle}\" />"
+            ]
+          }
+        },
+        {
+          "id": "a07-add-input-row",
+          "title": "Add the input row (TextBox + Add button) in row 1",
+          "intent": "Somewhere to type a todo.",
+          "covers": [
+            "grid-rows",
+            "x-name"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "        <TextBlock",
+              "            x:Name=\"HeaderText\"",
+              "            Grid.Row=\"0\"",
+              "            Style=\"{StaticResource TitleTextBlockStyle}\" />"
+            ],
+            "text": [
+              "",
+              "        <StackPanel",
+              "            x:Name=\"InputRow\"",
+              "            Grid.Row=\"1\"",
+              "            Margin=\"0,12,0,12\"",
+              "            Orientation=\"Horizontal\"",
+              "            Spacing=\"8\">",
+              "            <TextBox",
+              "                x:Name=\"NewTodoBox\"",
+              "                Width=\"260\"",
+              "                PlaceholderText=\"What needs doing?\" />",
+              "            <Button x:Name=\"AddButton\" Content=\"Add\" />",
+              "        </StackPanel>"
+            ]
+          }
+        },
+        {
+          "id": "a08-add-listview",
+          "title": "Add the (still empty) ListView in row 2",
+          "intent": "Where todos will land.",
+          "covers": [
+            "grid-rows",
+            "x-name",
+            "listview"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "        </StackPanel>"
+            ],
+            "text": [
+              "",
+              "        <ListView x:Name=\"TodoList\" Grid.Row=\"2\" />"
+            ]
+          }
+        },
+        {
+          "id": "a09-set-header-text-from-code",
+          "title": "Set the header text from code-behind",
+          "intent": "First code-behind reference to a named element.",
+          "covers": [
+            "x-name"
+          ],
+          "file": "MainPage.xaml.cs",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "        InitializeComponent();"
+            ],
+            "text": [
+              "",
+              "        HeaderText.Text = \"Todos\";"
+            ]
+          },
+          "checkpoint": {
+            "id": "c2-static-layout",
+            "kind": "build",
+            "runtimeState": "The page shows a Todos header, a text box with an Add button beside it, and an empty list filling the rest. Clicking Add does nothing yet."
+          }
+        }
+      ]
+    },
+    {
+      "kind": "swap",
+      "phase": "handler-wiring",
+      "dimension": "handler-wiring",
+      "title": "Wire the Add button to a Click handler",
+      "convergence": {
+        "id": "cv1-handler-wired",
+        "description": "Both orderings end with the same MainPage.xaml and MainPage.xaml.cs. Only the intermediate save differs: xaml-first has to pass through a build that cannot resolve the handler."
+      },
+      "orders": {
+        "handler-first": [
+          "s1-handler-method",
+          "s1-xaml-click"
+        ],
+        "xaml-first": [
+          "s1-xaml-click",
+          "s1-handler-method"
+        ]
+      },
+      "actions": [
+        {
+          "id": "s1-handler-method",
+          "title": "Write the AddButton_Click method",
+          "intent": "The behaviour behind the button.",
+          "covers": [
+            "handlers"
+          ],
+          "file": "MainPage.xaml.cs",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "    public MainPage()",
+              "    {",
+              "        InitializeComponent();",
+              "",
+              "        HeaderText.Text = \"Todos\";",
+              "    }"
+            ],
+            "text": [
+              "",
+              "    private void AddButton_Click(object sender, RoutedEventArgs e)",
+              "    {",
+              "        var title = NewTodoBox.Text;",
+              "        if (string.IsNullOrWhiteSpace(title))",
+              "        {",
+              "            return;",
+              "        }",
+              "",
+              "        TodoList.Items.Add(title);",
+              "    }"
+            ]
+          },
+          "expectWhenFirst": "build-succeeds",
+          "expectWhenSecond": "build-succeeds"
+        },
+        {
+          "id": "s1-xaml-click",
+          "title": "Point the button's Click at AddButton_Click",
+          "intent": "The markup half of the wiring.",
+          "covers": [
+            "handlers"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "            <Button x:Name=\"AddButton\" Content=\"Add\" />"
+            ],
+            "text": [
+              "            <Button x:Name=\"AddButton\" Click=\"AddButton_Click\" Content=\"Add\" />"
+            ]
+          },
+          "expectWhenFirst": "build-fails",
+          "expectWhenSecond": "build-succeeds",
+          "expectedDiagnosticsWhenFirst": [
+            "CS1061"
+          ],
+          "note": "When this lands first the generated connector calls a method that is not written yet."
+        }
+      ],
+      "checkpoint": {
+        "id": "c3-add-button-live",
+        "kind": "launch",
+        "runtimeState": "Typing \"Write the spec\" in the box and clicking Add appends one row reading \"Write the spec\" to the list. Clicking Add with an empty box does nothing.",
+        "uiChecks": [
+          {
+            "target": "NewTodoBox",
+            "assert": "set-value",
+            "value": "Write the spec"
+          },
+          {
+            "target": "AddButton",
+            "assert": "invoke"
+          },
+          {
+            "target": "TodoList",
+            "assert": "child-count-equals",
+            "value": "1"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "common",
+      "phase": "rename",
+      "title": "Rename the header element (deliberately invalid intermediate save)",
+      "actions": [
+        {
+          "id": "a10-rename-xname-in-xaml",
+          "title": "Rename x:Name HeaderText to PageHeader",
+          "intent": "Half of a rename. This is the save a person makes before they switch files. It does not build, and that is the point.",
+          "covers": [
+            "x-name",
+            "invalid-intermediate"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "            x:Name=\"HeaderText\""
+            ],
+            "text": [
+              "            x:Name=\"PageHeader\""
+            ]
+          },
+          "expect": "build-fails",
+          "expectedDiagnostics": [
+            "CS0103"
+          ],
+          "deliberatelyInvalid": true,
+          "note": "The generated field is now PageHeader, so the code-behind line referring to HeaderText no longer resolves."
+        },
+        {
+          "id": "a11-rename-xname-in-code",
+          "title": "Finish the rename in code-behind",
+          "intent": "The second half of the same edit, one save later.",
+          "covers": [
+            "x-name",
+            "invalid-intermediate"
+          ],
+          "file": "MainPage.xaml.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "        HeaderText.Text = \"Todos\";"
+            ],
+            "text": [
+              "        PageHeader.Text = \"Todos\";"
+            ]
+          },
+          "checkpoint": {
+            "id": "c4-rename-repaired",
+            "kind": "build",
+            "runtimeState": "Identical to c2/c3 from the user's point of view. The rename is invisible at runtime, which is exactly why the broken intermediate is easy to ship."
+          }
+        }
+      ]
+    },
+    {
+      "kind": "common",
+      "phase": "mvvm",
+      "title": "Introduce a view model and bind the list to it",
+      "actions": [
+        {
+          "id": "a12-add-mvvm-package",
+          "title": "Add the CommunityToolkit.Mvvm package reference",
+          "intent": "A project-file save, which forces a restore before the next build.",
+          "covers": [
+            "mvvm",
+            "project-file"
+          ],
+          "file": "TodoBench.csproj",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "    <PackageReference Include=\"Microsoft.WindowsAppSDK\" Version=\"2.3.1\" />"
+            ],
+            "text": [
+              "    <PackageReference Include=\"Microsoft.WindowsAppSDK\" Version=\"2.3.1\" />",
+              "    <PackageReference Include=\"CommunityToolkit.Mvvm\" Version=\"8.4.2\" />"
+            ]
+          }
+        },
+        {
+          "id": "a13-create-todoitem-model",
+          "title": "Create Models/TodoItem.cs",
+          "intent": "An observable item so the list can react to per-item changes.",
+          "covers": [
+            "mvvm"
+          ],
+          "file": "Models/TodoItem.cs",
+          "edit": {
+            "op": "create-file",
+            "text": [
+              "using CommunityToolkit.Mvvm.ComponentModel;",
+              "",
+              "namespace TodoBench.Models;",
+              "",
+              "public partial class TodoItem : ObservableObject",
+              "{",
+              "    [ObservableProperty]",
+              "    public partial string Title { get; set; }",
+              "",
+              "    [ObservableProperty]",
+              "    public partial bool IsDone { get; set; }",
+              "",
+              "    public TodoItem()",
+              "    {",
+              "        Title = string.Empty;",
+              "    }",
+              "}"
+            ]
+          }
+        },
+        {
+          "id": "a14-create-seed-helper",
+          "title": "Create ViewModels/TodoSeed.cs",
+          "intent": "Seed data, deliberately in its own file so it can be deleted later.",
+          "covers": [
+            "mvvm"
+          ],
+          "file": "ViewModels/TodoSeed.cs",
+          "edit": {
+            "op": "create-file",
+            "text": [
+              "using System.Collections.Generic;",
+              "using TodoBench.Models;",
+              "",
+              "namespace TodoBench.ViewModels;",
+              "",
+              "internal static class TodoSeed",
+              "{",
+              "    public static IEnumerable<TodoItem> Create()",
+              "    {",
+              "        yield return new TodoItem { Title = \"Buy milk\" };",
+              "        yield return new TodoItem { Title = \"Ship the benchmark\", IsDone = true };",
+              "    }",
+              "}"
+            ]
+          }
+        },
+        {
+          "id": "a15-create-viewmodel",
+          "title": "Create ViewModels/TodoListViewModel.cs",
+          "intent": "The ObservableCollection the ListView will bind to.",
+          "covers": [
+            "mvvm",
+            "observable-collection"
+          ],
+          "file": "ViewModels/TodoListViewModel.cs",
+          "edit": {
+            "op": "create-file",
+            "text": [
+              "using System.Collections.ObjectModel;",
+              "using CommunityToolkit.Mvvm.ComponentModel;",
+              "using TodoBench.Models;",
+              "",
+              "namespace TodoBench.ViewModels;",
+              "",
+              "public partial class TodoListViewModel : ObservableObject",
+              "{",
+              "    public TodoListViewModel()",
+              "    {",
+              "        foreach (var item in TodoSeed.Create())",
+              "        {",
+              "            Items.Add(item);",
+              "        }",
+              "    }",
+              "",
+              "    public ObservableCollection<TodoItem> Items { get; } = new();",
+              "",
+              "    public void AddTodo(string title)",
+              "    {",
+              "        if (string.IsNullOrWhiteSpace(title))",
+              "        {",
+              "            return;",
+              "        }",
+              "",
+              "        Items.Add(new TodoItem { Title = title.Trim() });",
+              "    }",
+              "}"
+            ]
+          }
+        },
+        {
+          "id": "a16-add-viewmodels-using",
+          "title": "Import the ViewModels namespace in MainPage.xaml.cs",
+          "intent": "One save that on its own changes nothing observable.",
+          "covers": [
+            "mvvm"
+          ],
+          "file": "MainPage.xaml.cs",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "using Microsoft.UI.Xaml.Controls;"
+            ],
+            "text": [
+              "using TodoBench.ViewModels;"
+            ]
+          }
+        },
+        {
+          "id": "a17-expose-viewmodel-property",
+          "title": "Expose a ViewModel property on the page",
+          "intent": "x:Bind resolves against the page, so the view model has to be reachable from it.",
+          "covers": [
+            "mvvm",
+            "x-bind"
+          ],
+          "file": "MainPage.xaml.cs",
+          "edit": {
+            "op": "insert-before",
+            "anchor": [
+              "    public MainPage()"
+            ],
+            "text": [
+              "    public TodoListViewModel ViewModel { get; } = new();",
+              ""
+            ]
+          }
+        },
+        {
+          "id": "a18-add-models-xmlns",
+          "title": "Declare the models xmlns on the page",
+          "intent": "Needed before a DataTemplate can name x:DataType.",
+          "covers": [
+            "x-bind"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "    xmlns:local=\"using:TodoBench\""
+            ],
+            "text": [
+              "    xmlns:local=\"using:TodoBench\"",
+              "    xmlns:models=\"using:TodoBench.Models\""
+            ]
+          }
+        },
+        {
+          "id": "a19-bind-itemssource",
+          "title": "Bind ListView.ItemsSource with x:Bind",
+          "intent": "The list stops being hand-fed.",
+          "covers": [
+            "x-bind",
+            "listview",
+            "observable-collection"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "        <ListView x:Name=\"TodoList\" Grid.Row=\"2\" />"
+            ],
+            "text": [
+              "        <ListView",
+              "            x:Name=\"TodoList\"",
+              "            Grid.Row=\"2\"",
+              "            ItemsSource=\"{x:Bind ViewModel.Items, Mode=OneWay}\" />"
+            ]
+          }
+        },
+        {
+          "id": "a20-add-item-template",
+          "title": "Add a DataTemplate for TodoItem",
+          "intent": "Without it the list renders type names.",
+          "covers": [
+            "listview",
+            "data-template",
+            "x-bind"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "        <ListView",
+              "            x:Name=\"TodoList\"",
+              "            Grid.Row=\"2\"",
+              "            ItemsSource=\"{x:Bind ViewModel.Items, Mode=OneWay}\" />"
+            ],
+            "text": [
+              "        <ListView",
+              "            x:Name=\"TodoList\"",
+              "            Grid.Row=\"2\"",
+              "            ItemsSource=\"{x:Bind ViewModel.Items, Mode=OneWay}\">",
+              "            <ListView.ItemTemplate>",
+              "                <DataTemplate x:DataType=\"models:TodoItem\">",
+              "                    <TextBlock Text=\"{x:Bind Title}\" />",
+              "                </DataTemplate>",
+              "            </ListView.ItemTemplate>",
+              "        </ListView>"
+            ]
+          }
+        },
+        {
+          "id": "a21-handler-calls-viewmodel",
+          "title": "Move the Add behaviour into the view model",
+          "intent": "The handler stops mutating ListView.Items directly, which would now throw.",
+          "covers": [
+            "mvvm",
+            "handlers"
+          ],
+          "file": "MainPage.xaml.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "        var title = NewTodoBox.Text;",
+              "        if (string.IsNullOrWhiteSpace(title))",
+              "        {",
+              "            return;",
+              "        }",
+              "",
+              "        TodoList.Items.Add(title);"
+            ],
+            "text": [
+              "        ViewModel.AddTodo(NewTodoBox.Text);"
+            ]
+          },
+          "checkpoint": {
+            "id": "c5-bound-list",
+            "kind": "launch",
+            "runtimeState": "Two seeded rows render through the DataTemplate: \"Buy milk\" and \"Ship the benchmark\". Typing a third title and clicking Add appends it, because the ObservableCollection raises the change.",
+            "uiChecks": [
+              {
+                "target": "TodoList",
+                "assert": "child-count-equals",
+                "value": "2"
+              },
+              {
+                "target": "NewTodoBox",
+                "assert": "set-value",
+                "value": "Write the spec"
+              },
+              {
+                "target": "AddButton",
+                "assert": "invoke"
+              },
+              {
+                "target": "TodoList",
+                "assert": "child-count-equals",
+                "value": "3"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "swap",
+      "phase": "binding-wiring",
+      "dimension": "binding-wiring",
+      "title": "Add a summary line bound to the view model",
+      "convergence": {
+        "id": "cv2-summary-bound",
+        "description": "Both orderings end with the same MainPage.xaml and TodoListViewModel.cs. binding-first pays for it with a XAML-compiler failure on the intermediate save."
+      },
+      "orders": {
+        "vm-property-first": [
+          "s2-viewmodel-summary",
+          "s2-xaml-summary"
+        ],
+        "binding-first": [
+          "s2-xaml-summary",
+          "s2-viewmodel-summary"
+        ]
+      },
+      "actions": [
+        {
+          "id": "s2-viewmodel-summary",
+          "title": "Add a Summary property to the view model",
+          "intent": "Computed from the collection.",
+          "covers": [
+            "mvvm"
+          ],
+          "file": "ViewModels/TodoListViewModel.cs",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "    public ObservableCollection<TodoItem> Items { get; } = new();"
+            ],
+            "text": [
+              "",
+              "    public string Summary => $\"{Items.Count(item => item.IsDone)} of {Items.Count} done\";"
+            ]
+          },
+          "expectWhenFirst": "build-succeeds",
+          "expectWhenSecond": "build-succeeds"
+        },
+        {
+          "id": "s2-xaml-summary",
+          "title": "Add a summary TextBlock bound with x:Bind",
+          "intent": "Wraps the header in a StackPanel so a second line fits in row 0.",
+          "covers": [
+            "x-bind",
+            "grid-rows"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "        <TextBlock",
+              "            x:Name=\"PageHeader\"",
+              "            Grid.Row=\"0\"",
+              "            Style=\"{StaticResource TitleTextBlockStyle}\" />"
+            ],
+            "text": [
+              "        <StackPanel Grid.Row=\"0\" Spacing=\"4\">",
+              "            <TextBlock",
+              "                x:Name=\"PageHeader\"",
+              "                Style=\"{StaticResource TitleTextBlockStyle}\" />",
+              "            <TextBlock",
+              "                x:Name=\"SummaryText\"",
+              "                Foreground=\"{ThemeResource TextFillColorSecondaryBrush}\"",
+              "                Text=\"{x:Bind ViewModel.Summary, Mode=OneWay}\" />",
+              "        </StackPanel>"
+            ]
+          },
+          "expectWhenFirst": "build-fails",
+          "expectWhenSecond": "build-succeeds",
+          "expectedDiagnosticsWhenFirst": [
+            "WMC1110",
+            "WMC9999"
+          ],
+          "note": "When this lands first the XAML compiler cannot resolve Summary on TodoListViewModel. On WindowsAppSDK 2.3.x the markup compiler often fails to load its own error-string resources and reports the unresolved binding path as WMC9999 'Xaml Internal Error' with no mention of Summary at all, so both codes are accepted."
+        }
+      ],
+      "checkpoint": {
+        "id": "c6-summary-visible",
+        "kind": "build",
+        "runtimeState": "A secondary line under the header reads \"1 of 2 done\". It does not update yet when a todo is checked, because nothing raises the change."
+      }
+    },
+    {
+      "kind": "common",
+      "phase": "completion",
+      "title": "Make todos completable",
+      "actions": [
+        {
+          "id": "a22-checkbox-in-template",
+          "title": "Put a two-way bound CheckBox in the item template",
+          "intent": "Completion has to be editable from the row. The AutomationId is bound to Title so a UI harness can address an individual row's checkbox, which is the only way to prove the two-way write-back rather than assume it.",
+          "covers": [
+            "data-template",
+            "x-bind",
+            "listview"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "                    <TextBlock Text=\"{x:Bind Title}\" />"
+            ],
+            "text": [
+              "                    <StackPanel Orientation=\"Horizontal\" Spacing=\"8\">",
+              "                        <CheckBox",
+              "                            AutomationProperties.AutomationId=\"{x:Bind Title}\"",
+              "                            IsChecked=\"{x:Bind IsDone, Mode=TwoWay}\" />",
+              "                        <TextBlock VerticalAlignment=\"Center\" Text=\"{x:Bind Title, Mode=OneWay}\" />",
+              "                    </StackPanel>"
+            ]
+          }
+        },
+        {
+          "id": "a23-notify-summary-on-change",
+          "title": "Raise Summary when the collection changes",
+          "intent": "The bound summary was static until now.",
+          "covers": [
+            "mvvm",
+            "observable-collection"
+          ],
+          "file": "ViewModels/TodoListViewModel.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "        foreach (var item in TodoSeed.Create())",
+              "        {",
+              "            Items.Add(item);",
+              "        }"
+            ],
+            "text": [
+              "        foreach (var item in TodoSeed.Create())",
+              "        {",
+              "            Items.Add(item);",
+              "        }",
+              "",
+              "        Items.CollectionChanged += (_, _) => OnPropertyChanged(nameof(Summary));"
+            ]
+          }
+        },
+        {
+          "id": "a24-viewmodel-cleardone",
+          "title": "Add ClearDone to the view model",
+          "intent": "Behaviour first; the button comes after.",
+          "covers": [
+            "mvvm",
+            "observable-collection"
+          ],
+          "file": "ViewModels/TodoListViewModel.cs",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "        Items.Add(new TodoItem { Title = title.Trim() });",
+              "    }"
+            ],
+            "text": [
+              "",
+              "    public void ClearDone()",
+              "    {",
+              "        for (var i = Items.Count - 1; i >= 0; i--)",
+              "        {",
+              "            if (Items[i].IsDone)",
+              "            {",
+              "                Items.RemoveAt(i);",
+              "            }",
+              "        }",
+              "    }"
+            ]
+          }
+        },
+        {
+          "id": "a25-cleardone-handler",
+          "title": "Add the ClearDoneButton_Click handler",
+          "intent": "Written before the markup that references it.",
+          "covers": [
+            "handlers"
+          ],
+          "file": "MainPage.xaml.cs",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "        ViewModel.AddTodo(NewTodoBox.Text);",
+              "    }"
+            ],
+            "text": [
+              "",
+              "    private void ClearDoneButton_Click(object sender, RoutedEventArgs e)",
+              "    {",
+              "        ViewModel.ClearDone();",
+              "    }"
+            ]
+          }
+        },
+        {
+          "id": "a26-cleardone-button",
+          "title": "Add the Clear done button to the input row",
+          "intent": "Now the markup can safely reference the handler.",
+          "covers": [
+            "handlers",
+            "x-name"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "            <Button x:Name=\"AddButton\" Click=\"AddButton_Click\" Content=\"Add\" />"
+            ],
+            "text": [
+              "            <Button x:Name=\"AddButton\" Click=\"AddButton_Click\" Content=\"Add\" />",
+              "            <Button",
+              "                x:Name=\"ClearDoneButton\"",
+              "                Click=\"ClearDoneButton_Click\"",
+              "                Content=\"Clear done\" />"
+            ]
+          },
+          "checkpoint": {
+            "id": "c7-completion-works",
+            "kind": "launch",
+            "runtimeState": "Both rows carry a checkbox, and \"Ship the benchmark\" is already checked because it was seeded IsDone. Checking \"Buy milk\" as well and then clicking Clear done empties the list entirely and the summary re-reads \"0 of 0 done\". The list going to ZERO rather than one is the whole assertion: it is only possible if toggling the checkbox wrote IsDone back onto the TodoItem through the two-way binding.",
+            "uiChecks": [
+              {
+                "target": "TodoList",
+                "assert": "child-count-equals",
+                "value": "2"
+              },
+              {
+                "target": "Buy milk",
+                "assert": "toggle-on",
+                "note": "the row CheckBox, addressed by the AutomationId bound to Title"
+              },
+              {
+                "target": "Buy milk",
+                "assert": "toggle-state-equals",
+                "value": "On",
+                "note": "read back before clearing, so a failure to toggle is distinguishable from a failure to clear"
+              },
+              {
+                "target": "ClearDoneButton",
+                "assert": "invoke"
+              },
+              {
+                "target": "TodoList",
+                "assert": "child-count-equals",
+                "value": "0",
+                "note": "1 here would mean the two-way write-back did not happen"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "common",
+      "phase": "restructure",
+      "title": "Restructure the page",
+      "actions": [
+        {
+          "id": "a27-move-input-row-below-list",
+          "title": "Move the whole input row below the list",
+          "intent": "A structural move: the same block, a different place in the tree.",
+          "covers": [
+            "structural-move",
+            "grid-rows"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "move",
+            "block": [
+              "        <StackPanel",
+              "            x:Name=\"InputRow\"",
+              "            Grid.Row=\"1\"",
+              "            Margin=\"0,12,0,12\"",
+              "            Orientation=\"Horizontal\"",
+              "            Spacing=\"8\">",
+              "            <TextBox",
+              "                x:Name=\"NewTodoBox\"",
+              "                Width=\"260\"",
+              "                PlaceholderText=\"What needs doing?\" />",
+              "            <Button x:Name=\"AddButton\" Click=\"AddButton_Click\" Content=\"Add\" />",
+              "            <Button",
+              "                x:Name=\"ClearDoneButton\"",
+              "                Click=\"ClearDoneButton_Click\"",
+              "                Content=\"Clear done\" />",
+              "        </StackPanel>"
+            ],
+            "to": [
+              "        </ListView>"
+            ],
+            "position": "after"
+          }
+        },
+        {
+          "id": "a28-listview-takes-row-1",
+          "title": "Give the list row 1",
+          "intent": "The list should now take the stretchy row.",
+          "covers": [
+            "grid-rows"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "            x:Name=\"TodoList\"",
+              "            Grid.Row=\"2\""
+            ],
+            "text": [
+              "            x:Name=\"TodoList\"",
+              "            Grid.Row=\"1\""
+            ]
+          }
+        },
+        {
+          "id": "a29-inputrow-takes-row-2",
+          "title": "Give the input row row 2",
+          "intent": "Matches its new position in the tree.",
+          "covers": [
+            "grid-rows"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "            x:Name=\"InputRow\"",
+              "            Grid.Row=\"1\""
+            ],
+            "text": [
+              "            x:Name=\"InputRow\"",
+              "            Grid.Row=\"2\""
+            ]
+          }
+        },
+        {
+          "id": "a30-row-heights-follow",
+          "title": "Swap the row heights to match",
+          "intent": "Row 1 stretches, row 2 hugs.",
+          "covers": [
+            "grid-rows"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "        <Grid.RowDefinitions>",
+              "            <RowDefinition Height=\"Auto\" />",
+              "            <RowDefinition Height=\"Auto\" />",
+              "            <RowDefinition Height=\"*\" />",
+              "        </Grid.RowDefinitions>"
+            ],
+            "text": [
+              "        <Grid.RowDefinitions>",
+              "            <RowDefinition Height=\"Auto\" />",
+              "            <RowDefinition Height=\"*\" />",
+              "            <RowDefinition Height=\"Auto\" />",
+              "        </Grid.RowDefinitions>"
+            ]
+          }
+        },
+        {
+          "id": "a31-header-text-in-markup",
+          "title": "Put the header text in markup",
+          "intent": "Prepares the code-behind line for deletion.",
+          "covers": [
+            "x-name"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "            <TextBlock",
+              "                x:Name=\"PageHeader\"",
+              "                Style=\"{StaticResource TitleTextBlockStyle}\" />"
+            ],
+            "text": [
+              "            <TextBlock",
+              "                x:Name=\"PageHeader\"",
+              "                Style=\"{StaticResource TitleTextBlockStyle}\"",
+              "                Text=\"Todos\" />"
+            ]
+          }
+        },
+        {
+          "id": "a32-delete-header-code",
+          "title": "Delete the code-behind header assignment",
+          "intent": "Now redundant.",
+          "covers": [
+            "structural-delete"
+          ],
+          "file": "MainPage.xaml.cs",
+          "edit": {
+            "op": "delete",
+            "find": [
+              "",
+              "",
+              "        PageHeader.Text = \"Todos\";"
+            ]
+          }
+        },
+        {
+          "id": "a33-delete-unused-xname",
+          "title": "Delete the now-unused x:Name",
+          "intent": "Nothing references PageHeader any more. Doing this before a32 would not have built.",
+          "covers": [
+            "structural-delete",
+            "x-name"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "delete",
+            "find": [
+              "",
+              "                x:Name=\"PageHeader\""
+            ]
+          },
+          "checkpoint": {
+            "id": "c8-restructured",
+            "kind": "launch",
+            "runtimeState": "The header and summary sit at the top, the list fills the middle, and the text box with its two buttons is docked at the bottom. Everything still works; only the layout moved.",
+            "uiChecks": [
+              {
+                "target": "TodoList",
+                "assert": "exists"
+              },
+              {
+                "target": "InputRow",
+                "assert": "exists"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "common",
+      "phase": "polish",
+      "title": "Polish and clean up",
+      "actions": [
+        {
+          "id": "a34-window-title",
+          "title": "Rename the window title",
+          "intent": "The app is not called TodoBench to a user.",
+          "covers": [
+            "polish"
+          ],
+          "file": "MainWindow.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "    Title=\"TodoBench\""
+            ],
+            "text": [
+              "    Title=\"Todos\""
+            ]
+          }
+        },
+        {
+          "id": "a35-inline-the-seed",
+          "title": "Inline the seed data into the view model",
+          "intent": "Stop referencing TodoSeed so the file can go.",
+          "covers": [
+            "mvvm"
+          ],
+          "file": "ViewModels/TodoListViewModel.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "        foreach (var item in TodoSeed.Create())",
+              "        {",
+              "            Items.Add(item);",
+              "        }"
+            ],
+            "text": [
+              "        Items.Add(new TodoItem { Title = \"Buy milk\" });",
+              "        Items.Add(new TodoItem { Title = \"Ship the benchmark\", IsDone = true });"
+            ]
+          }
+        },
+        {
+          "id": "a36-delete-seed-file",
+          "title": "Delete ViewModels/TodoSeed.cs",
+          "intent": "A whole-file delete, which the build has to survive.",
+          "covers": [
+            "structural-delete"
+          ],
+          "file": "ViewModels/TodoSeed.cs",
+          "edit": {
+            "op": "delete-file"
+          },
+          "checkpoint": {
+            "id": "c9-final",
+            "kind": "launch",
+            "final": true,
+            "runtimeState": "A finished small Todo app: window titled Todos, a Todos header with a \"1 of 2 done\" summary under it, two seeded rows with checkboxes, and a bottom row holding the text box, Add, and Clear done. Adding appends a row and updates the summary; Clear done removes every checked row.",
+            "uiChecks": [
+              {
+                "target": "SummaryText",
+                "assert": "text-equals",
+                "value": "1 of 2 done"
+              },
+              {
+                "target": "TodoList",
+                "assert": "child-count-equals",
+                "value": "2"
+              },
+              {
+                "target": "NewTodoBox",
+                "assert": "set-value",
+                "value": "Write the spec"
+              },
+              {
+                "target": "AddButton",
+                "assert": "invoke"
+              },
+              {
+                "target": "TodoList",
+                "assert": "child-count-equals",
+                "value": "3"
+              },
+              {
+                "target": "SummaryText",
+                "assert": "text-equals",
+                "value": "1 of 3 done"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "common",
+      "phase": "extended",
+      "title": "Extended scenarios",
+      "actions": [
+        {
+          "id": "x01-widen-input",
+          "title": "Widen the input box; type a half-finished todo",
+          "intent": "Widen the input box; type a half-finished todo",
+          "covers": [
+            "state"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "                x:Name=\"NewTodoBox\"",
+              "                Width=\"260\""
+            ],
+            "text": [
+              "                x:Name=\"NewTodoBox\"",
+              "                Width=\"300\""
+            ]
+          },
+          "checkpoint": {
+            "id": "c-x01-widen-input",
+            "kind": "launch",
+            "runtimeState": "Widen the input box; type a half-finished todo",
+            "uiChecks": [
+              {
+                "target": "NewTodoBox",
+                "assert": "set-value",
+                "value": "half typed"
+              }
+            ]
+          }
+        },
+        {
+          "id": "x02-input-row-margin",
+          "title": "Unrelated layout edit keeps the half-typed text",
+          "intent": "Unrelated layout edit keeps the half-typed text",
+          "covers": [
+            "state"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "Margin=\"0,12,0,12\""
+            ],
+            "text": [
+              "Margin=\"0,16,0,16\""
+            ]
+          },
+          "checkpoint": {
+            "id": "c-x02-input-row-margin",
+            "kind": "launch",
+            "runtimeState": "Unrelated layout edit keeps the half-typed text",
+            "uiChecks": [
+              {
+                "target": "NewTodoBox",
+                "assert": "text-equals",
+                "value": "half typed"
+              }
+            ]
+          }
+        },
+        {
+          "id": "x03-create-formatting",
+          "title": "A static helper for an x:Bind function",
+          "intent": "A static helper for an x:Bind function",
+          "covers": [
+            "xbind-function"
+          ],
+          "file": "Formatting.cs",
+          "edit": {
+            "op": "create-file",
+            "text": [
+              "namespace TodoBench;",
+              "",
+              "public static class Formatting",
+              "{",
+              "    public static string Shout(string text) => text.ToUpperInvariant();",
+              "}"
+            ]
+          }
+        },
+        {
+          "id": "x04-appname-property",
+          "title": "A page property to feed the function",
+          "intent": "A page property to feed the function",
+          "covers": [
+            "xbind-function"
+          ],
+          "file": "MainPage.xaml.cs",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "    public TodoListViewModel ViewModel { get; } = new();"
+            ],
+            "text": [
+              "",
+              "    public string AppName => \"todos\";"
+            ]
+          }
+        },
+        {
+          "id": "x05-xbind-function",
+          "title": "Bind through a static function",
+          "intent": "Bind through a static function",
+          "covers": [
+            "xbind-function"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "            <TextBlock",
+              "                Style=\"{StaticResource TitleTextBlockStyle}\"",
+              "                Text=\"Todos\" />"
+            ],
+            "text": [
+              "            <TextBlock x:Name=\"ShoutText\" Text=\"{x:Bind local:Formatting.Shout(AppName)}\" />"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-x05-xbind-function",
+            "kind": "launch",
+            "runtimeState": "Bind through a static function",
+            "uiChecks": [
+              {
+                "target": "ShoutText",
+                "assert": "text-equals",
+                "value": "TODOS"
+              }
+            ]
+          }
+        },
+        {
+          "id": "x06-create-converter",
+          "title": "A new IValueConverter type",
+          "intent": "A new IValueConverter type",
+          "covers": [
+            "converters"
+          ],
+          "file": "UpperConverter.cs",
+          "edit": {
+            "op": "create-file",
+            "text": [
+              "using System;",
+              "using Microsoft.UI.Xaml.Data;",
+              "",
+              "namespace TodoBench;",
+              "",
+              "public sealed class UpperConverter : IValueConverter",
+              "{",
+              "    public object Convert(object value, Type targetType, object parameter, string language)",
+              "        => (value?.ToString() ?? string.Empty).ToUpperInvariant() + \"!\";",
+              "",
+              "    public object ConvertBack(object value, Type targetType, object parameter, string language)",
+              "        => throw new NotSupportedException();",
+              "}"
+            ]
+          }
+        },
+        {
+          "id": "x07-page-resources",
+          "title": "Declare the converter in page resources",
+          "intent": "Declare the converter in page resources",
+          "covers": [
+            "converters"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "    mc:Ignorable=\"d\">"
+            ],
+            "text": [
+              "",
+              "    <Page.Resources>",
+              "        <local:UpperConverter x:Key=\"Upper\" />",
+              "    </Page.Resources>"
+            ]
+          }
+        },
+        {
+          "id": "x08-use-converter",
+          "title": "Bind through the new converter",
+          "intent": "Bind through the new converter",
+          "covers": [
+            "converters"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "            <TextBlock x:Name=\"ShoutText\" Text=\"{x:Bind local:Formatting.Shout(AppName)}\" />"
+            ],
+            "text": [
+              "            <TextBlock x:Name=\"ConvertedText\" Text=\"{x:Bind AppName, Converter={StaticResource Upper}}\" />"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-x08-use-converter",
+            "kind": "launch",
+            "runtimeState": "Bind through the new converter",
+            "uiChecks": [
+              {
+                "target": "ConvertedText",
+                "assert": "text-equals",
+                "value": "TODOS!"
+              }
+            ]
+          }
+        },
+        {
+          "id": "x09-add-style",
+          "title": "A keyed TextBlock style",
+          "intent": "A keyed TextBlock style",
+          "covers": [
+            "styles"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "        <local:UpperConverter x:Key=\"Upper\" />"
+            ],
+            "text": [
+              "        <local:UpperConverter x:Key=\"Upper\" />",
+              "        <Style x:Key=\"Badge\" TargetType=\"TextBlock\">",
+              "            <Setter Property=\"Text\" Value=\"v1\" />",
+              "        </Style>"
+            ]
+          }
+        },
+        {
+          "id": "x10-use-style",
+          "title": "Apply the style",
+          "intent": "Apply the style",
+          "covers": [
+            "styles"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "            <TextBlock x:Name=\"ConvertedText\" Text=\"{x:Bind AppName, Converter={StaticResource Upper}}\" />"
+            ],
+            "text": [
+              "            <TextBlock x:Name=\"BadgeText\" Style=\"{StaticResource Badge}\" />"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-x10-use-style",
+            "kind": "launch",
+            "runtimeState": "Apply the style",
+            "uiChecks": [
+              {
+                "target": "BadgeText",
+                "assert": "text-equals",
+                "value": "v1"
+              }
+            ]
+          }
+        },
+        {
+          "id": "x11-edit-style",
+          "title": "Edit a style setter",
+          "intent": "Edit a style setter",
+          "covers": [
+            "styles"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "            <Setter Property=\"Text\" Value=\"v1\" />"
+            ],
+            "text": [
+              "            <Setter Property=\"Text\" Value=\"v2\" />"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-x11-edit-style",
+            "kind": "launch",
+            "runtimeState": "Edit a style setter",
+            "uiChecks": [
+              {
+                "target": "BadgeText",
+                "assert": "text-equals",
+                "value": "v2"
+              }
+            ]
+          }
+        },
+        {
+          "id": "x12-create-dictionary",
+          "title": "A standalone resource dictionary file",
+          "intent": "A standalone resource dictionary file",
+          "covers": [
+            "resources"
+          ],
+          "file": "Themes\\Brand.xaml",
+          "edit": {
+            "op": "create-file",
+            "text": [
+              "<?xml version=\"1.0\" encoding=\"utf-8\" ?>",
+              "<ResourceDictionary",
+              "    xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"",
+              "    xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">",
+              "    <x:String x:Key=\"BrandName\">Todo Pro</x:String>",
+              "</ResourceDictionary>"
+            ]
+          }
+        },
+        {
+          "id": "x13-merge-dictionary",
+          "title": "Merge it into App.xaml",
+          "intent": "Merge it into App.xaml",
+          "covers": [
+            "resources"
+          ],
+          "file": "App.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "                <XamlControlsResources xmlns=\"using:Microsoft.UI.Xaml.Controls\" />"
+            ],
+            "text": [
+              "                <XamlControlsResources xmlns=\"using:Microsoft.UI.Xaml.Controls\" />",
+              "                <ResourceDictionary Source=\"ms-appx:///Themes/Brand.xaml\" />"
+            ]
+          }
+        },
+        {
+          "id": "x14-use-brand",
+          "title": "Consume the merged resource",
+          "intent": "Consume the merged resource",
+          "covers": [
+            "resources"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "            <TextBlock x:Name=\"BadgeText\" Style=\"{StaticResource Badge}\" />"
+            ],
+            "text": [
+              "            <TextBlock x:Name=\"BrandText\" Text=\"{StaticResource BrandName}\" />"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-x14-use-brand",
+            "kind": "launch",
+            "runtimeState": "Consume the merged resource",
+            "uiChecks": [
+              {
+                "target": "BrandText",
+                "assert": "text-equals",
+                "value": "Todo Pro"
+              }
+            ]
+          }
+        },
+        {
+          "id": "x15-edit-dictionary",
+          "title": "Edit the dictionary file",
+          "intent": "Edit the dictionary file",
+          "covers": [
+            "resources"
+          ],
+          "file": "Themes\\Brand.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "Todo Pro</x:String>"
+            ],
+            "text": [
+              "Todo Pro Max</x:String>"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-x15-edit-dictionary",
+            "kind": "launch",
+            "runtimeState": "Edit the dictionary file",
+            "uiChecks": [
+              {
+                "target": "BrandText",
+                "assert": "text-equals",
+                "value": "Todo Pro Max"
+              }
+            ]
+          }
+        },
+        {
+          "id": "x16-app-resource",
+          "title": "An application-level resource",
+          "intent": "An application-level resource",
+          "covers": [
+            "resources"
+          ],
+          "file": "App.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "            </ResourceDictionary.MergedDictionaries>"
+            ],
+            "text": [
+              "            </ResourceDictionary.MergedDictionaries>",
+              "            <x:String x:Key=\"Tagline\">Get things done</x:String>"
+            ]
+          }
+        },
+        {
+          "id": "x17-use-app-resource",
+          "title": "Consume the App.xaml resource",
+          "intent": "Consume the App.xaml resource",
+          "covers": [
+            "resources"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "            <TextBlock x:Name=\"BrandText\" Text=\"{StaticResource BrandName}\" />"
+            ],
+            "text": [
+              "            <TextBlock x:Name=\"TaglineText\" Text=\"{StaticResource Tagline}\" />"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-x17-use-app-resource",
+            "kind": "launch",
+            "runtimeState": "Consume the App.xaml resource",
+            "uiChecks": [
+              {
+                "target": "TaglineText",
+                "assert": "text-equals",
+                "value": "Get things done"
+              }
+            ]
+          }
+        },
+        {
+          "id": "x18-create-statcard-xaml",
+          "title": "A new UserControl (markup first)",
+          "intent": "A new UserControl (markup first)",
+          "covers": [
+            "user-control"
+          ],
+          "file": "Controls\\StatCard.xaml",
+          "edit": {
+            "op": "create-file",
+            "text": [
+              "<?xml version=\"1.0\" encoding=\"utf-8\" ?>",
+              "<UserControl",
+              "    x:Class=\"TodoBench.Controls.StatCard\"",
+              "    xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"",
+              "    xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">",
+              "",
+              "    <StackPanel Padding=\"8\" Spacing=\"2\">",
+              "        <TextBlock x:Name=\"CardLabel\" Text=\"{x:Bind Label, Mode=OneWay}\" />",
+              "    </StackPanel>",
+              "</UserControl>"
+            ]
+          }
+        },
+        {
+          "id": "x19-create-statcard-cs",
+          "title": "Its code-behind with a Label dependency property",
+          "intent": "Its code-behind with a Label dependency property",
+          "covers": [
+            "user-control"
+          ],
+          "file": "Controls\\StatCard.xaml.cs",
+          "edit": {
+            "op": "create-file",
+            "text": [
+              "using Microsoft.UI.Xaml;",
+              "using Microsoft.UI.Xaml.Controls;",
+              "",
+              "namespace TodoBench.Controls;",
+              "",
+              "public sealed partial class StatCard : UserControl",
+              "{",
+              "    public static readonly DependencyProperty LabelProperty =",
+              "        DependencyProperty.Register(nameof(Label), typeof(string), typeof(StatCard), new PropertyMetadata(string.Empty));",
+              "",
+              "    public StatCard()",
+              "    {",
+              "        InitializeComponent();",
+              "    }",
+              "",
+              "    public string Label",
+              "    {",
+              "        get => (string)GetValue(LabelProperty);",
+              "        set => SetValue(LabelProperty, value);",
+              "    }",
+              "}"
+            ]
+          }
+        },
+        {
+          "id": "x20-controls-xmlns",
+          "title": "Namespace for the control",
+          "intent": "Namespace for the control",
+          "covers": [
+            "user-control"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "    xmlns:models=\"using:TodoBench.Models\""
+            ],
+            "text": [
+              "    xmlns:models=\"using:TodoBench.Models\"",
+              "    xmlns:controls=\"using:TodoBench.Controls\""
+            ]
+          }
+        },
+        {
+          "id": "x21-use-statcard",
+          "title": "Use the control on the page",
+          "intent": "Use the control on the page",
+          "covers": [
+            "user-control"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "            <TextBlock x:Name=\"TaglineText\" Text=\"{StaticResource Tagline}\" />"
+            ],
+            "text": [
+              "            <controls:StatCard x:Name=\"DoneCard\" Label=\"Done card\" />"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-x21-use-statcard",
+            "kind": "launch",
+            "runtimeState": "Use the control on the page",
+            "uiChecks": [
+              {
+                "target": "CardLabel",
+                "assert": "text-equals",
+                "value": "Done card"
+              }
+            ]
+          }
+        },
+        {
+          "id": "x22-edit-statcard",
+          "title": "Edit the control markup while it is on screen",
+          "intent": "Edit the control markup while it is on screen",
+          "covers": [
+            "user-control"
+          ],
+          "file": "Controls\\StatCard.xaml",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "        <TextBlock x:Name=\"CardLabel\" Text=\"{x:Bind Label, Mode=OneWay}\" />"
+            ],
+            "text": [
+              "        <TextBlock x:Name=\"CardHint\" Text=\"hint v1\" />"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-x22-edit-statcard",
+            "kind": "launch",
+            "runtimeState": "Edit the control markup while it is on screen",
+            "uiChecks": [
+              {
+                "target": "CardHint",
+                "assert": "text-equals",
+                "value": "hint v1"
+              },
+              {
+                "target": "CardLabel",
+                "assert": "text-equals",
+                "value": "Done card"
+              }
+            ]
+          }
+        },
+        {
+          "id": "x23-hint-dp",
+          "title": "Add a second dependency property to a loaded type",
+          "intent": "Add a second dependency property to a loaded type",
+          "covers": [
+            "user-control"
+          ],
+          "file": "Controls\\StatCard.xaml.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "    public string Label",
+              "    {",
+              "        get => (string)GetValue(LabelProperty);",
+              "        set => SetValue(LabelProperty, value);",
+              "    }"
+            ],
+            "text": [
+              "    public string Label",
+              "    {",
+              "        get => (string)GetValue(LabelProperty);",
+              "        set => SetValue(LabelProperty, value);",
+              "    }",
+              "",
+              "    public static readonly DependencyProperty HintProperty =",
+              "        DependencyProperty.Register(nameof(Hint), typeof(string), typeof(StatCard), new PropertyMetadata(\"no hint\"));",
+              "",
+              "    public string Hint",
+              "    {",
+              "        get => (string)GetValue(HintProperty);",
+              "        set => SetValue(HintProperty, value);",
+              "    }"
+            ]
+          }
+        },
+        {
+          "id": "x24-bind-hint",
+          "title": "Bind the hint inside the control",
+          "intent": "Bind the hint inside the control",
+          "covers": [
+            "user-control"
+          ],
+          "file": "Controls\\StatCard.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "        <TextBlock x:Name=\"CardHint\" Text=\"hint v1\" />"
+            ],
+            "text": [
+              "        <TextBlock x:Name=\"CardHint\" Text=\"{x:Bind Hint, Mode=OneWay}\" />"
+            ]
+          }
+        },
+        {
+          "id": "x25-set-hint",
+          "title": "Set the new property from the page",
+          "intent": "Set the new property from the page",
+          "covers": [
+            "user-control"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "            <controls:StatCard x:Name=\"DoneCard\" Label=\"Done card\" />"
+            ],
+            "text": [
+              "            <controls:StatCard x:Name=\"DoneCard\" Hint=\"from page\" Label=\"Done card\" />"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-x25-set-hint",
+            "kind": "launch",
+            "runtimeState": "Set the new property from the page",
+            "uiChecks": [
+              {
+                "target": "CardHint",
+                "assert": "text-equals",
+                "value": "from page"
+              }
+            ]
+          }
+        },
+        {
+          "id": "x26-create-settings-xaml",
+          "title": "A second page (markup)",
+          "intent": "A second page (markup)",
+          "covers": [
+            "navigation"
+          ],
+          "file": "SettingsPage.xaml",
+          "edit": {
+            "op": "create-file",
+            "text": [
+              "<?xml version=\"1.0\" encoding=\"utf-8\" ?>",
+              "<Page",
+              "    x:Class=\"TodoBench.SettingsPage\"",
+              "    xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"",
+              "    xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">",
+              "",
+              "    <StackPanel Margin=\"24\" Spacing=\"12\">",
+              "        <TextBlock x:Name=\"SettingsTitle\" Style=\"{StaticResource TitleTextBlockStyle}\" Text=\"Settings\" />",
+              "        <Button x:Name=\"BackButton\" Click=\"BackButton_Click\" Content=\"Back\" />",
+              "    </StackPanel>",
+              "</Page>"
+            ]
+          }
+        },
+        {
+          "id": "x27-create-settings-cs",
+          "title": "Its code-behind",
+          "intent": "Its code-behind",
+          "covers": [
+            "navigation"
+          ],
+          "file": "SettingsPage.xaml.cs",
+          "edit": {
+            "op": "create-file",
+            "text": [
+              "using Microsoft.UI.Xaml;",
+              "using Microsoft.UI.Xaml.Controls;",
+              "",
+              "namespace TodoBench;",
+              "",
+              "public sealed partial class SettingsPage : Page",
+              "{",
+              "    public SettingsPage()",
+              "    {",
+              "        InitializeComponent();",
+              "    }",
+              "",
+              "    private void BackButton_Click(object sender, RoutedEventArgs e)",
+              "    {",
+              "        Frame.GoBack();",
+              "    }",
+              "}"
+            ]
+          }
+        },
+        {
+          "id": "x28-settings-handler",
+          "title": "Navigate from the main page",
+          "intent": "Navigate from the main page",
+          "covers": [
+            "navigation"
+          ],
+          "file": "MainPage.xaml.cs",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "    private void ClearDoneButton_Click(object sender, RoutedEventArgs e)",
+              "    {",
+              "        ViewModel.ClearDone();",
+              "    }"
+            ],
+            "text": [
+              "",
+              "    private void SettingsButton_Click(object sender, RoutedEventArgs e)",
+              "    {",
+              "        Frame.Navigate(typeof(SettingsPage));",
+              "    }"
+            ]
+          }
+        },
+        {
+          "id": "x29-settings-button",
+          "title": "A button to open settings",
+          "intent": "A button to open settings",
+          "covers": [
+            "navigation"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "            <Button",
+              "                x:Name=\"ClearDoneButton\"",
+              "                Click=\"ClearDoneButton_Click\"",
+              "                Content=\"Clear done\" />"
+            ],
+            "text": [
+              "            <Button x:Name=\"SettingsButton\" Click=\"SettingsButton_Click\" Content=\"Settings\" />"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-x29-settings-button",
+            "kind": "launch",
+            "runtimeState": "A button to open settings",
+            "uiChecks": [
+              {
+                "target": "SettingsButton",
+                "assert": "invoke"
+              },
+              {
+                "target": "SettingsTitle",
+                "assert": "exists"
+              },
+              {
+                "target": "BackButton",
+                "assert": "invoke"
+              },
+              {
+                "target": "AddButton",
+                "assert": "exists"
+              }
+            ]
+          }
+        },
+        {
+          "id": "x30-edit-offscreen-page",
+          "title": "Edit the page that is not on screen",
+          "intent": "Edit the page that is not on screen",
+          "covers": [
+            "navigation"
+          ],
+          "file": "SettingsPage.xaml",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "        <Button x:Name=\"BackButton\" Click=\"BackButton_Click\" Content=\"Back\" />"
+            ],
+            "text": [
+              "        <ToggleSwitch x:Name=\"CompactToggle\" Header=\"Compact\" />"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-x30-edit-offscreen-page",
+            "kind": "launch",
+            "runtimeState": "Edit the page that is not on screen",
+            "uiChecks": [
+              {
+                "target": "SettingsButton",
+                "assert": "invoke"
+              },
+              {
+                "target": "CompactToggle",
+                "assert": "exists"
+              },
+              {
+                "target": "BackButton",
+                "assert": "invoke"
+              },
+              {
+                "target": "AddButton",
+                "assert": "exists"
+              }
+            ]
+          }
+        },
+        {
+          "id": "x31-delete-key",
+          "title": "A per-row automation key",
+          "intent": "A per-row automation key",
+          "covers": [
+            "template-handlers"
+          ],
+          "file": "Models\\TodoItem.cs",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "        Title = string.Empty;",
+              "    }"
+            ],
+            "text": [
+              "",
+              "    public string DeleteKey => \"Delete\" + Title.Replace(\" \", string.Empty);"
+            ]
+          }
+        },
+        {
+          "id": "x32-delete-handler",
+          "title": "The row delete handler",
+          "intent": "The row delete handler",
+          "covers": [
+            "template-handlers"
+          ],
+          "file": "MainPage.xaml.cs",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "    private void SettingsButton_Click(object sender, RoutedEventArgs e)",
+              "    {",
+              "        Frame.Navigate(typeof(SettingsPage));",
+              "    }"
+            ],
+            "text": [
+              "",
+              "    private void DeleteButton_Click(object sender, RoutedEventArgs e)",
+              "    {",
+              "        if ((sender as FrameworkElement)?.DataContext is Models.TodoItem item)",
+              "        {",
+              "            ViewModel.Items.Remove(item);",
+              "        }",
+              "    }"
+            ]
+          }
+        },
+        {
+          "id": "x33-delete-button",
+          "title": "A Delete button in each row",
+          "intent": "A Delete button in each row",
+          "covers": [
+            "template-handlers"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "                        <TextBlock VerticalAlignment=\"Center\" Text=\"{x:Bind Title, Mode=OneWay}\" />"
+            ],
+            "text": [
+              "                        <Button AutomationProperties.AutomationId=\"{x:Bind DeleteKey}\" Click=\"DeleteButton_Click\" Content=\"Delete\" />"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-x33-delete-button",
+            "kind": "launch",
+            "runtimeState": "A Delete button in each row",
+            "uiChecks": [
+              {
+                "target": "NewTodoBox",
+                "assert": "set-value",
+                "value": "Temp row"
+              },
+              {
+                "target": "AddButton",
+                "assert": "invoke"
+              },
+              {
+                "target": "DeleteTemprow",
+                "assert": "exists"
+              },
+              {
+                "target": "DeleteTemprow",
+                "assert": "invoke"
+              },
+              {
+                "target": "DeleteTemprow",
+                "assert": "absent"
+              }
+            ]
+          }
+        },
+        {
+          "id": "x34-deferred-element",
+          "title": "A deferred (x:Load) element",
+          "intent": "A deferred (x:Load) element",
+          "covers": [
+            "x-load"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "            <TextBlock x:Name=\"TaglineText\" Text=\"{StaticResource Tagline}\" />"
+            ],
+            "text": [
+              "            <TextBlock x:Name=\"LazyText\" x:Load=\"False\" Text=\"Loaded lazily\" />"
+            ]
+          }
+        },
+        {
+          "id": "x35-load-it",
+          "title": "Load it",
+          "intent": "Load it",
+          "covers": [
+            "x-load"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "x:Load=\"False\""
+            ],
+            "text": [
+              "x:Load=\"True\""
+            ]
+          },
+          "checkpoint": {
+            "id": "c-x35-load-it",
+            "kind": "launch",
+            "runtimeState": "Load it",
+            "uiChecks": [
+              {
+                "target": "LazyText",
+                "assert": "text-equals",
+                "value": "Loaded lazily"
+              }
+            ]
+          }
+        },
+        {
+          "id": "x36-visual-state",
+          "title": "An adaptive visual state that retargets the text",
+          "intent": "An adaptive visual state that retargets the text",
+          "covers": [
+            "visual-states"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "    <Grid x:Name=\"RootGrid\" Margin=\"24\">"
+            ],
+            "text": [
+              "        <VisualStateManager.VisualStateGroups>",
+              "            <VisualStateGroup>",
+              "                <VisualState x:Name=\"Wide\">",
+              "                    <VisualState.StateTriggers>",
+              "                        <AdaptiveTrigger MinWindowWidth=\"1\" />",
+              "                    </VisualState.StateTriggers>",
+              "                    <VisualState.Setters>",
+              "                        <Setter Target=\"LazyText.Text\" Value=\"Adaptive text\" />",
+              "                    </VisualState.Setters>",
+              "                </VisualState>",
+              "            </VisualStateGroup>",
+              "        </VisualStateManager.VisualStateGroups>"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-x36-visual-state",
+            "kind": "launch",
+            "runtimeState": "An adaptive visual state that retargets the text",
+            "uiChecks": [
+              {
+                "target": "LazyText",
+                "assert": "text-equals",
+                "value": "Adaptive text"
+              }
+            ]
+          }
+        },
+        {
+          "id": "x37-about-handler",
+          "title": "An async handler showing a ContentDialog",
+          "intent": "An async handler showing a ContentDialog",
+          "covers": [
+            "async-dialog"
+          ],
+          "file": "MainPage.xaml.cs",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "    private void SettingsButton_Click(object sender, RoutedEventArgs e)",
+              "    {",
+              "        Frame.Navigate(typeof(SettingsPage));",
+              "    }"
+            ],
+            "text": [
+              "",
+              "    private async void AboutButton_Click(object sender, RoutedEventArgs e)",
+              "    {",
+              "        var dialog = new ContentDialog",
+              "        {",
+              "            XamlRoot = XamlRoot,",
+              "            Title = \"About Todos\",",
+              "            Content = \"A hot reloaded todo app.\",",
+              "            CloseButtonText = \"Got it\",",
+              "        };",
+              "        await dialog.ShowAsync();",
+              "    }"
+            ]
+          }
+        },
+        {
+          "id": "x38-about-button",
+          "title": "The About button",
+          "intent": "The About button",
+          "covers": [
+            "async-dialog"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "            <Button x:Name=\"SettingsButton\" Click=\"SettingsButton_Click\" Content=\"Settings\" />"
+            ],
+            "text": [
+              "            <Button x:Name=\"AboutButton\" Click=\"AboutButton_Click\" Content=\"About\" />"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-x38-about-button",
+            "kind": "launch",
+            "runtimeState": "The About button",
+            "uiChecks": [
+              {
+                "target": "AboutButton",
+                "assert": "invoke"
+              },
+              {
+                "target": "Got it",
+                "assert": "exists"
+              },
+              {
+                "target": "Got it",
+                "assert": "invoke"
+              },
+              {
+                "target": "Got it",
+                "assert": "absent"
+              }
+            ]
+          }
+        },
+        {
+          "id": "x39-rename-handler-xaml",
+          "title": "Rename the Add handler in markup",
+          "intent": "Rename the Add handler in markup",
+          "covers": [
+            "rename"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "Click=\"AddButton_Click\""
+            ],
+            "text": [
+              "Click=\"OnAddTodo\""
+            ]
+          }
+        },
+        {
+          "id": "x40-rename-handler-cs",
+          "title": "Rename the method to match",
+          "intent": "Rename the method to match",
+          "covers": [
+            "rename"
+          ],
+          "file": "MainPage.xaml.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "    private void AddButton_Click(object sender, RoutedEventArgs e)"
+            ],
+            "text": [
+              "    private void OnAddTodo(object sender, RoutedEventArgs e)"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-x40-rename-handler-cs",
+            "kind": "launch",
+            "runtimeState": "Rename the method to match",
+            "uiChecks": [
+              {
+                "target": "NewTodoBox",
+                "assert": "set-value",
+                "value": "Renamed handler"
+              },
+              {
+                "target": "AddButton",
+                "assert": "invoke"
+              },
+              {
+                "target": "Renamed handler",
+                "assert": "exists"
+              }
+            ]
+          }
+        },
+        {
+          "id": "x41-add-status",
+          "title": "A new view-model property",
+          "intent": "A new view-model property",
+          "covers": [
+            "rename"
+          ],
+          "file": "ViewModels\\TodoListViewModel.cs",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "    public string Summary => $\"{Items.Count(item => item.IsDone)} of {Items.Count} done\";"
+            ],
+            "text": [
+              "",
+              "    public string StatusText => $\"{Items.Count(item => item.IsDone)}/{Items.Count} complete\";"
+            ]
+          }
+        },
+        {
+          "id": "x42-bind-status",
+          "title": "Bind to it",
+          "intent": "Bind to it",
+          "covers": [
+            "rename"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "                Text=\"{x:Bind ViewModel.Summary, Mode=OneWay}\" />"
+            ],
+            "text": [
+              "                Text=\"{x:Bind ViewModel.StatusText, Mode=OneWay}\" />"
+            ]
+          }
+        },
+        {
+          "id": "x43-notify-status",
+          "title": "Raise change notification for it",
+          "intent": "Raise change notification for it",
+          "covers": [
+            "rename"
+          ],
+          "file": "ViewModels\\TodoListViewModel.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "        Items.CollectionChanged += (_, _) => OnPropertyChanged(nameof(Summary));"
+            ],
+            "text": [
+              "        Items.CollectionChanged += (_, _) => OnPropertyChanged(nameof(StatusText));"
+            ]
+          }
+        },
+        {
+          "id": "x44-remove-summary",
+          "title": "Remove the old property",
+          "intent": "Remove the old property",
+          "covers": [
+            "rename"
+          ],
+          "file": "ViewModels\\TodoListViewModel.cs",
+          "edit": {
+            "op": "delete",
+            "find": [
+              "    public string Summary => $\"{Items.Count(item => item.IsDone)} of {Items.Count} done\";",
+              ""
+            ]
+          },
+          "checkpoint": {
+            "id": "c-x44-remove-summary",
+            "kind": "launch",
+            "runtimeState": "Remove the old property",
+            "uiChecks": [
+              {
+                "target": "NewTodoBox",
+                "assert": "set-value",
+                "value": "Status check"
+              },
+              {
+                "target": "AddButton",
+                "assert": "invoke"
+              },
+              {
+                "target": "SummaryText",
+                "assert": "text-contains",
+                "value": "complete"
+              }
+            ]
+          }
+        },
+        {
+          "id": "x45-window-banner",
+          "title": "Give the Window a banner row",
+          "intent": "Give the Window a banner row",
+          "covers": [
+            "window"
+          ],
+          "file": "MainWindow.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "    <Grid>",
+              "        <Frame x:Name=\"RootFrame\" />",
+              "    </Grid>"
+            ],
+            "text": [
+              "    <Grid>",
+              "        <Grid.RowDefinitions>",
+              "            <RowDefinition Height=\"Auto\" />",
+              "            <RowDefinition Height=\"*\" />",
+              "        </Grid.RowDefinitions>",
+              "        <TextBlock x:Name=\"WindowBanner\" Margin=\"24,12,24,0\" Text=\"Hot reload demo\" />",
+              "        <Frame x:Name=\"RootFrame\" Grid.Row=\"1\" />",
+              "    </Grid>"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-x45-window-banner",
+            "kind": "launch",
+            "runtimeState": "Give the Window a banner row",
+            "uiChecks": [
+              {
+                "target": "WindowBanner",
+                "assert": "text-equals",
+                "value": "Hot reload demo"
+              },
+              {
+                "target": "AddButton",
+                "assert": "exists"
+              }
+            ]
+          }
+        },
+        {
+          "id": "x46-remove-settings-button",
+          "title": "Remove the Settings button",
+          "intent": "Remove the Settings button",
+          "covers": [
+            "delete-page"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "delete",
+            "find": [
+              "            <Button x:Name=\"SettingsButton\" Click=\"SettingsButton_Click\" Content=\"Settings\" />",
+              ""
+            ]
+          }
+        },
+        {
+          "id": "x47-remove-settings-handler",
+          "title": "Remove its handler",
+          "intent": "Remove its handler",
+          "covers": [
+            "delete-page"
+          ],
+          "file": "MainPage.xaml.cs",
+          "edit": {
+            "op": "delete",
+            "find": [
+              "",
+              "    private void SettingsButton_Click(object sender, RoutedEventArgs e)",
+              "    {",
+              "        Frame.Navigate(typeof(SettingsPage));",
+              "    }"
+            ]
+          }
+        },
+        {
+          "id": "x48-delete-settings-xaml",
+          "title": "Delete the page markup",
+          "intent": "Delete the page markup",
+          "covers": [
+            "delete-page"
+          ],
+          "file": "SettingsPage.xaml",
+          "edit": {
+            "op": "delete-file"
+          }
+        },
+        {
+          "id": "x49-delete-settings-cs",
+          "title": "Delete the page code",
+          "intent": "Delete the page code",
+          "covers": [
+            "delete-page"
+          ],
+          "file": "SettingsPage.xaml.cs",
+          "edit": {
+            "op": "delete-file"
+          },
+          "checkpoint": {
+            "id": "c-x49-delete-settings-cs",
+            "kind": "launch",
+            "runtimeState": "Delete the page code",
+            "uiChecks": [
+              {
+                "target": "SettingsButton",
+                "assert": "absent"
+              },
+              {
+                "target": "NewTodoBox",
+                "assert": "set-value",
+                "value": "Still alive"
+              },
+              {
+                "target": "AddButton",
+                "assert": "invoke"
+              },
+              {
+                "target": "Still alive",
+                "assert": "exists"
+              }
+            ]
+          }
+        },
+        {
+          "id": "x50-adds-text",
+          "title": "A counter for collection changes",
+          "intent": "A counter for collection changes",
+          "covers": [
+            "ctor-replay"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "            <TextBlock x:Name=\"TaglineText\" Text=\"{StaticResource Tagline}\" />"
+            ],
+            "text": [
+              "            <TextBlock x:Name=\"AddsText\" Text=\"0\" />"
+            ]
+          }
+        },
+        {
+          "id": "x51-subscribe-in-ctor",
+          "title": "Subscribe to the view model in the constructor",
+          "intent": "Subscribe to the view model in the constructor",
+          "covers": [
+            "ctor-replay"
+          ],
+          "file": "MainPage.xaml.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "    public MainPage()",
+              "    {",
+              "        InitializeComponent();",
+              "    }"
+            ],
+            "text": [
+              "    private int _adds;",
+              "",
+              "    public MainPage()",
+              "    {",
+              "        InitializeComponent();",
+              "",
+              "        ViewModel.Items.CollectionChanged += OnItemsChanged;",
+              "    }",
+              "",
+              "    private void OnItemsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)",
+              "    {",
+              "        _adds++;",
+              "        AddsText.Text = _adds.ToString();",
+              "    }"
+            ]
+          }
+        },
+        {
+          "id": "x52-unrelated-markup",
+          "title": "An unrelated markup edit; then one Add must count once",
+          "intent": "An unrelated markup edit; then one Add must count once",
+          "covers": [
+            "ctor-replay"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "Margin=\"0,16,0,16\""
+            ],
+            "text": [
+              "Margin=\"0,12,0,12\""
+            ]
+          },
+          "checkpoint": {
+            "id": "c-x52-unrelated-markup",
+            "kind": "launch",
+            "runtimeState": "An unrelated markup edit; then one Add must count once",
+            "uiChecks": [
+              {
+                "target": "NewTodoBox",
+                "assert": "set-value",
+                "value": "Count me once"
+              },
+              {
+                "target": "AddButton",
+                "assert": "invoke"
+              },
+              {
+                "target": "AddsText",
+                "assert": "text-equals",
+                "value": "1"
+              }
+            ]
+          }
+        },
+        {
+          "id": "x53-vm-new-initializer",
+          "title": "A new view-model property with an initializer",
+          "intent": "A new view-model property with an initializer",
+          "covers": [
+            "vm-state"
+          ],
+          "file": "ViewModels\\TodoListViewModel.cs",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "    public ObservableCollection<TodoItem> Items { get; } = new();"
+            ],
+            "text": [
+              "",
+              "    public string Owner { get; } = \"Nikola\";"
+            ]
+          }
+        },
+        {
+          "id": "x54-bind-owner",
+          "title": "Show it; earlier todos must still be there",
+          "intent": "Show it; earlier todos must still be there",
+          "covers": [
+            "vm-state"
+          ],
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "insert-after",
+            "anchor": [
+              "            <TextBlock x:Name=\"AddsText\" Text=\"0\" />"
+            ],
+            "text": [
+              "            <TextBlock x:Name=\"OwnerText\" Text=\"{x:Bind ViewModel.Owner}\" />"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-x54-bind-owner",
+            "kind": "launch",
+            "runtimeState": "Show it; earlier todos must still be there",
+            "uiChecks": [
+              {
+                "target": "OwnerText",
+                "assert": "text-equals",
+                "value": "Nikola"
+              },
+              {
+                "target": "Count me once",
+                "assert": "exists"
+              }
+            ]
+          }
+        },
+        {
+          "id": "x55-vm-ctor-change",
+          "title": "Change the view-model constructor; live state is kept",
+          "intent": "Change the view-model constructor; live state is kept",
+          "covers": [
+            "vm-state"
+          ],
+          "file": "ViewModels\\TodoListViewModel.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "        Items.Add(new TodoItem { Title = \"Ship the benchmark\", IsDone = true });"
+            ],
+            "text": [
+              "        Items.Add(new TodoItem { Title = \"Ship the benchmark\", IsDone = true });",
+              "        Items.Add(new TodoItem { Title = \"Seeded later\" });"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-x55-vm-ctor-change",
+            "kind": "launch",
+            "runtimeState": "Change the view-model constructor; live state is kept",
+            "uiChecks": [
+              {
+                "target": "Count me once",
+                "assert": "exists"
+              }
+            ]
+          }
+        },
+        {
+          "id": "x56-computed-body",
+          "title": "Change a computed property body; the screen updates without another change",
+          "intent": "Change a computed property body; the screen updates without another change",
+          "covers": [
+            "computed"
+          ],
+          "file": "ViewModels\\TodoListViewModel.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "/{Items.Count} complete\";"
+            ],
+            "text": [
+              "/{Items.Count} finished\";"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-x56-computed-body",
+            "kind": "launch",
+            "runtimeState": "Change a computed property body; the screen updates without another change",
+            "uiChecks": [
+              {
+                "target": "SummaryText",
+                "assert": "text-contains",
+                "value": "finished"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

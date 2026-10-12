@@ -1,0 +1,147 @@
+{
+  "schemaVersion": "1.0",
+  "id": "resources-live",
+  "title": "App.xaml and a merged ResourceDictionary edited while the app runs",
+  "description": [
+    "Resources are read when elements load, so edits to App.xaml or a merged dictionary used to need a restart.",
+    "Each edit here must show up in the running window, without losing what the user typed."
+  ],
+  "app": { "template": "app-template", "assetsFrom": "samples/winui-app/Assets", "projectFile": "TodoBench.csproj", "rootNamespace": "TodoBench" },
+  "dimensions": [],
+  "variants": [ { "id": "default", "primary": true, "summary": "The only ordering.", "choices": {} } ],
+  "setup": [
+    {
+      "id": "setup-colors",
+      "file": "Styles/Colors.xaml",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "<?xml version=\"1.0\" encoding=\"utf-8\" ?>",
+          "<ResourceDictionary",
+          "    xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"",
+          "    xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">",
+          "    <x:String x:Key=\"Greeting\">Hello</x:String>",
+          "    <Style x:Key=\"NoteStyle\" TargetType=\"TextBlock\">",
+          "        <Setter Property=\"Text\" Value=\"styled\" />",
+          "    </Style>",
+          "</ResourceDictionary>"
+        ]
+      }
+    },
+    {
+      "id": "setup-merge-colors",
+      "file": "App.xaml",
+      "edit": {
+        "op": "replace",
+        "find": ["                <XamlControlsResources xmlns=\"using:Microsoft.UI.Xaml.Controls\" />"],
+        "text": [
+          "                <XamlControlsResources xmlns=\"using:Microsoft.UI.Xaml.Controls\" />",
+          "                <ResourceDictionary Source=\"Styles/Colors.xaml\" />"
+        ]
+      }
+    },
+    {
+      "id": "setup-window-uses-resources",
+      "file": "MainWindow.xaml",
+      "edit": {
+        "op": "replace",
+        "find": [
+          "        <TextBlock",
+          "            x:Name=\"StartHere\"",
+          "            Margin=\"24\"",
+          "            Text=\"Nothing here yet.\" />"
+        ],
+        "text": [
+          "        <StackPanel Margin=\"24\">",
+          "            <TextBlock x:Name=\"GreetingText\" Text=\"{StaticResource Greeting}\" />",
+          "            <TextBlock x:Name=\"StyledText\" Style=\"{StaticResource NoteStyle}\" />",
+          "            <TextBox x:Name=\"Scratch\" />",
+          "        </StackPanel>"
+        ]
+      }
+    }
+  ],
+  "segments": [
+    {
+      "kind": "common",
+      "phase": "resources",
+      "title": "Edit the merged dictionary and App.xaml",
+      "actions": [
+        {
+          "id": "x1-edit-dictionary-string",
+          "title": "Change the greeting in the merged dictionary",
+          "file": "Styles/Colors.xaml",
+          "edit": { "op": "replace", "find": ["    <x:String x:Key=\"Greeting\">Hello</x:String>"], "text": ["    <x:String x:Key=\"Greeting\">Hi there</x:String>"] },
+          "checkpoint": {
+            "id": "q1-greeting-updated",
+            "kind": "launch",
+            "runtimeState": "The window shows the new greeting. Then the user types into the scratch box.",
+            "uiChecks": [
+              { "target": "GreetingText", "assert": "text-equals", "value": "Hi there" },
+              { "target": "Scratch", "assert": "set-value", "value": "keep me" }
+            ]
+          }
+        },
+        {
+          "id": "x2-edit-dictionary-style",
+          "title": "Change a style setter in the merged dictionary",
+          "file": "Styles/Colors.xaml",
+          "edit": { "op": "replace", "find": ["        <Setter Property=\"Text\" Value=\"styled\" />"], "text": ["        <Setter Property=\"Text\" Value=\"restyled\" />"] },
+          "checkpoint": {
+            "id": "q2-style-updated",
+            "kind": "launch",
+            "runtimeState": "The styled text changes; the typed text stays.",
+            "uiChecks": [
+              { "target": "StyledText", "assert": "text-equals", "value": "restyled" },
+              { "target": "Scratch", "assert": "text-equals", "value": "keep me" }
+            ]
+          }
+        },
+        {
+          "id": "x3-app-resource",
+          "title": "Add a resource to App.xaml",
+          "file": "App.xaml",
+          "edit": {
+            "op": "insert-after",
+            "anchor": ["            </ResourceDictionary.MergedDictionaries>"],
+            "text": ["            <x:String x:Key=\"AppTitle\">Todo app</x:String>"]
+          }
+        },
+        {
+          "id": "x4-window-uses-app-resource",
+          "title": "Show the App.xaml resource in the window",
+          "file": "MainWindow.xaml",
+          "edit": {
+            "op": "insert-before",
+            "anchor": ["            <TextBox x:Name=\"Scratch\" />"],
+            "text": ["            <TextBlock x:Name=\"AppTitleText\" Text=\"{StaticResource AppTitle}\" />"]
+          },
+          "checkpoint": {
+            "id": "q4-app-resource-shown",
+            "kind": "launch",
+            "runtimeState": "The window shows the resource that was added to App.xaml after launch.",
+            "uiChecks": [
+              { "target": "AppTitleText", "assert": "text-equals", "value": "Todo app" }
+            ]
+          }
+        },
+        {
+          "id": "x5-edit-app-resource",
+          "title": "Change the App.xaml resource",
+          "file": "App.xaml",
+          "edit": { "op": "replace", "find": ["            <x:String x:Key=\"AppTitle\">Todo app</x:String>"], "text": ["            <x:String x:Key=\"AppTitle\">Todos!</x:String>"] },
+          "checkpoint": {
+            "id": "q5-app-resource-updated",
+            "kind": "launch",
+            "runtimeState": "The window shows the new App.xaml value, the merged dictionary is still in effect, and the typed text stays.",
+            "uiChecks": [
+              { "target": "AppTitleText", "assert": "text-equals", "value": "Todos!" },
+              { "target": "GreetingText", "assert": "text-equals", "value": "Hi there" },
+              { "target": "Scratch", "assert": "text-equals", "value": "keep me" }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

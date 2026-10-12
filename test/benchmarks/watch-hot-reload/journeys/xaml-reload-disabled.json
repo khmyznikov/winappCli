@@ -1,0 +1,192 @@
+{
+  "schemaVersion": "1.0",
+  "id": "xaml-reload-disabled",
+  "title": "A Debug build without the XAML hot reload stamp: C# applies live, XAML restarts",
+  "description": [
+    "The app sets EnableXamlHotReload=false, so its Debug build carries no hot reload stamp and the WinUI runtime refuses XAML hot reload. winapp says so once at launch; a XAML save restarts the app with the reason, and C# edits apply live before and after."
+  ],
+  "app": {
+    "template": "app-template",
+    "assetsFrom": "samples/winui-app/Assets",
+    "projectFile": "TodoBench.csproj",
+    "rootNamespace": "TodoBench",
+    "launchExpect": "note: XAML hot reload is not enabled for this app\\. Build it in the Debug configuration, or set the EnableXamlHotReload project property to true\\. Saving a \\.xaml file restarts the app; C# edits still apply live\\."
+  },
+  "setup": [
+    {
+      "id": "setup-window",
+      "title": "A window with a label and a button",
+      "file": "MainWindow.xaml",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "<?xml version=\"1.0\" encoding=\"utf-8\" ?>",
+          "<Window",
+          "    x:Class=\"TodoBench.MainWindow\"",
+          "    xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"",
+          "    xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"",
+          "    Title=\"TodoBench\">",
+          "    <StackPanel Spacing=\"8\" Margin=\"16\">",
+          "        <TextBlock AutomationProperties.AutomationId=\"Label\" Text=\"markup v1\" />",
+          "        <Button AutomationProperties.AutomationId=\"Ping\" Content=\"Ping\" Click=\"Ping_Click\" />",
+          "        <TextBlock x:Name=\"Result\" AutomationProperties.AutomationId=\"Result\" Text=\"idle\" />",
+          "    </StackPanel>",
+          "</Window>"
+        ]
+      }
+    },
+    {
+      "id": "setup-window-code",
+      "title": "Its click handler",
+      "file": "MainWindow.xaml.cs",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "using Microsoft.UI.Xaml;",
+          "",
+          "namespace TodoBench;",
+          "",
+          "public sealed partial class MainWindow : Window",
+          "{",
+          "    public MainWindow()",
+          "    {",
+          "        InitializeComponent();",
+          "    }",
+          "",
+          "    private void Ping_Click(object sender, RoutedEventArgs e)",
+          "    {",
+          "        Result.Text = \"pong 1\";",
+          "    }",
+          "}"
+        ]
+      }
+    },
+    {
+      "id": "setup-disable",
+      "title": "XAML hot reload turned off for the project",
+      "file": "TodoBench.csproj",
+      "edit": {
+        "op": "replace",
+        "find": [
+          "<GenerateDocumentationFile>false</GenerateDocumentationFile>"
+        ],
+        "text": [
+          "<GenerateDocumentationFile>false</GenerateDocumentationFile>",
+          "    <EnableXamlHotReload>false</EnableXamlHotReload>"
+        ]
+      }
+    }
+  ],
+  "dimensions": [],
+  "variants": [
+    {
+      "id": "default",
+      "primary": true,
+      "summary": "default",
+      "choices": {}
+    }
+  ],
+  "segments": [
+    {
+      "kind": "common",
+      "phase": "release",
+      "title": "release",
+      "actions": [
+        {
+          "id": "r01-code",
+          "title": "C# still applies live",
+          "file": "MainWindow.xaml.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "\"pong 1\""
+            ],
+            "text": [
+              "\"pong 2\""
+            ]
+          },
+          "checkpoint": {
+            "id": "c-r01-code",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "Ping",
+                "assert": "invoke"
+              },
+              {
+                "target": "Result",
+                "assert": "text-equals",
+                "value": "pong 2"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "r02-markup",
+          "title": "XAML restarts, saying why",
+          "file": "MainWindow.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "Text=\"markup v1\""
+            ],
+            "text": [
+              "Text=\"markup v2\""
+            ]
+          },
+          "checkpoint": {
+            "id": "c-r02-markup",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "Label",
+                "assert": "text-equals",
+                "value": "markup v2"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "restart",
+            "detail": "XAML hot reload is not enabled for this app \\(a Debug build, or EnableXamlHotReload set to true, enables it\\)"
+          }
+        },
+        {
+          "id": "r03-code-after-restart",
+          "title": "C# after the restart applies live, and the note is not repeated",
+          "file": "MainWindow.xaml.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "\"pong 2\""
+            ],
+            "text": [
+              "\"pong 3\""
+            ]
+          },
+          "checkpoint": {
+            "id": "c-r03-code-after-restart",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "Ping",
+                "assert": "invoke"
+              },
+              {
+                "target": "Result",
+                "assert": "text-equals",
+                "value": "pong 3"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied",
+            "detail": "^(?![\\s\\S]*\\[watch\\] note:)"
+          }
+        }
+      ]
+    }
+  ]
+}

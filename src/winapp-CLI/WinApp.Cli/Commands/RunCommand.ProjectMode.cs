@@ -113,7 +113,7 @@ internal partial class RunCommand
         /// shared folder pipeline) or unpackaged (launch the apphost <c>.exe</c> directly). Folder
         /// mode never reaches here.
         /// </summary>
-        private async Task<int> RunProjectModeAsync(
+        private async Task<int> RunProjectModeOnceAsync(
             ParseResult parseResult,
             FileInfo csproj,
             FileInfo? solution,
@@ -130,7 +130,7 @@ internal partial class RunCommand
             var noBuild = parseResult.GetValue(NoBuildOption);
             var noRestore = parseResult.GetValue(NoRestoreOption);
             var aot = parseResult.GetValue(AotOption);
-            var properties = parseResult.GetValue(PropertyOption) ?? [];
+            IReadOnlyList<string> properties = [.. parseResult.GetValue(PropertyOption) ?? [], .. activeWatch?.BuildProperties ?? []];
 
             // Resolve the explicit effective framework ONCE (--framework > bare -p:TargetFramework) so the
             // build and the classification pass (BuildClassificationInputs) share the SAME TFM and never
@@ -262,7 +262,7 @@ internal partial class RunCommand
             // UX: it streams dotnet's output live and prints the exact invocation; in --json/--quiet mode it
             // routes both to stderr to keep stdout pure.
             var buildOptions = new ProjectRunOptions(configuration, architecture, framework, noBuild, noRestore, properties, isJson, solution,
-                CaptureDevToolsSources: devToolsRun.Enabled);
+                CaptureDevToolsSources: devToolsRun.Enabled || activeWatch is not null);
 
             // Fail fast (issue #676): identity-only options like --no-launch are meaningless for an
             // unpackaged app but are only rejected authoritatively AFTER packaging is known (post-build).
@@ -310,11 +310,11 @@ internal partial class RunCommand
                 ? await RunPackagedProjectAsync(
                     resolution, csproj, manifest, layoutOutput, appArgs,
                     noLaunch, withAlias, withoutAlias, debugOutput, unregisterOnExit, detach, clean, useSymbols, executable, noBuild, isJson,
-                    executionTarget, cancellationToken, devTools: devToolsRun.Enabled, showOverlay: devToolsRun.ShowToolbar)
+                    executionTarget, cancellationToken, devTools: devToolsRun.Enabled || activeWatch is not null, showOverlay: devToolsRun.ShowToolbar)
                 : await RunUnpackagedProjectAsync(
                     resolution, csproj, appArgs,
                     noLaunch, withAlias, withoutAlias, debugOutput, unregisterOnExit, detach, clean, useSymbols, executable, manifest, outputAppXDirectory, isJson,
-                    executionTarget, cancellationToken, devTools: devToolsRun.Enabled, showOverlay: devToolsRun.ShowToolbar);
+                    executionTarget, cancellationToken, devTools: devToolsRun.Enabled || activeWatch is not null, showOverlay: devToolsRun.ShowToolbar);
         }
 
         /// <summary>
@@ -504,7 +504,7 @@ internal partial class RunCommand
                     coordinates = await Services.DevTools.XamlSourceCoordinates.XamlCoordinateLaunch.CreateAsync(csproj, resolution.DevToolsXamlSources,
                         resolution.DevToolsCompilerArtifacts, cancellationToken,
                         (snapshot, token) => BindCoordinatePayloadAsync(snapshot, Path.GetDirectoryName(exePath)!, token));
-                    environment = CreateDevToolsEnvironment(csproj.DirectoryName, !resolution.IsAot && !ProjectRunService.IsCppProject(csproj));
+                    environment = WithWatchEnvironment(CreateDevToolsEnvironment(csproj.DirectoryName, !resolution.IsAot && !ProjectRunService.IsCppProject(csproj)));
                 }
                 catch (Exception ex) when (devToolsRun.FailOpen && ex is IOException or UnauthorizedAccessException or InvalidOperationException)
                 {

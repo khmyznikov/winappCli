@@ -1,0 +1,1221 @@
+{
+  "schemaVersion": "1.0",
+  "id": "compiled-app",
+  "title": "Edits to an app as it was built: compiled x:Bind, an MVVM Toolkit view model, a page the code uses, and a library next to the app",
+  "description": [
+    "Starts from code the XAML compiler built: an x:Bind function, a converter and a record's computed property in a phased DataTemplate are edited before and after the page reloads from markup. [ObservableProperty] partial properties are added, deleted and renamed. A compiled page that code still refers to is deleted. A bound property is renamed code-first, and session-added properties are renamed again. A page's markup is deleted while its code remains. A folder of pages is renamed. A class library in a sibling folder (a solution layout) is edited: markup live, C# with a restart. A Directory.Build.props edit rebuilds. The restarts at b17 and b19 are expected."
+  ],
+  "app": {
+    "template": "app-template",
+    "assetsFrom": "samples/winui-app/Assets",
+    "projectFile": "TodoBench.csproj",
+    "rootNamespace": "TodoBench"
+  },
+  "setup": [
+    {
+      "id": "setup-lib-project",
+      "title": "A class library next to the app",
+      "file": "..\\SideKit\\SideKit.csproj",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "<Project Sdk=\"Microsoft.NET.Sdk\">",
+          "  <PropertyGroup>",
+          "    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>",
+          "    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>",
+          "    <Platforms>x86;x64;ARM64</Platforms>",
+          "    <RuntimeIdentifier Condition=\"'$(RuntimeIdentifier)' == ''\">win-$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant())</RuntimeIdentifier>",
+          "    <UseWinUI>true</UseWinUI>",
+          "    <WinUISDKReferences>false</WinUISDKReferences>",
+          "    <EnableMsixTooling>true</EnableMsixTooling>",
+          "    <ImplicitUsings>enable</ImplicitUsings>",
+          "    <Nullable>enable</Nullable>",
+          "  </PropertyGroup>",
+          "  <ItemGroup>",
+          "    <PackageReference Include=\"Microsoft.Windows.SDK.BuildTools\" Version=\"10.0.28000.2526\" />",
+          "    <PackageReference Include=\"Microsoft.WindowsAppSDK\" Version=\"2.3.1\" />",
+          "  </ItemGroup>",
+          "</Project>"
+        ]
+      }
+    },
+    {
+      "id": "setup-lib-badge",
+      "title": "Its control",
+      "file": "..\\SideKit\\Badge.xaml",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "<?xml version=\"1.0\" encoding=\"utf-8\" ?>",
+          "<UserControl",
+          "    x:Class=\"SideKit.Badge\"",
+          "    xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"",
+          "    xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">",
+          "    <Button AutomationProperties.AutomationId=\"BadgeBtn\" Content=\"badge v1\" />",
+          "</UserControl>"
+        ]
+      }
+    },
+    {
+      "id": "setup-lib-badge-code",
+      "title": "Its code",
+      "file": "..\\SideKit\\Badge.xaml.cs",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "using Microsoft.UI.Xaml.Controls;",
+          "",
+          "namespace SideKit;",
+          "",
+          "public sealed partial class Badge : UserControl",
+          "{",
+          "    public Badge()",
+          "    {",
+          "        InitializeComponent();",
+          "    }",
+          "}"
+        ]
+      }
+    },
+    {
+      "id": "setup-references",
+      "title": "The MVVM Toolkit and the library",
+      "file": "TodoBench.csproj",
+      "edit": {
+        "op": "replace",
+        "find": [
+          "<PackageReference Include=\"Microsoft.Windows.SDK.BuildTools\""
+        ],
+        "text": [
+          "<PackageReference Include=\"CommunityToolkit.Mvvm\" Version=\"8.4.2\" />",
+          "    <ProjectReference Include=\"..\\SideKit\\SideKit.csproj\" />",
+          "    <PackageReference Include=\"Microsoft.Windows.SDK.BuildTools\""
+        ]
+      }
+    },
+    {
+      "id": "setup-fmt",
+      "title": "An x:Bind function",
+      "file": "Fmt.cs",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "namespace TodoBench;",
+          "",
+          "public static class Fmt",
+          "{",
+          "    public static string Shout(string s) => \"^\" + s;",
+          "}"
+        ]
+      }
+    },
+    {
+      "id": "setup-converter",
+      "title": "A value converter",
+      "file": "StarsConverter.cs",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "using Microsoft.UI.Xaml.Data;",
+          "",
+          "namespace TodoBench;",
+          "",
+          "public sealed partial class StarsConverter : IValueConverter",
+          "{",
+          "    public object Convert(object value, Type targetType, object parameter, string language) => $\"+{value}+\";",
+          "",
+          "    public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotImplementedException();",
+          "}"
+        ]
+      }
+    },
+    {
+      "id": "setup-item",
+      "title": "A record shown in a DataTemplate",
+      "file": "Item.cs",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "namespace TodoBench;",
+          "",
+          "public sealed record Item(int Id, string Name)",
+          "{",
+          "    public string Display => $\"M{Id}:{Name}\";",
+          "}"
+        ]
+      }
+    },
+    {
+      "id": "setup-vm",
+      "title": "An MVVM Toolkit view model",
+      "file": "MainViewModel.cs",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "using CommunityToolkit.Mvvm.ComponentModel;",
+          "using CommunityToolkit.Mvvm.Input;",
+          "",
+          "namespace TodoBench;",
+          "",
+          "public partial class MainViewModel : ObservableObject",
+          "{",
+          "    [ObservableProperty]",
+          "    public partial string Status { get; set; } = \"Ready\";",
+          "",
+          "    [ObservableProperty]",
+          "    public partial int Counter { get; set; }",
+          "",
+          "    [ObservableProperty]",
+          "    public partial string Draft { get; set; } = \"draft\";",
+          "",
+          "    [ObservableProperty]",
+          "    public partial string Mood { get; set; } = \"calm\";",
+          "",
+          "    public List<Item> Items { get; } = [new(1, \"Item 1\"), new(2, \"Item 2\")];",
+          "",
+          "    [RelayCommand]",
+          "    private void Increment() => Counter++;",
+          "}"
+        ]
+      }
+    },
+    {
+      "id": "setup-page",
+      "title": "A compiled page",
+      "file": "MainPage.xaml",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "<?xml version=\"1.0\" encoding=\"utf-8\" ?>",
+          "<Page",
+          "    x:Class=\"TodoBench.MainPage\"",
+          "    xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"",
+          "    xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"",
+          "    xmlns:local=\"using:TodoBench\"",
+          "    xmlns:side=\"using:SideKit\">",
+          "    <Page.Resources>",
+          "        <local:StarsConverter x:Key=\"Stars\" />",
+          "    </Page.Resources>",
+          "    <StackPanel Spacing=\"8\" Margin=\"16\">",
+          "        <TextBlock AutomationProperties.AutomationId=\"PageLabel\" Text=\"page v1\" />",
+          "        <TextBlock AutomationProperties.AutomationId=\"Fn\" Text=\"{x:Bind local:Fmt.Shout(ViewModel.Status), Mode=OneWay}\" />",
+          "        <TextBlock AutomationProperties.AutomationId=\"Conv\" Text=\"{x:Bind ViewModel.Counter, Converter={StaticResource Stars}, Mode=OneWay}\" />",
+          "        <Button AutomationProperties.AutomationId=\"Inc\" Content=\"Add\" Command=\"{x:Bind ViewModel.IncrementCommand}\" />",
+          "        <TextBlock AutomationProperties.AutomationId=\"Weather\" Text=\"{x:Bind ViewModel.Status, Mode=OneWay}\" />",
+          "        <ItemsRepeater ItemsSource=\"{x:Bind ViewModel.Items}\">",
+          "            <ItemsRepeater.ItemTemplate>",
+          "                <DataTemplate x:DataType=\"local:Item\">",
+          "                    <TextBlock x:Phase=\"1\" AutomationProperties.AutomationId=\"Disp\" Text=\"{x:Bind Display}\" />",
+          "                </DataTemplate>",
+          "            </ItemsRepeater.ItemTemplate>",
+          "        </ItemsRepeater>",
+          "        <side:Badge />",
+          "        <local:CardView />",
+          "        <TextBlock x:Name=\"Flags\" AutomationProperties.AutomationId=\"Flags\" Text=\"none\" />",
+          "        <TextBlock AutomationProperties.AutomationId=\"Mood\" Text=\"{x:Bind ViewModel.Mood, Mode=OneWay}\" />",
+          "    </StackPanel>",
+          "</Page>"
+        ]
+      }
+    },
+    {
+      "id": "setup-page-code",
+      "title": "Its code",
+      "file": "MainPage.xaml.cs",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "using Microsoft.UI.Xaml.Controls;",
+          "",
+          "namespace TodoBench;",
+          "",
+          "public sealed partial class MainPage : Page",
+          "{",
+          "    public MainViewModel ViewModel { get; } = new();",
+          "",
+          "    public MainPage()",
+          "    {",
+          "        InitializeComponent();",
+          "    }",
+          "}"
+        ]
+      }
+    },
+    {
+      "id": "setup-details",
+      "title": "A page the code refers to",
+      "file": "DetailsPage.xaml",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "<?xml version=\"1.0\" encoding=\"utf-8\" ?>",
+          "<Page",
+          "    x:Class=\"TodoBench.DetailsPage\"",
+          "    xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"",
+          "    xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">",
+          "    <TextBlock Text=\"details\" />",
+          "</Page>"
+        ]
+      }
+    },
+    {
+      "id": "setup-details-code",
+      "title": "Its code",
+      "file": "DetailsPage.xaml.cs",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "using Microsoft.UI.Xaml.Controls;",
+          "",
+          "namespace TodoBench;",
+          "",
+          "public sealed partial class DetailsPage : Page",
+          "{",
+          "    public DetailsPage()",
+          "    {",
+          "        InitializeComponent();",
+          "    }",
+          "}"
+        ]
+      }
+    },
+    {
+      "id": "setup-notes",
+      "title": "A page nothing navigates to",
+      "file": "NotesPage.xaml",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "<?xml version=\"1.0\" encoding=\"utf-8\" ?>",
+          "<Page",
+          "    x:Class=\"TodoBench.NotesPage\"",
+          "    xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"",
+          "    xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">",
+          "    <TextBlock x:Name=\"NoteText\" />",
+          "</Page>"
+        ]
+      }
+    },
+    {
+      "id": "setup-notes-code",
+      "title": "Its code uses an x:Name",
+      "file": "NotesPage.xaml.cs",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "using Microsoft.UI.Xaml.Controls;",
+          "",
+          "namespace TodoBench;",
+          "",
+          "public sealed partial class NotesPage : Page",
+          "{",
+          "    public NotesPage()",
+          "    {",
+          "        InitializeComponent();",
+          "        NoteText.Text = \"notes\";",
+          "    }",
+          "}"
+        ]
+      }
+    },
+    {
+      "id": "setup-card",
+      "title": "A control in a folder",
+      "file": "Cards\\CardView.xaml",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "<?xml version=\"1.0\" encoding=\"utf-8\" ?>",
+          "<UserControl",
+          "    x:Class=\"TodoBench.CardView\"",
+          "    xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"",
+          "    xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">",
+          "    <TextBlock AutomationProperties.AutomationId=\"CardText\" Text=\"card v1\" />",
+          "</UserControl>"
+        ]
+      }
+    },
+    {
+      "id": "setup-card-code",
+      "title": "Its code",
+      "file": "Cards\\CardView.xaml.cs",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "using Microsoft.UI.Xaml.Controls;",
+          "",
+          "namespace TodoBench;",
+          "",
+          "public sealed partial class CardView : UserControl",
+          "{",
+          "    public CardView()",
+          "    {",
+          "        InitializeComponent();",
+          "    }",
+          "}"
+        ]
+      }
+    },
+    {
+      "id": "setup-window",
+      "title": "A window hosting the page",
+      "file": "MainWindow.xaml",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "<?xml version=\"1.0\" encoding=\"utf-8\" ?>",
+          "<Window",
+          "    x:Class=\"TodoBench.MainWindow\"",
+          "    xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"",
+          "    xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"",
+          "    Title=\"TodoBench\">",
+          "    <Frame x:Name=\"Root\" />",
+          "</Window>"
+        ]
+      }
+    },
+    {
+      "id": "setup-window-code",
+      "title": "Its code",
+      "file": "MainWindow.xaml.cs",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "using Microsoft.UI.Xaml;",
+          "",
+          "namespace TodoBench;",
+          "",
+          "public sealed partial class MainWindow : Window",
+          "{",
+          "    internal static readonly System.Type Details = typeof(DetailsPage);",
+          "",
+          "    public MainWindow()",
+          "    {",
+          "        InitializeComponent();",
+          "        Root.Navigate(typeof(MainPage));",
+          "    }",
+          "}"
+        ]
+      }
+    }
+  ],
+  "dimensions": [],
+  "variants": [
+    {
+      "id": "default",
+      "primary": true,
+      "summary": "default",
+      "choices": {}
+    }
+  ],
+  "segments": [
+    {
+      "kind": "common",
+      "phase": "compiled",
+      "title": "compiled",
+      "actions": [
+        {
+          "id": "b01-function-body",
+          "title": "N5: an x:Bind function body edit shows on the page as built",
+          "file": "Fmt.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "\"^\" + s"
+            ],
+            "text": [
+              "\"$\" + s"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-b01-function-body",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "Fn",
+                "assert": "text-equals",
+                "value": "$Ready"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "b02-converter-body",
+          "title": "N11: a converter body edit shows",
+          "file": "StarsConverter.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "$\"+{value}+\""
+            ],
+            "text": [
+              "$\"STARS[{value}]\""
+            ]
+          },
+          "checkpoint": {
+            "id": "c-b02-converter-body",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "Conv",
+                "assert": "text-equals",
+                "value": "STARS[0]"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "b03-record-getter",
+          "title": "N11: a computed property of an object without change notification, in a phased DataTemplate",
+          "file": "Item.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "$\"M{Id}:{Name}\""
+            ],
+            "text": [
+              "$\"no.{Id} {Name}\""
+            ]
+          },
+          "checkpoint": {
+            "id": "c-b03-record-getter",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "Disp",
+                "assert": "text-equals",
+                "value": "no.1 Item 1"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "b04-page-markup",
+          "title": "The page reloads from markup",
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "Text=\"page v1\""
+            ],
+            "text": [
+              "Text=\"page v2\""
+            ]
+          },
+          "checkpoint": {
+            "id": "c-b04-page-markup",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "PageLabel",
+                "assert": "text-equals",
+                "value": "page v2"
+              },
+              {
+                "target": "Fn",
+                "assert": "text-equals",
+                "value": "$Ready"
+              },
+              {
+                "target": "Conv",
+                "assert": "text-equals",
+                "value": "STARS[0]"
+              },
+              {
+                "target": "Disp",
+                "assert": "text-equals",
+                "value": "no.1 Item 1"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b05-function-body-again",
+          "title": "N5: and the same edits show on the reloaded page",
+          "file": "Fmt.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "\"$\" + s"
+            ],
+            "text": [
+              "\"%\" + s"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-b05-function-body-again",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "Fn",
+                "assert": "text-equals",
+                "value": "%Ready"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "b06-converter-body-again",
+          "title": "N11: converter",
+          "file": "StarsConverter.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "$\"STARS[{value}]\""
+            ],
+            "text": [
+              "$\"S2[{value}]\""
+            ]
+          },
+          "checkpoint": {
+            "id": "c-b06-converter-body-again",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "Inc",
+                "assert": "invoke"
+              },
+              {
+                "target": "Conv",
+                "assert": "text-equals",
+                "value": "S2[1]"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "b07-record-getter-again",
+          "title": "N11: record getter",
+          "file": "Item.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "$\"no.{Id} {Name}\""
+            ],
+            "text": [
+              "$\"N3.{Id} {Name}\""
+            ]
+          },
+          "checkpoint": {
+            "id": "c-b07-record-getter-again",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "Disp",
+                "assert": "text-equals",
+                "value": "N3.1 Item 1"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "b08-new-observable-property",
+          "title": "N9: a new [ObservableProperty] with an initializer",
+          "file": "MainViewModel.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "    public List<Item> Items"
+            ],
+            "text": [
+              "    [ObservableProperty]",
+              "    public partial string Weather { get; set; } = \"sunny\";",
+              "",
+              "    public List<Item> Items"
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "b09-bind-new-property",
+          "title": "N9: starts at its initializer",
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "AutomationProperties.AutomationId=\"Weather\" Text=\"{x:Bind ViewModel.Status, Mode=OneWay}\""
+            ],
+            "text": [
+              "AutomationProperties.AutomationId=\"Weather\" Text=\"{x:Bind ViewModel.Weather, Mode=OneWay}\""
+            ]
+          },
+          "checkpoint": {
+            "id": "c-b09-bind-new-property",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "Weather",
+                "assert": "text-equals",
+                "value": "sunny"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b10-delete-observable-property",
+          "title": "N12: deleting an [ObservableProperty] applies live",
+          "file": "MainViewModel.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "    [ObservableProperty]",
+              "    public partial string Draft { get; set; } = \"draft\";"
+            ],
+            "text": [
+              ""
+            ]
+          },
+          "checkpoint": {
+            "id": "c-b10-delete-observable-property",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "Weather",
+                "assert": "text-equals",
+                "value": "sunny"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "b11-rename-observable-property",
+          "title": "N12/N14: renaming one the markup binds, code first, is an error until the markup follows",
+          "file": "MainViewModel.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "public partial string Weather {"
+            ],
+            "text": [
+              "public partial string Forecast {"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-b11-rename-observable-property",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "Weather",
+                "assert": "text-equals",
+                "value": "sunny"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "error",
+            "detail": "Invalid binding path 'ViewModel\\.Weather'"
+          }
+        },
+        {
+          "id": "b12-bind-renamed-property",
+          "title": "N12: the markup follows and both apply live",
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "{x:Bind ViewModel.Weather, Mode=OneWay}"
+            ],
+            "text": [
+              "{x:Bind ViewModel.Forecast, Mode=OneWay}"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-b12-bind-renamed-property",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "Weather",
+                "assert": "text-equals",
+                "value": "sunny"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "b12a-rename-bound-property-code",
+          "title": "N14: renaming a property the markup binds, code first, is an error until the markup follows",
+          "file": "MainViewModel.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "public partial string Mood {"
+            ],
+            "text": [
+              "public partial string Feeling {"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-b12a-rename-bound-property-code",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "Mood",
+                "assert": "text-equals",
+                "value": "calm"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "error",
+            "detail": "MainPage\\.xaml\\(\\d+,\\d+\\): Invalid binding path 'ViewModel\\.Mood'"
+          }
+        },
+        {
+          "id": "b12b-rename-bound-property-markup",
+          "title": "N14: then both apply",
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "{x:Bind ViewModel.Mood, Mode=OneWay}"
+            ],
+            "text": [
+              "{x:Bind ViewModel.Feeling, Mode=OneWay}"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-b12b-rename-bound-property-markup",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "Mood",
+                "assert": "text-equals",
+                "value": "calm"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "b12c-add-property",
+          "title": "N15: another [ObservableProperty] with an initializer",
+          "file": "MainViewModel.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "    public List<Item> Items"
+            ],
+            "text": [
+              "    [ObservableProperty]",
+              "    public partial string Extra1 { get; set; } = \"e1\";",
+              "",
+              "    public List<Item> Items"
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "b12d-rename-bound-again",
+          "title": "N15: a bound one renamed again",
+          "file": "MainViewModel.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "public partial string Feeling {"
+            ],
+            "text": [
+              "public partial string Emotion {"
+            ]
+          },
+          "expect": {
+            "outcome": "error",
+            "detail": "Invalid binding path 'ViewModel\\.Feeling'"
+          }
+        },
+        {
+          "id": "b12e-follow-in-markup",
+          "title": "N15: the markup follows",
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "{x:Bind ViewModel.Feeling, Mode=OneWay}"
+            ],
+            "text": [
+              "{x:Bind ViewModel.Emotion, Mode=OneWay}"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-b12e-follow-in-markup",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "Mood",
+                "assert": "text-equals",
+                "value": "calm"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "b12f-rename-added-property",
+          "title": "N15: renaming the property added this session, initializer included, applies live",
+          "file": "MainViewModel.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "public partial string Extra1 { get; set; } = \"e1\";"
+            ],
+            "text": [
+              "public partial string Extra2 { get; set; } = \"e2\";"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-b12f-rename-added-property",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "Mood",
+                "assert": "text-equals",
+                "value": "calm"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "b13-delete-used-page-code",
+          "title": "N13: deleting a page the code still uses is an error",
+          "file": "DetailsPage.xaml.cs",
+          "edit": {
+            "op": "delete-file"
+          },
+          "expect": {
+            "outcome": "error",
+            "detail": "MainWindow\\.xaml\\.cs\\(\\d+,\\d+\\): uses DetailsPage, whose file DetailsPage\\.xaml\\.cs was deleted"
+          }
+        },
+        {
+          "id": "b14-delete-used-page-markup",
+          "title": "N13: still, with its markup gone too",
+          "file": "DetailsPage.xaml",
+          "edit": {
+            "op": "delete-file"
+          },
+          "expect": {
+            "outcome": "error",
+            "detail": "uses DetailsPage"
+          }
+        },
+        {
+          "id": "b15-drop-page-use",
+          "title": "N13: removing the use applies",
+          "file": "MainWindow.xaml.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "    internal static readonly System.Type Details = typeof(DetailsPage);"
+            ],
+            "text": [
+              ""
+            ]
+          },
+          "checkpoint": {
+            "id": "c-b15-drop-page-use",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "PageLabel",
+                "assert": "text-equals",
+                "value": "page v2"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "b15a-delete-page-markup-only",
+          "title": "N18: deleting only a page's markup, while its code uses what it generated, is an error",
+          "file": "NotesPage.xaml",
+          "edit": {
+            "op": "delete-file"
+          },
+          "expect": {
+            "outcome": "error",
+            "detail": "NotesPage\\.xaml\\.cs\\(\\d+,\\d+\\): uses InitializeComponent, generated from NotesPage\\.xaml, which was deleted"
+          }
+        },
+        {
+          "id": "b15b-delete-page-code",
+          "title": "N18: deleting its code as well applies",
+          "file": "NotesPage.xaml.cs",
+          "edit": {
+            "op": "delete-file"
+          },
+          "checkpoint": {
+            "id": "c-b15b-delete-page-code",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "PageLabel",
+                "assert": "text-equals",
+                "value": "page v2"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "b15c-rename-folder",
+          "title": "A folder of markup and code renamed",
+          "file": "Cards",
+          "edit": {
+            "op": "rename-folder",
+            "to": "Tiles"
+          },
+          "checkpoint": {
+            "id": "c-b15c-rename-folder",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "CardText",
+                "assert": "text-equals",
+                "value": "card v1"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "b15d-edit-moved-markup",
+          "title": "Its markup edited at the new path",
+          "file": "Tiles\\CardView.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "Text=\"card v1\""
+            ],
+            "text": [
+              "Text=\"card v2\""
+            ]
+          },
+          "checkpoint": {
+            "id": "c-b15d-edit-moved-markup",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "CardText",
+                "assert": "text-equals",
+                "value": "card v2"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "b15e-conditional-code",
+          "title": "Code for a constant the build doesn't define yet",
+          "file": "MainPage.xaml.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "        InitializeComponent();",
+              "    }"
+            ],
+            "text": [
+              "        InitializeComponent();",
+              "#if HRTEST",
+              "        Flags.Text = \"hrtest\";",
+              "#endif",
+              "    }"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-b15e-conditional-code",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "Flags",
+                "assert": "text-equals",
+                "value": "none"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "b16-sibling-library-markup",
+          "title": "N10: markup of a library next to the app applies live",
+          "file": "..\\SideKit\\Badge.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "Content=\"badge v1\""
+            ],
+            "text": [
+              "Content=\"badge v2\""
+            ]
+          },
+          "checkpoint": {
+            "id": "c-b16-sibling-library-markup",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "BadgeBtn",
+                "assert": "text-equals",
+                "value": "badge v2"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied",
+            "detail": "applied SideKit\\\\Badge\\.xaml"
+          }
+        },
+        {
+          "id": "b17-sibling-library-code",
+          "title": "N10: its C# restarts the app, saying why",
+          "file": "..\\SideKit\\Badge.xaml.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "        InitializeComponent();"
+            ],
+            "text": [
+              "        InitializeComponent();",
+              "        Tag = \"v2\";"
+            ]
+          },
+          "expect": {
+            "outcome": "restart",
+            "detail": "SideKit code changes take effect when the app restarts"
+          }
+        },
+        {
+          "id": "b18-sibling-library-after-restart",
+          "title": "N10: and it is still watched after the restart",
+          "file": "..\\SideKit\\Badge.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "Content=\"badge v2\""
+            ],
+            "text": [
+              "Content=\"badge v3\""
+            ]
+          },
+          "checkpoint": {
+            "id": "c-b18-sibling-library-after-restart",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "BadgeBtn",
+                "assert": "text-equals",
+                "value": "badge v3"
+              },
+              {
+                "target": "Weather",
+                "assert": "text-equals",
+                "value": "sunny"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "b19-directory-build-props",
+          "title": "N17: a Directory.Build.props edit rebuilds, saying why",
+          "file": "..\\Directory.Build.props",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "</PropertyGroup></Project>"
+            ],
+            "text": [
+              "<DefineConstants>$(DefineConstants);HRTEST</DefineConstants></PropertyGroup></Project>"
+            ]
+          },
+          "expect": {
+            "outcome": "restart",
+            "detail": "Directory\\.Build\\.props: build settings take effect when the app is rebuilt"
+          }
+        },
+        {
+          "id": "b20-after-rebuild",
+          "title": "N17: and the rebuilt app has the constant",
+          "file": "MainPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "Text=\"page v2\""
+            ],
+            "text": [
+              "Text=\"page v3\""
+            ]
+          },
+          "checkpoint": {
+            "id": "c-b20-after-rebuild",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "PageLabel",
+                "assert": "text-equals",
+                "value": "page v3"
+              },
+              {
+                "target": "Flags",
+                "assert": "text-equals",
+                "value": "hrtest"
+              },
+              {
+                "target": "CardText",
+                "assert": "text-equals",
+                "value": "card v2"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        }
+      ]
+    }
+  ]
+}

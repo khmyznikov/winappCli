@@ -243,7 +243,7 @@ internal partial class RunCommand
             {
                 var managed = !nativeAot && (projectFile is not null && !ProjectRunService.IsCppProject(projectFile) ||
                     (alias.Target.TargetExecutable is { } executable && File.Exists(Path.ChangeExtension(executable, ".runtimeconfig.json"))));
-                var environment = CreateDevToolsEnvironment(projectFile?.DirectoryName, managed);
+                var environment = WithWatchEnvironment(CreateDevToolsEnvironment(projectFile?.DirectoryName, managed));
                 using var coordinates = await XamlSourceCoordinates.XamlCoordinateLaunch.CreateAsync(projectFile, sources, compiler, cancellationToken,
                     (snapshot, token) => BindCoordinatePayloadAsync(snapshot, Path.GetDirectoryName(alias.Target.TargetExecutable!)!, token));
                 if (coordinates is not null)
@@ -397,6 +397,11 @@ internal partial class RunCommand
                 if (detach)
                 {
                     return 0;
+                }
+
+                if (activeWatch is not null)
+                {
+                    return await activeWatch.RunAsync(launched, ansiConsole, logger, cancellationToken);
                 }
 
                 if (debugOutput)

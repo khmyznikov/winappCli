@@ -257,6 +257,7 @@ internal partial class RunCommand : Command, IShortDescription, ITargetAwareComm
         Options.Add(DevToolsOption);
         Options.Add(GuestInspectorApplicationOption);
         Options.Add(DevToolsSourcesOption);
+        Options.Add(WatchOption);
         Options.Add(UnregisterOnExitOption);
         Options.Add(DetachOption);
         Options.Add(CleanOption);
@@ -459,6 +460,10 @@ internal partial class RunCommand : Command, IShortDescription, ITargetAwareComm
                 return Fail("Sandbox DevTools uses a retained private launch and does not support --with-alias, --debug-output or --unregister-on-exit. App standard streams are suppressed.", isJson);
             }
 
+            if (parseResult.GetValue(WatchOption) && ValidateWatch(parseResult, executionTarget, noLaunch, detach, aot) is { } watchError)
+            {
+                return Fail(watchError, isJson);
+            }
             if (explicitDevTools && noLaunch)
             {
                 return Fail("--devtools and --no-launch cannot be used together.", isJson);
@@ -661,6 +666,11 @@ internal partial class RunCommand : Command, IShortDescription, ITargetAwareComm
                     return Fail("--aot requires a .csproj or solution; .cs file-based apps are not supported.", isJson);
                 }
                 return await RunSingleFileModeAsync(parseResult, inputResolution.SingleFile!, layoutOutput, appArgs, isJson, executionTarget, cancellationToken);
+            }
+
+            if (parseResult.GetValue(WatchOption) && inputResolution.Mode != WinAppRunMode.Project)
+            {
+                return Fail("--watch requires a .csproj, or a folder or solution that resolves to one.", isJson);
             }
 
             if (inputResolution.Mode == WinAppRunMode.Project)

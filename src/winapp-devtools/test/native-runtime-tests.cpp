@@ -934,6 +934,28 @@ static int GuestNegotiation(int argc, wchar_t** argv)
 
 #include "query-runtime-tests.inc"
 
+// The hot reload agent reaches WinUI's IXamlHotReloadService through the tap: not ready before the site arrives, an
+// AddRef'd pointer once the site offered it, E_NOINTERFACE when the site didn't.
+static void CheckHotReloadServiceHandOff(const std::function<void(bool,const char*)>& check)
+{
+    struct Service : IUnknown {
+        long refs = 1;
+        HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, void**) override { return E_NOINTERFACE; }
+        ULONG STDMETHODCALLTYPE AddRef() override { return ++refs; }
+        ULONG STDMETHODCALLTYPE Release() override { return --refs; }
+    } service;
+    IUnknown* out = nullptr;
+    check(DevToolsTap_GetXamlHotReloadService(nullptr) == E_POINTER, "hot reload service: null out pointer");
+    check(DevToolsTap_GetXamlHotReloadService(&out) == HRESULT_FROM_WIN32(ERROR_NOT_READY) && !out, "hot reload service: not ready before the site");
+    g_hotReloadService.store(&service);
+    g_hotReloadQueried.store(true);
+    check(DevToolsTap_GetXamlHotReloadService(&out) == S_OK && out == &service && service.refs == 2, "hot reload service: handed out AddRef'd");
+    if (out) out->Release();
+    g_hotReloadService.store(nullptr);
+    check(DevToolsTap_GetXamlHotReloadService(&out) == E_NOINTERFACE && !out, "hot reload service: a WinUI without it");
+    g_hotReloadQueried.store(false);
+}
+
 // An opening ComboBox or Flyout moves its content with an Add under the new parent and no Remove from the old one,
 // and a closing one removes it with no parent at all. The census must never keep a child it no longer knows: a
 // whole-app query write treats such a child as an element it could not evaluate and refuses as incomplete.
@@ -941,7 +963,8 @@ static void CheckCensusFollowsReparentsAndParentlessRemoves(const std::function<
 {
     auto event = [](InstanceHandle handle, InstanceHandle parent, unsigned index, const wchar_t* type, VisualMutationType mutation) {
         ParentChildRelation relation{}; relation.Parent = parent; relation.Child = handle; relation.ChildIndex = index;
-        VisualElement element{}; element.Handle = handle; element.Type = const_cast<BSTR>(type);
+        // The callback owns (and frees) the element's strings, as with XAML's own notifications.
+        VisualElement element{}; element.Handle = handle; element.Type = SysAllocString(type);
         g_treeCb.OnVisualTreeChange(relation, element, mutation);
     };
     auto kids = [](InstanceHandle parent) {
@@ -1145,6 +1168,7 @@ int wmain(int argc, wchar_t** argv)
     CheckEffectiveValues(check);
     CheckCensusFollowsReparentsAndParentlessRemoves(check);
     CheckTreeDeltasFollowSubscription(check);
+    CheckHotReloadServiceHandOff(check);
     CheckQueries(check);
     DevToolsTrust_InitializePosture(DevToolsAccess::Mutation);
     auto call = [&](const wchar_t* method) {

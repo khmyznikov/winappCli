@@ -743,6 +743,7 @@ winapp run [<input>] [options]
 - `--args <string>` - Command-line arguments to pass to the application. Alternatively, use `--` followed by arguments to avoid escaping (e.g., `winapp run . -- --flag value`).
 - `--no-launch` - Only create the debug identity and register the package without launching the application
 - `--devtools <on|off|headless>` - WinUI XAML inspection: `on` shows the in-app toolbar; `headless` draws nothing in the app. See [Turn DevTools on or off](guides/devtools.md#turn-devtools-on-or-off) for when it starts by default and how to change that.
+- `--watch` - Keep the app running and apply each saved `.cs`, `.xaml`, project file, and content file (images, data) change to it live. Project mode only. See [Live edits](#live-edits---watch).
 - `--with-alias` - Launch the app using its execution alias instead of AUMID activation. The app runs in the current terminal with inherited stdin/stdout/stderr. Rarely needed: an app with `OutputType=Exe` already launches this way by default. winapp adds the required `uap5:ExecutionAlias` to the manifest it stages in the AppX layout, so no change to your checked-in manifest is needed; an alias the app declares itself is used as-is. Cannot be combined with `--no-launch`, `--detach`, `--without-alias`, or `--json`.
 - `--without-alias` - Force AUMID activation for an app that would otherwise launch through an execution alias. A console app then runs without a console and prints nothing to this terminal. Cannot be combined with `--with-alias`.
 - `--debug-output` - Capture `OutputDebugString` messages and first-chance exceptions from the launched application. Framework noise (WinUI, COM, DirectX) is filtered from console output; the full log file captures everything. If the app crashes, automatically captures a minidump and analyzes it to show the exception type, message, and stack trace with source file:line numbers (resolved from PDBs in the build output folder). Managed (.NET) crashes are analyzed instantly with no external tools. Native (C++/WinRT) crashes show module names and offsets. When the crashed app is a WinUI 3 app (`Microsoft.UI.Xaml.dll` is loaded), an extra stowed-exception triage pass runs automatically to surface the originating HRESULT, its ErrorContext chain, and the full native XAML dispatch stack; the required debugger components are downloaded on first use (see [Debugging](debugging.md#winui-stowed-exception-triage), overridable via the `WINAPP_DBGTOOLS_DIR` environment variable). Only one debugger can attach to a process at a time, so other debuggers (Visual Studio, VS Code) cannot be used simultaneously. Use `--no-launch` instead if you need to attach a different debugger. Cannot be combined with `--no-launch`. Cannot be combined with `--json`. If you run without it and the app exits with a nonzero code, winapp prints a hint to rerun with `--debug-output`.
@@ -887,6 +888,40 @@ Project mode requires the **.NET SDK 8.0.100 or newer** (for MSBuild `--getPrope
 winapp run . --aot
 winapp run . --aot -c Release
 ```
+
+#### Live edits (`--watch`)
+
+```powershell
+winapp run . --watch
+```
+
+`winapp run` builds and launches a WinUI 3 .NET project once, then keeps watching it. Every time you save a `.cs`, `.xaml` or `.csproj` file, or an image or other content file, the change is applied to the running app without rebuilding, and one status line reports what happened:
+
+```text
+[watch] ready (2510 ms): saved .cs, .xaml and project file changes apply to the running app (PID 1234)
+[watch] applied MainPage.xaml (31 ms)
+[watch] waiting MainPage.xaml
+  MainPage.xaml: waiting for handler AddButton_Click (AddButton.Click)
+[watch] error MainPage.xaml(13,40): Failed to create a 'Microsoft.UI.Xaml.Media.Brush' from the text 'Oranj'.
+[watch] error Pages\HomePage.xaml(20,17): Invalid binding path 'ViewModel.Statuz' : Property 'Statuz' not found on type 'MainViewModel'.
+```
+
+- **ready** - the app is running and watched (again, after a restart).
+- **applied** - the running app now matches your files. A `note:` line below it tells you when it doesn't yet: an edit to `App.OnLaunched` or to settings on `<Application>` in `App.xaml` (such as `RequestedTheme`) takes effect at the next start, and a constructor that starts a timer starts another on each reload. Pages, windows and controls keep their instances: their markup is reloaded and their constructor body runs again, so view models, fields and the items in your lists survive. Text you typed, boxes you checked, list selections, scroll positions and focus are carried over too, unless your edit changed that starting value in the markup. Values your code assigned to elements after they loaded (for example `StatusText.Text = ...` in a click handler) are not: those elements start again from the markup. A page is constructed again only when you change its field or property initializers.
+- **waiting** - the change is live, but something it refers to doesn't exist yet, such as a `Click` handler or an `x:Bind` function you haven't written. It connects on the save that adds it.
+- **unchanged** - the save didn't change what runs (for example a comment, or a file saved without edits).
+- **error** - the files don't compile (including `x:Bind` paths the XAML compiler would reject, such as a property you renamed in code before updating the markup that binds it, and code or markup that still uses a package you removed from the project or a page whose files you deleted), or the app couldn't load the new markup. Nothing in that file is applied and the app keeps the UI it had; the next save tries again.
+- **restart** - the change can't be applied to a running process (for example changing a class's base type, editing `.resw` string resources, or editing `Directory.Build.props`). winapp rebuilds and relaunches the app. If that build fails, winapp keeps watching and tries again on your next save. If the app crashes, winapp prints the exception and the next save relaunches it; closing the app ends the session.
+
+New pages and controls (and navigating to them), new files and types, renamed or deleted fields, `x:Name` changes, event handlers (including inside `DataTemplate`s), `x:Bind` (including functions, casts, `BindBack`, event bindings such as `Click="{x:Bind ViewModel.Save}"`, and templates), converters (edits to their code included, as with `x:Bind` functions and computed properties, even on objects that don't raise `PropertyChanged`), styles and control templates, new `DependencyProperty` declarations, `[ObservableProperty]` properties added, renamed or deleted, `App.xaml`, `ResourceDictionary` and theme dictionary files, templated controls and their `Themes\Generic.xaml`, new package references in the project file, and new or changed content files (images, data) are all applied live. Renaming a folder of source files, and building the project elsewhere (an IDE, another terminal) while it runs, don't interrupt the session. Editing the window that hosts your pages keeps you on the page you were on, with its back stack and Frame page cache; pages a Frame keeps cached (`NavigationCacheMode`) show your edits when you navigate back to them. Class libraries the app references through a `ProjectReference` are watched too, whether they're in a folder under the app or next to it (a solution's projects): their controls, markup and `Generic.xaml` edits apply live, while edits to their C# restart the app. Because the app's project also picks up files in its subfolders, exclude the library's folder from it (for example `<Compile Remove="MyLib\**" />`, `<Page Remove="MyLib\**" />` and `<None Remove="MyLib\**" />`), or the next build fails with duplicate types (CS0111); the `applied` line notes this when it's missing. Saves made while the app is still starting are applied once it's ready. Markup is applied by the WinUI runtime, so live XAML edits need a WinUI version that supports hot reload; with an older WinUI, C# edits still apply live and saving a `.xaml` file restarts the app.
+
+Requirements and limits:
+
+- A .NET 10 SDK, and a debuggable build configuration (the default `Debug`).
+- Live edits need a Debug build. In an optimized build (for example `-c Release`) winapp says so once when the app starts, and every save rebuilds and restarts the app. Live XAML edits also need the `EnableXamlHotReload` project property, which is `true` by default in Debug; without it, C# edits still apply live and saving a `.xaml` file restarts the app.
+- Runs locally only; it can't be combined with `--on`, `--no-launch`, `--detach`, `--no-build`, `--aot`, or `--json`.
+- One `--watch` per project at a time: a second one reports the PID of the winapp already watching it. Stopping winapp (Ctrl+C, closing its terminal, or ending its process) also stops the app.
+- Because a constructor body runs again on reload, work it does that isn't about the UI (for example starting a timer or writing a file) also happens again. Event subscriptions it makes to your view models and collections are not doubled.
 
 `--aot` supports x64 and ARM64 projects and requires the **.NET SDK 8.0.300 or newer**. It runs `dotnet publish` with the project's AOT configuration, then launches that output; use `-p PublishAot=true` for a one-time override. It does not perform separate runtime certification and cannot be combined with `--no-build` or `--manifest`.
 
