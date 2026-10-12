@@ -182,3 +182,37 @@ class HelpTests(ProjectTest):
             arguments = ["complete", "--commandline", "winapp-py ge", "--position", "12"]
             self.assertEqual(main(arguments), 0)
         self.assertEqual(forward.call_args.args[1], arguments)
+
+    def test_native_root_schema_preserves_output_arguments_and_exit_status(self):
+        payload = '{"commands":[]}\n'
+        cases = (
+            (["--cli-schema"], None),
+            (["--cli-schema"], "chosen.exe"),
+            (["--quiet", "--cli-schema"], None),
+        )
+        for arguments, override in cases:
+            for exit_code in (0, 37):
+                with self.subTest(arguments=arguments, override=override, exit_code=exit_code):
+                    self.stdout.seek(0)
+                    self.stdout.truncate()
+                    self.stderr.seek(0)
+                    self.stderr.truncate()
+                    prefix = ["--winapp", override] if override else []
+
+                    def forward_schema(*_args):
+                        print(payload, end="")
+                        return exit_code
+
+                    with (
+                        patch("winapp_cli.cli.find_native_cli", return_value=self.native) as locate,
+                        patch("winapp_cli.cli.forward_native", side_effect=forward_schema) as forward,
+                        patch("winapp_cli.cli.build_parser") as parser,
+                        redirect_stdout(self.stdout), redirect_stderr(self.stderr),
+                    ):
+                        self.assertEqual(main([*prefix, *arguments]), exit_code)
+
+                    locate.assert_called_once_with(override)
+                    forward.assert_called_once_with(self.native, arguments, self.project)
+                    parser.assert_not_called()
+                    self.assertEqual(self.stdout.getvalue(), payload)
+                    self.assertEqual(self.stderr.getvalue(), "")

@@ -5,7 +5,10 @@ from contextlib import redirect_stdout
 import io
 import json
 from pathlib import Path
+import shutil
 import subprocess
+import sys
+import time
 from unittest.mock import patch
 
 from winapp_cli import identity
@@ -40,6 +43,7 @@ class PythonIdentityTests(ProjectTest):
             patch.object(identity, "select_project_python", return_value=self.project / ".venv" / "Scripts" / "python.exe"),
             patch.object(identity, "probe_interpreter", return_value=self.info),
             patch.object(identity, "_require_developer_mode"),
+            patch.object(identity.Path, "home", return_value=self.root),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -522,6 +526,134 @@ class PythonIdentityTests(ProjectTest):
                 with self.assertRaisesRegex(WinappError, "in use"):
                     self.run_app()
             remove.assert_not_called()
+
+    def test_shared_registration_lock_is_case_insensitive_and_blocks_clear(self):
+        record = self.record()
+        with identity._registration_lock("LOCALPYTHONPROBE.DEBUG"):
+            with self.assertRaisesRegex(WinappError, "being updated"):
+                with identity._registration_lock(record["package"]):
+                    self.fail("The same identity acquired a second lock.")
+            with patch.object(identity, "_powershell") as remove:
+                with self.assertRaisesRegex(WinappError, "being updated"):
+                    identity.clear_identity(self.project)
+            remove.assert_not_called()
+        self.assertEqual(identity._load_record(self.project), record)
+        self.assertTrue(Path(record["entry"]).is_file())
+
+    def test_concurrent_projects_cannot_replace_each_others_registration(self):
+        clone = self.root / "clone"
+        clone.mkdir()
+        for name in ("Package.appxmanifest", "requirements.txt", "app.py"):
+            shutil.copyfile(self.project / name, clone / name)
+        worker = r'''
+from pathlib import Path
+import json, subprocess, sys, time
+from unittest.mock import patch
+from winapp_cli import identity
+from winapp_cli.errors import WinappError
+from winapp_cli.python_runtime import Distribution, Interpreter
+
+project, shared = Path(sys.argv[1]), Path(sys.argv[2])
+label = sys.argv[3]
+registry = shared / "registration.json"
+info = Interpreter("3.12.10", "x86_64")
+distribution = Distribution(info, "20250529",
+    "https://github.com/astral-sh/python-build-standalone/releases/download/20250529/"
+    "cpython-3.12.10%2B20250529-x86_64-pc-windows-msvc-install_only_stripped.tar.gz", "a" * 64)
+
+def wait_for(name):
+    deadline = time.monotonic() + 15
+    while not (shared / name).exists():
+        if time.monotonic() > deadline:
+            raise WinappError(f"Test timed out waiting for {name}")
+        time.sleep(0.02)
+
+def prepare(project, root, distribution, **kwargs):
+    venv = root / "venv"
+    runtime = venv / "runtime"
+    runtime.mkdir(parents=True)
+    (runtime / "python.exe").write_bytes(b"runtime")
+    (runtime / "python312.dll").write_bytes(b"dll")
+    (venv / "Scripts").mkdir()
+    (venv / "Scripts" / "python.exe").write_bytes(b"launcher")
+    (venv / "pyvenv.cfg").write_text("test", encoding="utf-8")
+    return venv, runtime, venv / "Scripts" / "python.exe"
+
+def install(*args, **kwargs):
+    (shared / f"prepared-{label}").touch()
+    wait_for(f"install-{label}")
+
+def register(*args, **kwargs):
+    (shared / f"registering-{label}").touch()
+    if label == "A":
+        wait_for("finish-A")
+    if registry.exists():
+        (shared / "replaced-registration").touch()
+    registry.write_text(json.dumps([{
+        "Name": "LocalPythonProbe.debug", "Publisher": "CN=LocalPythonProbe",
+        "PackageFullName": "LocalPythonProbe.debug_1.0.0.0_x64__abc",
+        "InstallLocation": str(project / ".winapp" / identity.ROOT_NAME),
+        "IsDevelopmentMode": True,
+    }]), encoding="utf-8")
+
+with (
+    patch.object(identity.Path, "home", return_value=shared),
+    patch.object(identity, "select_project_python", return_value=Path(sys.executable)),
+    patch.object(identity, "probe_interpreter", return_value=info),
+    patch.object(identity, "_require_developer_mode"),
+    patch.object(identity, "resolve_distribution", return_value=distribution),
+    patch.object(identity, "prepare_runtime", side_effect=prepare),
+    patch.object(identity, "synchronize_dependencies", side_effect=install),
+    patch.object(identity, "_packages", side_effect=lambda _: json.loads(registry.read_text()) if registry.exists() else []),
+    patch.object(identity, "run_tool", side_effect=register),
+    patch.object(identity, "_verify_interpreter"),
+    patch.object(identity.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)),
+):
+    try:
+        result = identity.run_with_identity(project, Path("app.py"), [], Path("winapp.exe"), None)
+    except WinappError as error:
+        print(f"BLOCKED: {error}", flush=True)
+        sys.exit(23)
+    sys.exit(result)
+'''
+        processes = [
+            subprocess.Popen([sys.executable, "-I", "-X", "utf8", "-c", worker, str(project), str(self.root), label],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8")
+            for project, label in ((self.project, "A"), (clone, "B"))
+        ]
+
+        def wait_for(name):
+            deadline = time.monotonic() + 15
+            while not (self.root / name).exists():
+                self.assertLess(time.monotonic(), deadline, f"Worker did not reach {name}")
+                time.sleep(0.02)
+
+        try:
+            wait_for("prepared-A")
+            wait_for("prepared-B")
+            (self.root / "install-A").touch()
+            wait_for("registering-A")
+            (self.root / "install-B").touch()
+            output, error = processes[1].communicate(timeout=15)
+            self.assertEqual(processes[1].returncode, 23, output + error)
+            self.assertIn("BLOCKED:", output)
+            self.assertFalse((self.root / "registering-B").exists())
+            (self.root / "finish-A").touch()
+            output, error = processes[0].communicate(timeout=15)
+            self.assertEqual(processes[0].returncode, 0, output + error)
+            self.assertFalse((self.root / "replaced-registration").exists())
+            package = json.loads((self.root / "registration.json").read_text())[0]
+            self.assertEqual(package["InstallLocation"], str(self.project / ".winapp" / identity.ROOT_NAME))
+        finally:
+            for name in ("install-A", "install-B", "finish-A"):
+                (self.root / name).touch()
+            for process in processes:
+                if process.poll() is None:
+                    try:
+                        process.communicate(timeout=15)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.communicate()
 
     def test_probe_checks_real_image_base_prefix_and_version(self):
         record = self.record()

@@ -213,24 +213,25 @@ def _owned_directory(project: Path, record: dict) -> Path:
 
 
 def _remove_owned(record: dict) -> None:
-    packages = _packages(record["package"])
-    if record["full_name"] is None:
-        if not record["registration_attempted"]:
-            return
-        if not packages:
-            return
-        if len(packages) != 1:
-            raise WinappError("Cannot verify a unique registration for the partially prepared identity.")
-        full_name = packages[0].get("PackageFullName")
-        if not isinstance(full_name, str) or not full_name:
-            raise WinappError("Windows returned no full identity for the partially prepared package.")
-        record = {**record, "full_name": full_name}
-    if _owned_package(record, packages):
-        _powershell(REMOVE_PACKAGE, full_name=record["full_name"])
-        if _packages(record["package"]):
-            raise WinappError(f"A registration remains for {record['package']}; no files were removed.")
-    elif packages:
-        raise WinappError("A different registration now uses this identity; refusing to clear its private environment.")
+    if record["full_name"] is None and not record["registration_attempted"]:
+        return
+    with _registration_lock(record["package"]):
+        packages = _packages(record["package"])
+        if record["full_name"] is None:
+            if not packages:
+                return
+            if len(packages) != 1:
+                raise WinappError("Cannot verify a unique registration for the partially prepared identity.")
+            full_name = packages[0].get("PackageFullName")
+            if not isinstance(full_name, str) or not full_name:
+                raise WinappError("Windows returned no full identity for the partially prepared package.")
+            record = {**record, "full_name": full_name}
+        if _owned_package(record, packages):
+            _powershell(REMOVE_PACKAGE, full_name=record["full_name"])
+            if _packages(record["package"]):
+                raise WinappError(f"A registration remains for {record['package']}; no files were removed.")
+        elif packages:
+            raise WinappError("A different registration now uses this identity; refusing to clear its private environment.")
 
 
 def _manifest_identity(manifest: Path) -> tuple[str, str]:
@@ -269,10 +270,9 @@ def _require_developer_mode() -> None:
 
 
 @contextmanager
-def _operation_lock(project: Path):
+def _file_lock(path: Path, message: str):
     import msvcrt
 
-    path = local_path(project / ".winapp" / ".python-identity.lock", boundary=project)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+b") as stream:
         if stream.seek(0, os.SEEK_END) == 0:
@@ -282,12 +282,24 @@ def _operation_lock(project: Path):
         try:
             msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
         except OSError as error:
-            raise WinappError("This project's identity is in use by another run or preparation. Wait for it to exit before retrying.") from error
+            raise WinappError(message) from error
         try:
             yield
         finally:
             stream.seek(0)
             msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+def _operation_lock(project: Path):
+    path = local_path(project / ".winapp" / ".python-identity.lock", boundary=project)
+    return _file_lock(path, "This project's identity is in use by another run or preparation. Wait for it to exit before retrying.")
+
+
+def _registration_lock(package_name: str):
+    home = local_path(Path.home())
+    key = hashlib.sha256(package_name.casefold().encode("utf-8")).hexdigest()
+    path = local_path(home / ".winapp" / "state" / "python-identity-locks" / f"{key}.lock", boundary=home)
+    return _file_lock(path, f"{package_name} is being updated by another identity operation. Wait for it to finish before retrying.")
 
 
 def _runtime_hashes(record: dict) -> dict[str, str]:
@@ -460,26 +472,27 @@ def run_with_identity(
                         synchronize_dependencies(project, entry, venv, requirements, bindings, verbose=verbose)
                         if _digest(manifest) != manifest_hash or dependency_inputs(project, requirements_option, interpreter)[2] != dependency_hash:
                             raise WinappError("Project inputs changed during identity preparation; retry with unchanged inputs.")
-                    with workflow.step("Register identity", "Package identity registered"):
-                        if _packages(package_name):
-                            raise WinappError("The package identity was registered by another operation during preparation; refusing to replace it.")
-                        record["registration_attempted"] = True
-                        _write_record(project, record)
-                        run_tool([str(native), "create-debug-identity", record["base"], "--manifest", str(manifest)],
-                                 project, verbose=verbose)
-                        registrations = _packages(package_name)
-                        if len(registrations) != 1:
-                            raise WinappError(f"Expected one development registration for {package_name}.")
-                        full_name = registrations[0].get("PackageFullName")
-                        if not isinstance(full_name, str) or not full_name:
-                            raise WinappError("Windows returned no complete package identity.")
-                        record["full_name"] = full_name
-                        _owned_package(record, registrations)
-                    with workflow.step("Verify runtime", "Runtime verified"):
-                        record["runtime_hashes"] = _runtime_hashes(record)
-                        _verify_interpreter(project, record)
-                        record["state"] = "ready"
-                        _write_record(project, record)
+                    with _registration_lock(package_name):
+                        with workflow.step("Register identity", "Package identity registered"):
+                            if _packages(package_name):
+                                raise WinappError("The package identity was registered by another operation during preparation; refusing to replace it.")
+                            record["registration_attempted"] = True
+                            _write_record(project, record)
+                            run_tool([str(native), "create-debug-identity", record["base"], "--manifest", str(manifest)],
+                                     project, verbose=verbose)
+                            registrations = _packages(package_name)
+                            if len(registrations) != 1:
+                                raise WinappError(f"Expected one development registration for {package_name}.")
+                            full_name = registrations[0].get("PackageFullName")
+                            if not isinstance(full_name, str) or not full_name:
+                                raise WinappError("Windows returned no complete package identity.")
+                            record["full_name"] = full_name
+                            _owned_package(record, registrations)
+                        with workflow.step("Verify runtime", "Runtime verified"):
+                            record["runtime_hashes"] = _runtime_hashes(record)
+                            _verify_interpreter(project, record)
+                            record["state"] = "ready"
+                            _write_record(project, record)
                 except (WinappError, OSError, KeyboardInterrupt) as error:
                     try:
                         _clear_owned_files(project, record)

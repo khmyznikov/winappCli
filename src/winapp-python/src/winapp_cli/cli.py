@@ -404,7 +404,10 @@ def main(argv: list[str] | None = None) -> int:
             parsed = ["--help", *parsed[1:]]
         if parsed and parsed[0] == "init":
             return _initialize(parsed, override)
-        if parsed and parsed[0] not in PYTHON_COMMANDS and not parsed[0].startswith("-"):
+        if (
+            parsed and parsed[0] not in PYTHON_COMMANDS
+            and parsed[0] not in {"--help", "-h", "--version"}
+        ):
             native = find_native_cli(override)
             return forward_native(native, parsed, Path.cwd())
         parser = build_parser(override)

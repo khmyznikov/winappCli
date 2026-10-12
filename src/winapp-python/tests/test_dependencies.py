@@ -240,6 +240,18 @@ class DependencyTests(ProjectTest):
         self.assertIn(str(self.project / "requirements.txt"), run.call_args_list[0].args[0])
         self.assertNotIn(str(self.project / "requirements-dev.txt"), run.call_args_list[0].args[0])
 
+    def test_independent_development_requirements_preserve_application_requirements(self):
+        application = self.project / "requirements.txt"
+        development = self.project / "requirements-dev.txt"
+        application.write_text("packaging==26.3\n", encoding="utf-8")
+        development.write_text("pytest\n", encoding="utf-8")
+        python = self.project / ".venv" / "Scripts" / "python.exe"
+        with patch.object(deps, "run_tool") as run:
+            deps.synchronize_project(self.project, python, None)
+        command = run.call_args_list[0].args[0]
+        inputs = [command[index + 1] for index, value in enumerate(command) if value == "-r"]
+        self.assertEqual(inputs, [str(application), str(development)])
+
     def test_plain_pyproject_install_does_not_require_building_the_application(self):
         self.pyproject()
         with patch.object(deps, "run_tool") as run:
@@ -262,6 +274,18 @@ class DependencyTests(ProjectTest):
         self.assertIn("dev", call.args[0])
         self.assertEqual(call.kwargs["environment"]["UV_PROJECT_ENVIRONMENT"], str(python.parent.parent))
         self.assertNotIn("--upgrade", call.args[0])
+        self.assertNotIn("--inexact", call.args[0])
+
+    def test_uv_synchronization_preserves_the_running_tool_environment(self):
+        self.pyproject(uv=True)
+        python = self.project / ".venv" / "Scripts" / "python.exe"
+        with (
+            patch.object(deps.sys, "prefix", str(python.parent.parent)),
+            patch.object(deps, "uv_executable", return_value="uv.exe"),
+            patch.object(deps, "run_tool") as run,
+        ):
+            deps.synchronize_project(self.project, python, None)
+        self.assertIn("--inexact", run.call_args_list[0].args[0])
 
     def test_private_uv_sync_is_locked_without_development_groups_or_application_install(self):
         self.pyproject(uv=True)
@@ -276,6 +300,7 @@ class DependencyTests(ProjectTest):
         self.assertIn("--locked", command)
         self.assertIn("--no-default-groups", command)
         self.assertIn("--no-install-project", command)
+        self.assertNotIn("--inexact", command)
 
     def test_uv_without_development_groups_does_not_request_a_missing_group(self):
         (self.project / "pyproject.toml").write_text(

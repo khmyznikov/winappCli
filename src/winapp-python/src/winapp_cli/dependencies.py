@@ -487,18 +487,21 @@ def synchronize_project(
             arguments.extend(("--locked", "--no-default-groups", "--no-install-project"))
         elif development_requirements(project):
             arguments.extend(("--group", "dev"))
+        if not private and executable.parent.parent == Path(sys.prefix):
+            arguments.append("--inexact")
         if verbose:
             print(f"Synchronizing {'identity' if private else 'project'} dependencies with uv...", flush=True)
         run_tool(arguments, project, verbose=verbose, environment=environment)
     else:
         install_inputs: list[str] = []
         if dependencies.kind == "requirements":
-            source_file = dependencies.source if private else dependencies.development_file
-            if not source_file.exists():
-                source_file = dependencies.source
-            if not source_file.is_file():
-                raise WinappError(f"Missing application dependency declaration: {source_file}")
-            install_inputs.extend(("-r", str(source_file)))
+            source_files = [dependencies.source]
+            if not private and dependencies.development_file.exists():
+                source_files.append(dependencies.development_file)
+            for source_file in source_files:
+                if not source_file.is_file():
+                    raise WinappError(f"Missing application dependency declaration: {source_file}")
+                install_inputs.extend(("-r", str(source_file)))
         else:
             install_inputs.extend(application_requirements(project))
             if not private:
