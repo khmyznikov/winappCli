@@ -34,7 +34,9 @@ function Invoke-Timed {
         $c1 = $p.StandardOutput.BaseStream.CopyToAsync($o)
         $c2 = $p.StandardError.BaseStream.CopyToAsync($e)
         $timedOut = -not $p.WaitForExit($TimeoutSeconds * 1000)
-        if ($timedOut) { try { $p.Kill($true) } catch { }; [void]$p.WaitForExit(30000) } else { $p.WaitForExit() }
+        if ($timedOut) { try { $p.Kill($true) } catch { }; [void]$p.WaitForExit(30000) }
+        # No parameterless WaitForExit(): it also waits for redirected output to close, which a
+        # background process the agent started (and that inherited the handles) can hold open forever.
         [void][System.Threading.Tasks.Task]::WaitAll(@($c1, $c2), 30000)
         return [pscustomobject]@{ ExitCode = if ($p.HasExited) { $p.ExitCode } else { $null }; TimedOut = $timedOut; DurationMs = $sw.ElapsedMilliseconds }
     }
