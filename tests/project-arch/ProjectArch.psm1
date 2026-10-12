@@ -101,6 +101,8 @@ function Get-ProjectArchFixtures {
         @{ Id = 'R20-ref-rid-from-platform'; Sdk = '1.8'; ExpectRid = $true; App = (New-AppSpec @{ Platforms = 'X86;X64;ARM64'; Refs = @('LibW') }); Libs = @(@{ Name = 'LibW'; Kind = 'winui'; Platforms = 'X86;X64;ARM64'; Extra = @{ RuntimeIdentifier = 'win-$(Platform)' } }); Why = 'Referenced project with RuntimeIdentifier=win-$(Platform) and upper-case platforms (needs the RID)' }
         @{ Id = 'R21-ref-exe'; Sdk = '1.8'; App = (New-AppSpec @{ Refs = @('Helper') }); Libs = @(@{ Name = 'Helper'; Kind = 'exe' }); Why = 'Referenced helper executable' }
         @{ Id = 'R23-build-only-helper-rid'; Sdk = '1.8'; ExpectRid = $true; App = (New-AppSpec @{ Kind = 'console'; Packaged = $false; Platforms = $null; Rids = $null; Refs = @(@{ Name = 'Helper'; Meta = @{ ReferenceOutputAssembly = 'false' } }) }); Libs = @(@{ Name = 'Helper'; Kind = 'exe'; Extra = @{ RuntimeIdentifier = 'win-x86' } }); Why = 'Build-order-only helper reference (ReferenceOutputAssembly=false) with its own RuntimeIdentifier (needs the RID)' }
+        @{ Id = 'R24-multitarget-tfm-rid'; Sdk = '1.8'; ExpectRid = $true; App = (New-AppSpec @{ Kind = 'console'; Packaged = $false; Platforms = $null; Rids = $null; Refs = @('LibM') }); Libs = @(@{ Name = 'LibM'; Kind = 'multi'; Xml = '  <PropertyGroup Condition="''$(TargetFramework)'' != '''' and ''$(TargetFramework)'' != ''netstandard2.0''"><RuntimeIdentifier>win-x86</RuntimeIdentifier></PropertyGroup>' }); Why = 'Multi-targeted reference that sets a RuntimeIdentifier for only one target framework (needs the RID)' }
+        @{ Id = 'R25-helper-cross-arch'; Sdk = '1.6'; Arch = 'x86'; App = (New-AppSpec @{ Refs = @('LibW', @{ Name = 'Helper'; Meta = @{ ReferenceOutputAssembly = 'false' } }) }); Libs = @(@{ Name = 'LibW'; Kind = 'winui' }, @{ Name = 'Helper'; Kind = 'exe' }); Why = 'Build-order-only helper is not an analyzer: a cross-architecture build keeps Platform only (a global RID breaks the WinUI library on 1.6)' }
         # Building the bundle's other platform runs Build on $(SolutionPath), which rejects a global RID (NETSDK1134).
         @{ Id = 'R22-solution-bundle'; Sdk = '1.8'; Sln = $true; App = (New-AppSpec @{ Refs = @('LibP'); Extra = @{ GenerateAppxPackageOnBuild = 'true'; AppxBundle = 'Always'; AppxBundlePlatforms = 'x86|x64' } }); Libs = @(@{ Name = 'LibP'; Kind = 'plain' }); Why = 'App in a solution that builds an MSIX bundle on every build (the solution is rebuilt for the other platform)' }
     )
@@ -215,6 +217,7 @@ $(Format-Properties $properties)
 $(Format-Packages $sdk $winui)
 $generatorPackages
 $(Format-References $library['Refs'])
+$($library['Xml'])
 </Project>
 "@
         if ($library.Kind -eq 'generator') {

@@ -169,7 +169,7 @@ internal sealed partial class ProjectRunService
         // A global Platform also reaches project-referenced analyzers and source generators, building them for
         // the target architecture. The compiler runs on the SDK's architecture, so for a cross-architecture
         // build it can't load them (CS8034). Visual Studio avoids this by mapping such projects to Any CPU.
-        if (graph.HasBuildOnlyReference
+        if (graph.HasAnalyzerReference
             && !string.Equals(RunArchHelper.ArchitectureFromRid(graph.SdkRuntimeIdentifier), options.Architecture, StringComparison.OrdinalIgnoreCase))
         {
             logger.LogDebug(
@@ -185,21 +185,23 @@ internal sealed partial class ProjectRunService
     /// <param name="SdkRuntimeIdentifier">The .NET SDK's RID (the compiler's architecture).</param>
     /// <param name="ConflictingRuntimeIdentifierProject">The first project that sets a RuntimeIdentifier other than win-&lt;arch&gt;.</param>
     /// <param name="DynamicPlatformResolutionProject">The first project that enables EnableDynamicPlatformResolution.</param>
-    /// <param name="HasBuildOnlyReference">True when any project references an analyzer or source-generator project.</param>
+    /// <param name="HasAnalyzerReference">True when any project references an analyzer or source-generator project.</param>
     internal sealed record ReferenceGraphProbe(
         string SdkRuntimeIdentifier,
         string? ConflictingRuntimeIdentifierProject,
         string? DynamicPlatformResolutionProject,
-        bool HasBuildOnlyReference);
+        bool HasAnalyzerReference);
 
     // Bounds concurrent `dotnet msbuild` evaluations while walking a large reference graph.
     private const int MaxConcurrentGraphEvaluations = 4;
 
     /// <summary>
-    /// Evaluates <paramref name="csproj"/> and every managed project it references (transitively, through
-    /// runtime references) under the Platform-only globals, using MSBuild's own evaluation so properties and
-    /// <c>ProjectReference</c> items from imports, conditions and <c>$(…)</c> paths are all seen. Returns
-    /// <see langword="null"/> when any evaluation fails, so the caller keeps the RID-based resolution.
+    /// Evaluates <paramref name="csproj"/> and every managed project it references (transitively) under the
+    /// Platform-only globals, using MSBuild's own evaluation so properties and <c>ProjectReference</c> items
+    /// from imports, conditions and <c>$(…)</c> paths are all seen. A multi-targeted project is also evaluated
+    /// once per target framework, because a framework-conditional <c>RuntimeIdentifier</c> or reference only
+    /// exists in that inner build. Returns <see langword="null"/> when any evaluation fails, so the caller
+    /// keeps the RID-based resolution.
     /// </summary>
     private async Task<ReferenceGraphProbe?> ProbeReferenceGraphAsync(
         FileInfo csproj,
@@ -210,23 +212,26 @@ internal sealed partial class ProjectRunService
         string? sdkRid = null;
         string? conflictingRid = null;
         string? dynamicPlatformResolution = null;
-        var buildOnlyReference = false;
+        var analyzerReference = false;
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { csproj.FullName };
-        var level = new List<FileInfo> { csproj };
+        var level = new List<(FileInfo Project, string? Framework)> { (csproj, null) };
         using var throttle = new SemaphoreSlim(MaxConcurrentGraphEvaluations);
 
         while (level.Count > 0)
         {
-            (FileInfo Project, string? Output)[] evaluations;
+            (FileInfo Project, string? Framework, string? Output)[] evaluations;
             try
             {
-                evaluations = await Task.WhenAll(level.Select(async project =>
+                evaluations = await Task.WhenAll(level.Select(async node =>
                 {
                     await throttle.WaitAsync(cancellationToken);
                     try
                     {
-                        return (Project: project, Output: await EvaluateArchitectureProbeAsync(
-                            project, platformOnly, includeFramework: project == csproj, workingDir, cancellationToken));
+                        // The app is evaluated with its pinned framework (if any); references and inner builds
+                        // with the framework queued for them.
+                        var framework = node.Framework ?? (node.Project == csproj ? platformOnly.Framework : null);
+                        return (node.Project, node.Framework, Output: await EvaluateArchitectureProbeAsync(
+                            node.Project, platformOnly, framework, workingDir, cancellationToken));
                     }
                     finally
                     {
@@ -241,8 +246,8 @@ internal sealed partial class ProjectRunService
                 throw;
             }
 
-            var next = new List<FileInfo>();
-            foreach (var (project, output) in evaluations)
+            var next = new List<(FileInfo Project, string? Framework)>();
+            foreach (var (project, framework, output) in evaluations)
             {
                 if (output is null)
                 {
@@ -261,13 +266,29 @@ internal sealed partial class ProjectRunService
                     dynamicPlatformResolution = project.Name;
                 }
 
+                // An outer (multi-targeted) evaluation hides framework-conditional settings and references; the
+                // inner builds carry them, so evaluate each framework and take references from those.
+                if (framework is null && string.IsNullOrEmpty(GetProp(props, "TargetFramework")))
+                {
+                    var frameworks = GetProp(props, "TargetFrameworks")
+                        .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+                    if (frameworks.Count > 0)
+                    {
+                        next.AddRange(frameworks.Select(tfm => (project, (string?)tfm)));
+                        continue;
+                    }
+                }
+
                 foreach (var reference in MsBuildPropertyReader.ParseItemMetadata(output, "ProjectReference"))
                 {
-                    // A build-only reference (analyzer, or a helper built first) is still built with the global
-                    // Platform, so it is evaluated like any other reference.
-                    if (IsBuildOnlyReference(reference))
+                    // Every referenced project is built with the global Platform, including build-order-only
+                    // references (ReferenceOutputAssembly="false"), so all of them are evaluated. Only an analyzer
+                    // is loaded by the compiler, which matters for a cross-architecture build.
+                    if (string.Equals(GetProp(reference, "OutputItemType"), "Analyzer", StringComparison.OrdinalIgnoreCase))
                     {
-                        buildOnlyReference = true;
+                        analyzerReference = true;
                     }
 
                     var fullPath = GetProp(reference, "FullPath");
@@ -284,19 +305,15 @@ internal sealed partial class ProjectRunService
                         return null;
                     }
 
-                    next.Add(new FileInfo(fullPath));
+                    next.Add((new FileInfo(fullPath), null));
                 }
             }
 
             level = next;
         }
 
-        return new ReferenceGraphProbe(sdkRid ?? string.Empty, conflictingRid, dynamicPlatformResolution, buildOnlyReference);
+        return new ReferenceGraphProbe(sdkRid ?? string.Empty, conflictingRid, dynamicPlatformResolution, analyzerReference);
     }
-
-    private static bool IsBuildOnlyReference(IReadOnlyDictionary<string, string> reference) =>
-        string.Equals(GetProp(reference, "OutputItemType"), "Analyzer", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(GetProp(reference, "ReferenceOutputAssembly"), "false", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Runs one evaluate-only probe and returns its stdout, or <see langword="null"/> when dotnet could not run
@@ -305,11 +322,11 @@ internal sealed partial class ProjectRunService
     private async Task<string?> EvaluateArchitectureProbeAsync(
         FileInfo project,
         ProjectRunOptions platformOnly,
-        bool includeFramework,
+        string? framework,
         DirectoryInfo workingDir,
         CancellationToken cancellationToken)
     {
-        var args = BuildArchitectureProbeArguments(project, platformOnly, includeFramework);
+        var args = BuildArchitectureProbeArguments(project, platformOnly, framework);
         logger.LogDebug("{UISymbol} dotnet {Arguments}", UiSymbols.Note, RedactSecretsForDisplay(args));
         try
         {
@@ -333,14 +350,15 @@ internal sealed partial class ProjectRunService
         }
     }
 
-    private static readonly string[] ArchitectureProbeProperties = ["RuntimeIdentifier", "EnableDynamicPlatformResolution", "NETCoreSdkRuntimeIdentifier"];
+    private static readonly string[] ArchitectureProbeProperties = ["RuntimeIdentifier", "EnableDynamicPlatformResolution", "NETCoreSdkRuntimeIdentifier", "TargetFramework", "TargetFrameworks"];
 
     /// <summary>
     /// Builds the evaluate-only <c>dotnet msbuild</c> arguments that read the properties and project
     /// references deciding whether a Platform-only build is honored, under the same globals the build pass
-    /// will use. A referenced project is evaluated without the app's pinned <c>TargetFramework</c>.
+    /// will use. <paramref name="framework"/> selects an inner build; without it a multi-targeted project
+    /// evaluates its outer build.
     /// </summary>
-    internal static string BuildArchitectureProbeArguments(FileInfo csproj, ProjectRunOptions options, bool includeFramework = true)
+    internal static string BuildArchitectureProbeArguments(FileInfo csproj, ProjectRunOptions options, string? framework)
     {
         var tokens = new List<string> { "msbuild", csproj.FullName };
         foreach (var property in ForwardableProperties(options.Properties))
@@ -355,9 +373,9 @@ internal sealed partial class ProjectRunService
             tokens.Add($"-p:Platform={options.Platform}");
         }
 
-        if (includeFramework && !string.IsNullOrWhiteSpace(options.Framework))
+        if (!string.IsNullOrWhiteSpace(framework))
         {
-            tokens.Add($"-p:TargetFramework={options.Framework}");
+            tokens.Add($"-p:TargetFramework={framework}");
         }
 
         foreach (var property in ArchitectureProbeProperties)

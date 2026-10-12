@@ -2761,12 +2761,13 @@ public class ProjectRunServiceTests
     [DataRow("rid", "arm64", true, DisplayName = "Referenced project with its own conflicting RID keeps the RID")]
     [DataRow("generator", "x86", true, DisplayName = "Generator behind a library keeps the RID for a cross-architecture build")]
     [DataRow("generator", "arm64", false, DisplayName = "Generator behind a library uses Platform for a native build")]
-    [DataRow("helper-rid", "arm64", true, DisplayName = "Build-only helper with its own conflicting RID keeps the RID")]
+    [DataRow("helper-rid", "arm64", true, DisplayName = "Build-order-only helper with its own conflicting RID keeps the RID")]
+    [DataRow("helper", "x86", false, DisplayName = "Build-order-only helper is not an analyzer, so a cross-architecture build uses Platform")]
     public async Task RunBuild_ReferenceGraphDecidesArchitectureCarrier(string scenario, string arch, bool expectRid)
     {
-        // App -> Lib -> (Gen/Helper as a build-only reference, or Leaf). Properties come from MSBuild evaluation of
-        // each project, so values set by imports or on referenced projects count. Build-only references are still
-        // built with the global Platform, so their own settings count too.
+        // App -> Lib -> (Gen as an analyzer, Helper as a build-order-only reference, or Leaf). Properties come
+        // from MSBuild evaluation of each project, so values set by imports or on referenced projects count.
+        // Build-only references are still built with the global Platform, so their own settings count too.
         var graph = new Dictionary<string, (string Properties, (string Project, bool BuildOnly)[] References)>
         {
             ["App"] = ("", [("Lib", false)]),
@@ -2778,15 +2779,15 @@ public class ProjectRunServiceTests
             }, scenario switch
             {
                 "generator" => [("Gen", true)],
-                "helper-rid" => [("Helper", true)],
+                "helper-rid" or "helper" => [("Helper", true)],
                 _ => [("Leaf", false)],
             }),
             ["Leaf"] = ("", []),
             ["Gen"] = ("", []),
-            ["Helper"] = ("\"RuntimeIdentifier\":\"win-x64\"", []),
+            ["Helper"] = (scenario == "helper-rid" ? "\"RuntimeIdentifier\":\"win-x64\"" : "", []),
         };
         var csproj = WriteFile("App.csproj", ExecutableCsproj);
-        var dotnet = ArchitectureGraphDotnet(graph);
+        var dotnet = ArchitectureGraphDotnet(graph, buildOrderOnly: new HashSet<string> { "Helper" });
         var service = NewServiceWith(dotnet, out _);
 
         await service.BuildAndResolveAsync(csproj, PlatformOptions(arch), CancellationToken.None);
@@ -2797,6 +2798,37 @@ public class ProjectRunServiceTests
     }
 
     private static readonly string[] DiamondGraphProjects = ["App", "A", "B", "Shared", "Gen"];
+
+    [TestMethod]
+    [DataRow("clean", false, DisplayName = "Multi-targeted reference without RID-specific settings uses Platform")]
+    [DataRow("inner-rid", true, DisplayName = "RID set only for one target framework keeps the RID")]
+    [DataRow("inner-ref-rid", true, DisplayName = "Reference added only for one target framework is followed")]
+    public async Task RunBuild_MultiTargetedReference_IsProbedPerTargetFramework(string scenario, bool expectRid)
+    {
+        // App -> Lib (netstandard2.0;net10.0). The outer build hides framework-conditional settings and references.
+        var graph = new Dictionary<string, (string Properties, (string Project, bool BuildOnly)[] References)>
+        {
+            ["App"] = ("", [("Lib", false)]),
+            ["Lib"] = ("\"TargetFrameworks\":\"netstandard2.0;net10.0\"", []),
+            ["Lib@netstandard2.0"] = ("\"TargetFramework\":\"netstandard2.0\"", []),
+            ["Lib@net10.0"] = (
+                "\"TargetFramework\":\"net10.0\"" + (scenario == "inner-rid" ? ",\"RuntimeIdentifier\":\"win-x64\"" : ""),
+                scenario == "inner-ref-rid" ? [("Leaf", false)] : []),
+            ["Leaf"] = ("\"RuntimeIdentifier\":\"win-x64\"", []),
+        };
+        var csproj = WriteFile("App.csproj", ExecutableCsproj);
+        var dotnet = ArchitectureGraphDotnet(graph);
+        var service = NewServiceWith(dotnet, out _);
+
+        await service.BuildAndResolveAsync(csproj, PlatformOptions("arm64"), CancellationToken.None);
+
+        var build = BuildPass(dotnet);
+        Assert.AreEqual(expectRid, build.Contains("-r win-arm64", StringComparison.Ordinal), build);
+        var libEvaluations = dotnet.StringInvocations
+            .Where(a => a.Contains(ArchitectureProbeMarker, StringComparison.Ordinal) && a.Contains(@"Lib\Lib.csproj", StringComparison.Ordinal))
+            .ToList();
+        Assert.AreEqual(3, libEvaluations.Count, "the outer build and each target framework are evaluated");
+    }
 
     [TestMethod]
     public async Task RunBuild_ReferenceGraph_EvaluatesEachProjectOnceIncludingBuildOnlyReferences()
@@ -2845,13 +2877,19 @@ public class ProjectRunServiceTests
 
     /// <summary>
     /// A fake whose architecture probe answers per project with its properties and <c>ProjectReference</c>
-    /// items (written to disk so their <c>FullPath</c> exists), like <c>dotnet msbuild --getItem</c>.
+    /// items (written to disk so their <c>FullPath</c> exists), like <c>dotnet msbuild --getItem</c>. A key
+    /// <c>Name@tfm</c> answers the inner-build evaluation of <c>Name</c> for that target framework. A
+    /// <c>BuildOnly</c> reference is an analyzer, unless named in <paramref name="buildOrderOnly"/>, which makes
+    /// it a plain <c>ReferenceOutputAssembly="false"</c> reference.
     /// </summary>
     private FakeDotNetService ArchitectureGraphDotnet(
         Dictionary<string, (string Properties, (string Project, bool BuildOnly)[] References)> graph,
-        string? failingProject = null)
+        string? failingProject = null,
+        HashSet<string>? buildOrderOnly = null)
     {
-        var projectNames = graph.Keys
+        static string ProjectOf(string key) => key.Split('@')[0];
+
+        var projectNames = graph.Keys.Select(ProjectOf)
             .Concat(graph.Values.SelectMany(v => v.References.Select(r => r.Project)))
             .Distinct()
             .Where(name => name != "App");
@@ -2873,15 +2911,22 @@ public class ProjectRunServiceTests
                     return (0, PackagedPropertiesJson(), string.Empty);
                 }
 
-                var name = graph.Keys.Single(n => args.StartsWith($"msbuild {PathOf(n)} ", StringComparison.Ordinal));
+                var name = graph.Keys.Select(ProjectOf).Distinct()
+                    .Single(n => args.StartsWith($"msbuild {PathOf(n)} ", StringComparison.Ordinal));
+                var framework = System.Text.RegularExpressions.Regex.Match(args, @"-p:TargetFramework=(\S+)");
+                var key = framework.Success && graph.ContainsKey($"{name}@{framework.Groups[1].Value}")
+                    ? $"{name}@{framework.Groups[1].Value}"
+                    : name;
                 if (name == failingProject)
                 {
                     return (1, string.Empty, "error");
                 }
 
-                var (properties, references) = graph[name];
+                var (properties, references) = graph[key];
                 var items = references.Select(r => r.BuildOnly
-                    ? new Dictionary<string, string> { ["Identity"] = PathOf(r.Project), ["FullPath"] = PathOf(r.Project), ["OutputItemType"] = "Analyzer", ["ReferenceOutputAssembly"] = "false" }
+                    ? buildOrderOnly?.Contains(r.Project) == true
+                        ? new Dictionary<string, string> { ["Identity"] = PathOf(r.Project), ["FullPath"] = PathOf(r.Project), ["ReferenceOutputAssembly"] = "false" }
+                        : new Dictionary<string, string> { ["Identity"] = PathOf(r.Project), ["FullPath"] = PathOf(r.Project), ["OutputItemType"] = "Analyzer", ["ReferenceOutputAssembly"] = "false" }
                     : new Dictionary<string, string> { ["Identity"] = PathOf(r.Project), ["FullPath"] = PathOf(r.Project) });
                 var propertiesJson = "{\"NETCoreSdkRuntimeIdentifier\":\"win-arm64\"" + (properties.Length > 0 ? "," + properties : "") + "}";
                 var itemsJson = System.Text.Json.JsonSerializer.Serialize(items);
@@ -2962,7 +3007,7 @@ public class ProjectRunServiceTests
             "Release", "arm64", "net10.0-windows10.0.26100.0", false, false,
             ["Flavor=Retail", "RuntimeIdentifier=win-x64"], Solution: solution, Platform: "ARM64", OmitRuntimeIdentifier: true);
 
-        var args = ProjectRunService.BuildArchitectureProbeArguments(csproj, options);
+        var args = ProjectRunService.BuildArchitectureProbeArguments(csproj, options, options.Framework);
 
         StringAssert.StartsWith(args, $"msbuild {csproj.FullName}");
         StringAssert.Contains(args, "-p:Configuration=Release");
@@ -2971,6 +3016,7 @@ public class ProjectRunServiceTests
         StringAssert.Contains(args, "-p:Flavor=Retail");
         StringAssert.Contains(args, "-p:SolutionDir=");
         StringAssert.Contains(args, "--getProperty:RuntimeIdentifier");
+        StringAssert.Contains(args, "--getProperty:TargetFrameworks");
         StringAssert.Contains(args, ArchitectureProbeMarker);
         Assert.IsFalse(args.Contains("win-x64", StringComparison.Ordinal), "a user RID is a dedicated flag, not forwarded");
     }
@@ -4579,7 +4625,8 @@ public class ProjectRunServiceTests
         await service.BuildAndResolveAsync(csproj, options, CancellationToken.None);
 
         Assert.IsFalse(
-            commandArgs.Any(a => a.Contains("--getProperty:TargetFrameworks", StringComparison.Ordinal)),
+            commandArgs.Any(a => a.Contains("--getProperty:TargetFrameworks", StringComparison.Ordinal)
+                && !a.Contains(ArchitectureProbeMarker, StringComparison.Ordinal)),
             "an inline multi-targeted project must be pinned statically, without a discovery evaluate");
         StringAssert.Contains(dotnet.StreamingCalls[0], "-f net10.0-windows10.0.26100.0", "the first inline TFM must still be pinned into the build pass");
     }
