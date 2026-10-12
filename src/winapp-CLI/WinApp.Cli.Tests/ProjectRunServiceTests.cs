@@ -2761,10 +2761,12 @@ public class ProjectRunServiceTests
     [DataRow("rid", "arm64", true, DisplayName = "Referenced project with its own conflicting RID keeps the RID")]
     [DataRow("generator", "x86", true, DisplayName = "Generator behind a library keeps the RID for a cross-architecture build")]
     [DataRow("generator", "arm64", false, DisplayName = "Generator behind a library uses Platform for a native build")]
+    [DataRow("helper-rid", "arm64", true, DisplayName = "Build-only helper with its own conflicting RID keeps the RID")]
     public async Task RunBuild_ReferenceGraphDecidesArchitectureCarrier(string scenario, string arch, bool expectRid)
     {
-        // App -> Lib -> (Gen as analyzer, or Leaf). Properties come from MSBuild evaluation of each project, so
-        // values set by imports or on referenced projects count.
+        // App -> Lib -> (Gen/Helper as a build-only reference, or Leaf). Properties come from MSBuild evaluation of
+        // each project, so values set by imports or on referenced projects count. Build-only references are still
+        // built with the global Platform, so their own settings count too.
         var graph = new Dictionary<string, (string Properties, (string Project, bool BuildOnly)[] References)>
         {
             ["App"] = ("", [("Lib", false)]),
@@ -2773,8 +2775,15 @@ public class ProjectRunServiceTests
                 "edpr" => "\"EnableDynamicPlatformResolution\":\"true\"",
                 "rid" => "\"RuntimeIdentifier\":\"win-x86\"",
                 _ => "",
-            }, scenario == "generator" ? [("Gen", true)] : [("Leaf", false)]),
+            }, scenario switch
+            {
+                "generator" => [("Gen", true)],
+                "helper-rid" => [("Helper", true)],
+                _ => [("Leaf", false)],
+            }),
             ["Leaf"] = ("", []),
+            ["Gen"] = ("", []),
+            ["Helper"] = ("\"RuntimeIdentifier\":\"win-x64\"", []),
         };
         var csproj = WriteFile("App.csproj", ExecutableCsproj);
         var dotnet = ArchitectureGraphDotnet(graph);
@@ -2787,18 +2796,19 @@ public class ProjectRunServiceTests
         Assert.AreEqual(!expectRid, build.Contains($"-p:Platform={arch}", StringComparison.Ordinal), build);
     }
 
-    private static readonly string[] DiamondRuntimeProjects = ["App", "A", "B", "Shared"];
+    private static readonly string[] DiamondGraphProjects = ["App", "A", "B", "Shared", "Gen"];
 
     [TestMethod]
-    public async Task RunBuild_ReferenceGraph_EvaluatesEachRuntimeProjectOnceAndSkipsAnalyzers()
+    public async Task RunBuild_ReferenceGraph_EvaluatesEachProjectOnceIncludingBuildOnlyReferences()
     {
-        // Diamond: App -> A, App -> B, A -> Shared, B -> Shared; App -> Gen as an analyzer.
+        // Diamond: App -> A, App -> B, A -> Shared, B -> Shared; App -> Gen as an analyzer (still built, so evaluated).
         var graph = new Dictionary<string, (string Properties, (string Project, bool BuildOnly)[] References)>
         {
             ["App"] = ("", [("A", false), ("B", false), ("Gen", true)]),
             ["A"] = ("", [("Shared", false)]),
             ["B"] = ("", [("Shared", false)]),
             ["Shared"] = ("", []),
+            ["Gen"] = ("", []),
         };
         var csproj = WriteFile("App.csproj", ExecutableCsproj);
         var dotnet = ArchitectureGraphDotnet(graph);
@@ -2810,7 +2820,7 @@ public class ProjectRunServiceTests
             .Where(a => a.Contains(ArchitectureProbeMarker, StringComparison.Ordinal))
             .Select(a => Path.GetFileNameWithoutExtension(a.Split(' ')[1]))
             .ToList();
-        CollectionAssert.AreEquivalent(DiamondRuntimeProjects, evaluated);
+        CollectionAssert.AreEquivalent(DiamondGraphProjects, evaluated);
         StringAssert.Contains(BuildPass(dotnet), "-p:Platform=arm64");
         Assert.IsTrue(dotnet.StringInvocations.Where(a => a.Contains(ArchitectureProbeMarker, StringComparison.Ordinal) && !a.Contains("App.csproj", StringComparison.Ordinal))
             .All(a => !a.Contains("-p:TargetFramework=", StringComparison.Ordinal)), "referenced projects are evaluated without the app's pinned framework");

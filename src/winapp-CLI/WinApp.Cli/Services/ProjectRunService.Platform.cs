@@ -263,10 +263,11 @@ internal sealed partial class ProjectRunService
 
                 foreach (var reference in MsBuildPropertyReader.ParseItemMetadata(output, "ProjectReference"))
                 {
+                    // A build-only reference (analyzer, or a helper built first) is still built with the global
+                    // Platform, so it is evaluated like any other reference.
                     if (IsBuildOnlyReference(reference))
                     {
                         buildOnlyReference = true;
-                        continue;
                     }
 
                     var fullPath = GetProp(reference, "FullPath");
