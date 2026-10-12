@@ -2187,7 +2187,7 @@
       },
       "subcommands": {
         "decide-project-item": {
-          "description": "Record a structured, deterministically verified decision for one review-required source Content or PRIResource item. Target, item, strategy, and rationale are required positional arguments; the command never edits CLI-owned verification fields directly.",
+          "description": "Record a structured decision for one decision-required source Content or PRIResource item. Target, item, strategy, and rationale are required positional arguments; the command never edits CLI-owned verification fields directly.",
           "hidden": false,
           "arguments": {
             "target": {
@@ -2202,7 +2202,7 @@
               }
             },
             "item": {
-              "description": "Stable project-item ID from mechanicalVerification.projectItems.reviewRequiredItems. A unique ID prefix is accepted.",
+              "description": "Stable project-item ID from mechanicalVerification.projectItems.decisionRequiredItems. A unique ID prefix is accepted.",
               "order": 1,
               "hidden": false,
               "valueType": "System.String",
@@ -2213,7 +2213,7 @@
               }
             },
             "strategy": {
-              "description": "Decision strategy: sdk-default-item, explicit-target-item, copied-linked-content, or intentionally-not-migrated.",
+              "description": "Decision strategy: sdk-default-item, explicit-target-item, copied-linked-content, target-owned-replacement, target-not-required, or intentionally-not-migrated.",
               "order": 2,
               "hidden": false,
               "valueType": "System.String",
@@ -2224,7 +2224,7 @@
               }
             },
             "rationale": {
-              "description": "Concise explanation of why this deterministic strategy preserves the source item.",
+              "description": "Concise explanation of why this strategy mechanically accounts for the source item.",
               "order": 3,
               "hidden": false,
               "valueType": "System.String",
@@ -2258,6 +2258,18 @@
               "defaultValue": false,
               "arity": {
                 "minimum": 0,
+                "maximum": 1
+              },
+              "required": false,
+              "recursive": false
+            },
+            "--reason-code": {
+              "description": "Constrained reason code required by target-not-required. Supported: target-platform-not-applicable.",
+              "hidden": false,
+              "valueType": "System.String",
+              "hasDefaultValue": false,
+              "arity": {
+                "minimum": 1,
                 "maximum": 1
               },
               "required": false,
@@ -2333,6 +2345,18 @@
               "defaultValue": false,
               "arity": {
                 "minimum": 0,
+                "maximum": 1
+              },
+              "required": false,
+              "recursive": false
+            },
+            "--target-project": {
+              "description": "Target-relative path to the contained existing supported target project. Use this after renaming the migrated project.",
+              "hidden": false,
+              "valueType": "System.String",
+              "hasDefaultValue": false,
+              "arity": {
+                "minimum": 1,
                 "maximum": 1
               },
               "required": false,

@@ -52,7 +52,7 @@ public sealed class MigrateActivationTests : MigrateCommandTestBase
 
         Assert.AreEqual(0, exit, output);
         using var report = await ReadReportAsync(target);
-        Assert.AreEqual("1.3", report.RootElement.GetProperty("schemaVersion").GetString());
+        Assert.AreEqual("1.4", report.RootElement.GetProperty("schemaVersion").GetString());
         var analysis = report.RootElement.GetProperty("activationAnalysis");
         Assert.AreEqual("passed", analysis.GetProperty("status").GetString());
         var contracts = analysis.GetProperty("contracts").EnumerateArray().ToList();
@@ -774,7 +774,7 @@ public sealed class MigrateActivationTests : MigrateCommandTestBase
 
         Assert.AreEqual(0, exit, output);
         using var upgraded = await ReadReportAsync(target);
-        Assert.AreEqual("1.3", upgraded.RootElement.GetProperty("schemaVersion").GetString());
+        Assert.AreEqual("1.4", upgraded.RootElement.GetProperty("schemaVersion").GetString());
         Assert.AreEqual(
             "not-required",
             upgraded.RootElement

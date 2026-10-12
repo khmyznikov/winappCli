@@ -308,5 +308,16 @@ public class CliSchemaTests : BaseCommandTests
         Assert.IsFalse(options.TryGetProperty("--item", out _));
         Assert.IsFalse(options.TryGetProperty("--strategy", out _));
         Assert.IsFalse(options.TryGetProperty("--rationale", out _));
+        Assert.IsTrue(options.TryGetProperty("--reason-code", out _));
+
+        var verify = jsonDoc.RootElement
+            .GetProperty("subcommands")
+            .GetProperty("migrate")
+            .GetProperty("subcommands")
+            .GetProperty("verify");
+        Assert.IsTrue(
+            verify.GetProperty("options").TryGetProperty(
+                "--target-project",
+                out _));
     }
 }

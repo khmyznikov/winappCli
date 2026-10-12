@@ -52,6 +52,8 @@ internal partial class MigrateCommand
         {
             internal required string TargetRoot { get; init; }
 
+            internal required string BuildContextRoot { get; init; }
+
             internal required string TargetProject { get; init; }
 
             internal Dictionary<string, XDocument> Documents { get; } =
@@ -100,6 +102,7 @@ internal partial class MigrateCommand
             graph = new ProjectEvidenceGraph
             {
                 TargetRoot = targetRoot,
+                BuildContextRoot = FindTrustedBuildContextRoot(targetRoot),
                 TargetProject = targetProjectRelative
             };
             var context = new ProjectConditionContext(
@@ -193,9 +196,9 @@ internal partial class MigrateCommand
             out string error)
         {
             error = string.Empty;
-            if (!MigrationPathResolver.TryResolveContainedRelativePath(
-                    targetRoot,
-                    Path.GetRelativePath(targetRoot, projectFile),
+            if (!TryResolveBuildContextPath(
+                    graph,
+                    projectFile,
                     out projectFile,
                     out var relativePath,
                     out error))
@@ -295,7 +298,8 @@ internal partial class MigrateCommand
                         import.Attribute("Sdk")?.Value))
                 {
                     if (TryResolveLiteralImport(
-                        targetRoot,
+                        graph.BuildContextRoot,
+                        graph.TargetRoot,
                         projectFile,
                         importValue,
                         out _,
@@ -309,7 +313,8 @@ internal partial class MigrateCommand
                     continue;
                 }
                 if (!TryResolveLiteralImport(
-                    targetRoot,
+                    graph.BuildContextRoot,
+                    graph.TargetRoot,
                     projectFile,
                     importValue,
                     out var importedProject,
@@ -439,7 +444,7 @@ internal partial class MigrateCommand
                     if (overridePath is not null)
                     {
                         if (!MigrationPathResolver.TryResolveContainedAbsolutePath(
-                                targetRoot,
+                                graph.BuildContextRoot,
                                 overridePath,
                                 out automaticFileOverride,
                                 out _,
@@ -484,18 +489,15 @@ internal partial class MigrateCommand
             {
                 return;
             }
-            var candidateRelative = Path.GetRelativePath(
-                targetRoot,
-                automaticFile);
-            if (!MigrationPathResolver.TryResolveContainedRelativePath(
-                    targetRoot,
-                    candidateRelative,
+            if (!TryResolveBuildContextPath(
+                    graph,
+                    automaticFile,
                     out automaticFile,
                     out var automaticRelative,
                     out _))
             {
                 graph.IncompleteReasons.Add(
-                    $"The nearest {fileName} is outside the migration target and may affect the build.");
+                    $"The nearest {fileName} is outside the trusted build context and may affect the build.");
                 return;
             }
 
@@ -603,7 +605,64 @@ internal partial class MigrateCommand
             return null;
         }
 
+        private static string FindTrustedBuildContextRoot(string targetRoot)
+        {
+            for (var directory = new DirectoryInfo(targetRoot);
+                 directory is not null;
+                 directory = directory.Parent)
+            {
+                var gitMarker = Path.Combine(directory.FullName, ".git");
+                if (Directory.Exists(gitMarker)
+                    || File.Exists(gitMarker))
+                {
+                    return directory.FullName;
+                }
+            }
+            return targetRoot;
+        }
+
+        private static bool TryResolveBuildContextPath(
+            ProjectEvidenceGraph graph,
+            string path,
+            out string fullPath,
+            out string normalizedRelativePath,
+            out string error)
+        {
+            string candidate;
+            try
+            {
+                candidate = Path.GetFullPath(path);
+            }
+            catch (Exception exception) when (
+                exception is ArgumentException
+                or NotSupportedException
+                or PathTooLongException)
+            {
+                fullPath = string.Empty;
+                normalizedRelativePath = string.Empty;
+                error = exception.Message;
+                return false;
+            }
+            var buildContextRelative = Path.GetRelativePath(
+                graph.BuildContextRoot,
+                candidate);
+            if (!MigrationPathResolver.TryResolveContainedRelativePath(
+                    graph.BuildContextRoot,
+                    buildContextRelative,
+                    out fullPath,
+                    out _,
+                    out error))
+            {
+                normalizedRelativePath = string.Empty;
+                return false;
+            }
+            normalizedRelativePath = NormalizePath(
+                Path.GetRelativePath(graph.TargetRoot, fullPath));
+            return true;
+        }
+
         private static bool TryResolveLiteralImport(
+            string buildContextRoot,
             string targetRoot,
             string importingProject,
             string value,
@@ -637,13 +696,21 @@ internal partial class MigrateCommand
             {
                 return false;
             }
-            var candidateRelative = Path.GetRelativePath(targetRoot, candidate);
-            return MigrationPathResolver.TryResolveContainedRelativePath(
-                targetRoot,
-                candidateRelative,
-                out fullPath,
-                out normalizedRelativePath,
-                out _);
+            var buildContextRelative = Path.GetRelativePath(
+                buildContextRoot,
+                candidate);
+            if (!MigrationPathResolver.TryResolveContainedRelativePath(
+                    buildContextRoot,
+                    buildContextRelative,
+                    out fullPath,
+                    out _,
+                    out _))
+            {
+                return false;
+            }
+            normalizedRelativePath = NormalizePath(
+                Path.GetRelativePath(targetRoot, fullPath));
+            return true;
         }
 
         private static ProjectItemEvidenceResult FindProjectItemEvidence(
@@ -1023,6 +1090,7 @@ internal partial class MigrateCommand
             var importValue = import.Attribute("Project")?.Value;
             if (string.IsNullOrWhiteSpace(importValue)
                 || !TryResolveLiteralImport(
+                    graph.BuildContextRoot,
                     graph.TargetRoot,
                     graph.FullPaths[importingRelativePath],
                     importValue,
@@ -1451,7 +1519,7 @@ internal partial class MigrateCommand
                     : DeterministicCondition.True;
         }
 
-        private static bool IsSupportedMigrationTargetProject(
+        internal static bool IsSupportedMigrationTargetProject(
             XDocument document)
         {
             if (!IsProjectRoot(document.Root))

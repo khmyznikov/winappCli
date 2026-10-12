@@ -92,6 +92,123 @@ public sealed class MigrateProjectItemDecisionTests : MigrateCommandTestBase
     }
 
     [TestMethod]
+    public async Task DecideProjectItem_DeterministicReviewItemsBindToIntendedTargetPath()
+    {
+        var (source, target) = await CreateDecisionMigrationAsync(
+            "DeterministicReviewPathApp",
+            includeConditionalItem: true);
+        await AddTargetEvidenceAsync(source, target);
+        await WriteAsync(target, @"Assets\Other.resw", "<root />");
+        var intendedNotice = Path.Combine(
+            target.FullName,
+            "Strings",
+            "NOTICE.json");
+        var otherNotice = Path.Combine(
+            target.FullName,
+            "Assets",
+            "NOTICE-copy.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(otherNotice)!);
+        File.Copy(intendedNotice, otherNotice, overwrite: true);
+        var evidencePath = Path.Combine(
+            target.FullName,
+            "Directory.Build.targets");
+        var evidence = await File.ReadAllTextAsync(
+            evidencePath,
+            TestContext.CancellationToken);
+        evidence = evidence.Replace(
+            "</Project>",
+            """
+              <ItemGroup>
+                <PRIResource Update="Assets\Other.resw">
+                  <SubType>Designer</SubType>
+                </PRIResource>
+                <Content Include="Assets\NOTICE-copy.json" />
+              </ItemGroup>
+            </Project>
+            """,
+            StringComparison.Ordinal);
+        await File.WriteAllTextAsync(
+            evidencePath,
+            evidence,
+            TestContext.CancellationToken);
+
+        var items = await ReadDecisionItemsAsync(target);
+        var metadataItem = items.Single(item =>
+            item!["include"]!.GetValue<string>()
+            == @"Resources\en-us\Resources.resw");
+        var linkedItem = items.Single(item =>
+            item!["link"]?.GetValue<string>()
+            == @"Strings\NOTICE.json");
+        var conditionalItem = items.Single(item =>
+            item!["include"]!.GetValue<string>()
+            == @"Data\**\*.json");
+        Assert.AreEqual(
+            "Resources/en-us/Resources.resw",
+            metadataItem!["expectedTargetPath"]!.GetValue<string>());
+        Assert.AreEqual(
+            "Strings/NOTICE.json",
+            linkedItem!["expectedTargetPath"]!.GetValue<string>());
+        Assert.IsNull(
+            conditionalItem!["expectedTargetPath"],
+            "A nonliteral conditional item without a deterministic Link must not receive an expected target path.");
+
+        var unrelatedDefault = await InvokeDecisionAsync(
+            target,
+            "--item", metadataItem["id"]!.GetValue<string>(),
+            "--strategy", "sdk-default-item",
+            "--target-path", @"Assets\Other.resw",
+            "--evidence-file", "Directory.Build.targets",
+            "--rationale", "Matching metadata on another default item must not substitute for the intended resource.");
+        var unrelatedCopy = await InvokeDecisionAsync(
+            target,
+            "--item", linkedItem["id"]!.GetValue<string>(),
+            "--strategy", "copied-linked-content",
+            "--target-path", @"Assets\NOTICE-copy.json",
+            "--target-item-type", "Content",
+            "--evidence-file", "Directory.Build.targets",
+            "--rationale", "Same bytes at another active path must not substitute for the literal Link path.");
+
+        Assert.AreEqual(1, unrelatedDefault.ExitCode, unrelatedDefault.Output);
+        Assert.AreEqual(1, unrelatedCopy.ExitCode, unrelatedCopy.Output);
+        StringAssert.Contains(
+            unrelatedDefault.Output,
+            "expected target path 'Resources/en-us/Resources.resw'");
+        StringAssert.Contains(
+            unrelatedCopy.Output,
+            "expected target path 'Strings/NOTICE.json'");
+
+        var intendedDefault = await InvokeDecisionAsync(
+            target,
+            "--item", metadataItem["id"]!.GetValue<string>(),
+            "--strategy", "sdk-default-item",
+            "--target-path", @"Resources\en-us\Resources.resw",
+            "--evidence-file", "Directory.Build.targets",
+            "--rationale", "The intended resource path has matching active metadata.");
+        var intendedCopy = await InvokeDecisionAsync(
+            target,
+            "--item", linkedItem["id"]!.GetValue<string>(),
+            "--strategy", "copied-linked-content",
+            "--target-path", @"Strings\NOTICE.json",
+            "--target-item-type", "Content",
+            "--evidence-file", "Directory.Build.targets",
+            "--rationale", "The literal Link path is actively included with matching bytes.");
+
+        Assert.AreEqual(0, intendedDefault.ExitCode, intendedDefault.Output);
+        Assert.AreEqual(0, intendedCopy.ExitCode, intendedCopy.Output);
+        using var report = await ReadReportAsync(target);
+        Assert.AreEqual(
+            2,
+            report.RootElement
+                .GetProperty("projectItemDecisions")
+                .EnumerateArray()
+                .Count(decision =>
+                    decision.GetProperty("verification")
+                        .GetProperty("status")
+                        .GetString()
+                    == "verified"));
+    }
+
+    [TestMethod]
     public async Task DecideProjectItem_NormalizesMixedCaseItemKindsForAllStrategies()
     {
         var (source, target) = await CreateDecisionMigrationAsync(
@@ -406,12 +523,17 @@ public sealed class MigrateProjectItemDecisionTests : MigrateCommandTestBase
             Path.Combine(target.FullName, "migration-report.json"),
             TestContext.CancellationToken);
         var items = await ReadReviewItemsAsync(target);
+        File.Delete(Path.Combine(
+            target.FullName,
+            "Resources",
+            "en-us",
+            "Resources.resw"));
 
         var missingFile = await InvokeDecisionAsync(
             target,
             "--item", ItemId(items, @"Resources\en-us\Resources.resw"),
             "--strategy", "sdk-default-item",
-            "--target-path", @"Resources\missing\Resources.resw",
+            "--target-path", @"Resources\en-us\Resources.resw",
             "--rationale", "Treat this as resolved even though evidence is missing.");
         var noProjectItem = await InvokeDecisionAsync(
             target,
@@ -696,7 +818,48 @@ public sealed class MigrateProjectItemDecisionTests : MigrateCommandTestBase
 
         Assert.AreEqual(1, result.ExitCode, result.Output);
         StringAssert.Contains(result.Output, "nearest Directory.Build.props");
-        StringAssert.Contains(result.Output, "outside the migration target");
+        StringAssert.Contains(result.Output, "outside the trusted build context");
+    }
+
+    [TestMethod]
+    public async Task DecideProjectItem_AcceptsAncestorDirectoryBuildFileInsideGitWorktree()
+    {
+        var (_, target) = await CreateDecisionMigrationAsync(
+            "WorktreeDirectoryBuildApp",
+            includeConditionalItem: false);
+        Directory.CreateDirectory(Path.Combine(_tempDirectory.FullName, ".git"));
+        var items = await ReadReviewItemsAsync(target);
+        await WriteAsync(
+            _tempDirectory,
+            "Directory.Build.props",
+            """
+            <Project>
+              <ItemGroup>
+                <PRIResource Include="Resources\fr-fr\Resources.resw">
+                  <SubType>Designer</SubType>
+                </PRIResource>
+              </ItemGroup>
+            </Project>
+            """);
+
+        var result = await InvokeDecisionAsync(
+            target,
+            "--item", ItemId(items, @"Resources\fr-fr\Resources.resw"),
+            "--strategy", "explicit-target-item",
+            "--target-path", @"Resources\fr-fr\Resources.resw",
+            "--target-item-type", "PRIResource",
+            "--evidence-file", @"..\Directory.Build.props",
+            "--rationale", "The ancestor props file is contained by the trusted Git worktree.");
+
+        Assert.AreEqual(0, result.ExitCode, result.Output);
+        using var report = await ReadReportAsync(target);
+        var decision = report.RootElement
+            .GetProperty("projectItemDecisions")
+            .EnumerateArray()
+            .Single();
+        Assert.AreEqual(
+            "../Directory.Build.props",
+            decision.GetProperty("evidenceFiles")[0].GetString());
     }
 
     [TestMethod]
@@ -746,6 +909,534 @@ public sealed class MigrateProjectItemDecisionTests : MigrateCommandTestBase
                 .GetProperty("projectEvidence")[0]
                 .GetProperty("path")
                 .GetString());
+    }
+
+    [TestMethod]
+    public async Task DecideProjectItem_TargetOwnedReplacementRequiresContainedActiveCoverage()
+    {
+        var (_, target) = await CreateDecisionMigrationAsync(
+            "TargetOwnedReplacementApp",
+            includeConditionalItem: false);
+        var items = await ReadReviewItemsAsync(target);
+        var itemId = ItemId(items, @"Resources\fr-fr\Resources.resw");
+        await WriteAsync(target, @"Replacement\Target.json", """{"target":true}""");
+
+        var missing = await InvokeDecisionAsync(
+            target,
+            "--item", itemId,
+            "--strategy", "target-owned-replacement",
+            "--target-path", @"Replacement\Missing.json",
+            "--target-item-type", "Content",
+            "--rationale", "A missing replacement is not evidence.");
+        var uncovered = await InvokeDecisionAsync(
+            target,
+            "--item", itemId,
+            "--strategy", "target-owned-replacement",
+            "--target-path", @"Replacement\Target.json",
+            "--target-item-type", "Content",
+            "--rationale", "An uncovered replacement is not active build evidence.");
+        var external = await InvokeDecisionAsync(
+            target,
+            "--item", itemId,
+            "--strategy", "target-owned-replacement",
+            "--target-path", @"..\machine\Target.json",
+            "--target-item-type", "Content",
+            "--rationale", "External paths cannot represent target-owned content.");
+
+        Assert.AreEqual(1, missing.ExitCode, missing.Output);
+        Assert.AreEqual(1, uncovered.ExitCode, uncovered.Output);
+        Assert.AreEqual(1, external.ExitCode, external.Output);
+
+        await AppendTargetProjectXmlAsync(
+            target,
+            """<ItemGroup><Content Include="Replacement\Target.json" /></ItemGroup>""");
+        await WriteAsync(
+            _tempDirectory,
+            "OutsideReplacement.targets",
+            """
+            <Project>
+              <ItemGroup>
+                <Content Include="Replacement\Target.json" />
+              </ItemGroup>
+            </Project>
+            """);
+        var externalEvidence = await InvokeDecisionAsync(
+            target,
+            "--item", itemId,
+            "--strategy", "target-owned-replacement",
+            "--target-path", @"Replacement\Target.json",
+            "--target-item-type", "Content",
+            "--evidence-file", @"..\OutsideReplacement.targets",
+            "--rationale", "Evidence outside the trusted build context cannot participate.");
+        Assert.AreEqual(1, externalEvidence.ExitCode, externalEvidence.Output);
+
+        var accepted = await InvokeDecisionAsync(
+            target,
+            "--item", itemId,
+            "--strategy", "target-owned-replacement",
+            "--target-path", @"Replacement\Target.json",
+            "--target-item-type", "Content",
+            "--rationale", "Target-owned replacement is actively included without claiming byte equality.");
+
+        Assert.AreEqual(0, accepted.ExitCode, accepted.Output);
+        using var report = await ReadReportAsync(target);
+        var decision = report.RootElement
+            .GetProperty("projectItemDecisions")
+            .EnumerateArray()
+            .Single();
+        Assert.AreEqual(
+            "verified",
+            decision.GetProperty("verification").GetProperty("status").GetString());
+        Assert.IsFalse(
+            decision.GetProperty("verification").TryGetProperty("contentMatches", out _));
+    }
+
+    [TestMethod]
+    public async Task DecideProjectItem_TargetNotRequiredIsAcceptedAndClosesAccounting()
+    {
+        var (source, target) = await CreateDecisionMigrationAsync(
+            "TargetNotRequiredApp",
+            includeConditionalItem: true);
+        await AddTargetEvidenceAsync(source, target);
+        var items = await ReadReviewItemsAsync(target);
+        await RecordAllDeterministicDecisionsAsync(target, items);
+
+        var missingReason = await InvokeDecisionAsync(
+            target,
+            "--item", ItemId(items, @"Data\**\*.json"),
+            "--strategy", "target-not-required",
+            "--rationale", "A constrained reason code is mandatory.");
+        var targetEvidence = await InvokeDecisionAsync(
+            target,
+            "--item", ItemId(items, @"Data\**\*.json"),
+            "--strategy", "target-not-required",
+            "--reason-code", "target-platform-not-applicable",
+            "--target-path", @"Data\Model.json",
+            "--target-item-type", "Content",
+            "--rationale", "Target evidence is incompatible with target-not-required.");
+        Assert.AreEqual(1, missingReason.ExitCode, missingReason.Output);
+        Assert.AreEqual(1, targetEvidence.ExitCode, targetEvidence.Output);
+
+        var result = await InvokeDecisionAsync(
+            target,
+            "--item", ItemId(items, @"Data\**\*.json"),
+            "--strategy", "target-not-required",
+            "--reason-code", "target-platform-not-applicable",
+            "--rationale", "This UWP-only project item does not apply to the target platform.");
+
+        Assert.AreEqual(0, result.ExitCode, result.Output);
+        using var report = await ReadReportAsync(target);
+        var projectItems = report.RootElement
+            .GetProperty("mechanicalVerification")
+            .GetProperty("projectItems");
+        Assert.AreEqual(1, projectItems.GetProperty("acceptedDecisionItems").GetInt32());
+        Assert.AreEqual(4, projectItems.GetProperty("accountedDecisionItems").GetInt32());
+        Assert.IsFalse(report.RootElement.GetProperty("todos").EnumerateArray().Any(todo =>
+            todo.GetProperty("id").GetString() == "UWMIG012"));
+        var decision = report.RootElement
+            .GetProperty("projectItemDecisions")
+            .EnumerateArray()
+            .Single(item =>
+                item.GetProperty("strategy").GetString() == "target-not-required");
+        Assert.AreEqual(
+            "accepted",
+            decision.GetProperty("verification").GetProperty("status").GetString());
+        Assert.AreEqual(
+            report.RootElement
+                .GetProperty("target")
+                .GetProperty("projectFile")
+                .GetString(),
+            decision.GetProperty("verification")
+                .GetProperty("projectEvidence")[0]
+                .GetProperty("path")
+                .GetString());
+
+        var sourceProject = Path.Combine(
+            source.FullName,
+            "TargetNotRequiredApp.csproj");
+        var sourceXml = await File.ReadAllTextAsync(
+            sourceProject,
+            TestContext.CancellationToken);
+        await File.WriteAllTextAsync(
+            sourceProject,
+            sourceXml.Replace(
+                @"Data\**\*.json",
+                @"TargetOnly\**\*.json",
+                StringComparison.Ordinal),
+            TestContext.CancellationToken);
+        var staleVerify = await InvokeVerifyAsync(target);
+        Assert.AreEqual(0, staleVerify.ExitCode, staleVerify.Output);
+        using var staleReport = await ReadReportAsync(target);
+        var staleDecision = staleReport.RootElement
+            .GetProperty("projectItemDecisions")
+            .EnumerateArray()
+            .Single(item =>
+                item.GetProperty("strategy").GetString() == "target-not-required");
+        Assert.AreEqual(
+            "stale",
+            staleDecision.GetProperty("verification").GetProperty("status").GetString());
+        Assert.IsTrue(staleReport.RootElement.GetProperty("todos").EnumerateArray().Any(todo =>
+            todo.GetProperty("id").GetString() == "UWMIG012"));
+    }
+
+    [TestMethod]
+    public async Task DecideProjectItem_TargetNotRequiredRejectsUnsupportedCurrentTargetProject()
+    {
+        var (_, target) = await CreateDecisionMigrationAsync(
+            "TargetNotRequiredUnsupportedTargetApp",
+            includeConditionalItem: true);
+        var items = await ReadDecisionItemsAsync(target);
+        var targetProject = Directory.EnumerateFiles(
+            target.FullName,
+            "*.csproj",
+            SearchOption.TopDirectoryOnly)
+            .Single();
+        var projectXml = await File.ReadAllTextAsync(
+            targetProject,
+            TestContext.CancellationToken);
+        await File.WriteAllTextAsync(
+            targetProject,
+            projectXml.Replace(
+                "Microsoft.NET.Sdk",
+                "Unsupported.Target.Sdk",
+                StringComparison.Ordinal),
+            TestContext.CancellationToken);
+
+        var result = await InvokeDecisionAsync(
+            target,
+            "--item", ItemId(items, @"Data\**\*.json"),
+            "--strategy", "target-not-required",
+            "--reason-code", "target-platform-not-applicable",
+            "--rationale", "Acceptance must be tied to the current supported target project.");
+
+        Assert.AreEqual(1, result.ExitCode, result.Output);
+        StringAssert.Contains(
+            result.Output,
+            "could not be anchored to the current target project");
+        using var report = await ReadReportAsync(target);
+        Assert.IsFalse(report.RootElement
+            .GetProperty("projectItemDecisions")
+            .EnumerateArray()
+            .Any(decision =>
+                decision.GetProperty("strategy").GetString()
+                == "target-not-required"));
+    }
+
+    [TestMethod]
+    public async Task Verify_DeterministicMissingItemHasStableSelectableIdentity()
+    {
+        var (source, target) = await CreateDecisionMigrationAsync(
+            "DeterministicMissingApp",
+            includeConditionalItem: false);
+        await WriteAsync(source, @"Deterministic\Missing.json", """{"source":true}""");
+        var sourceProject = Path.Combine(
+            source.FullName,
+            "DeterministicMissingApp.csproj");
+        var sourceXml = await File.ReadAllTextAsync(
+            sourceProject,
+            TestContext.CancellationToken);
+        sourceXml = sourceXml.Replace(
+            "</ItemGroup>",
+            """  <Content Include="Deterministic\Missing.json" /></ItemGroup>""",
+            StringComparison.Ordinal);
+        await File.WriteAllTextAsync(
+            sourceProject,
+            sourceXml,
+            TestContext.CancellationToken);
+
+        var firstVerify = await InvokeVerifyAsync(target);
+        Assert.AreEqual(1, firstVerify.ExitCode, firstVerify.Output);
+        var firstItems = await ReadDecisionItemsAsync(target);
+        var firstId = ItemId(firstItems, @"Deterministic\Missing.json");
+        Assert.AreEqual(
+            "Deterministic/Missing.json",
+            firstItems.Single(item =>
+                item!["id"]!.GetValue<string>() == firstId)!["expectedTargetPath"]!
+                .GetValue<string>());
+
+        await File.WriteAllTextAsync(
+            sourceProject,
+            $"<!-- unrelated line shift -->{Environment.NewLine}{sourceXml}",
+            TestContext.CancellationToken);
+        var secondVerify = await InvokeVerifyAsync(target);
+        Assert.AreEqual(1, secondVerify.ExitCode, secondVerify.Output);
+        Assert.AreEqual(
+            firstId,
+            ItemId(
+                await ReadDecisionItemsAsync(target),
+                @"Deterministic\Missing.json"));
+
+        var selected = await InvokeDecisionAsync(
+            target,
+            "--item", firstId,
+            "--strategy", "target-not-required",
+            "--reason-code", "target-platform-not-applicable",
+            "--rationale", "The deterministic source item is intentionally not applicable to this target.");
+        Assert.AreEqual(0, selected.ExitCode, selected.Output);
+    }
+
+    [TestMethod]
+    public async Task DecideProjectItem_DeterministicMissingItemsRequireExpectedPathOrExplicitDisposition()
+    {
+        var source = _tempDirectory.CreateSubdirectory(
+            "ExpectedTargetBindingApp");
+        await WriteAsync(
+            source,
+            "ExpectedTargetBindingApp.csproj",
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <Content Include="Data\Required.json" />
+                <PRIResource Include="Resources\Required.resw" />
+              </ItemGroup>
+            </Project>
+            """);
+        await WriteAsync(source, @"Data\Required.json", """{"required":true}""");
+        await WriteAsync(source, @"Resources\Required.resw", "<root />");
+        await WriteAsync(source, "Package.appxmanifest", SourceManifest);
+        var target = new DirectoryInfo(Path.Combine(
+            _tempDirectory.FullName,
+            "ExpectedTargetBindingApp-output"));
+        ArrangeTemplateCreation(target, "ExpectedTargetBindingAppApp");
+        var migrated = await InvokeMigrateAsync(source, target);
+        Assert.AreEqual(0, migrated.ExitCode, migrated.Output);
+
+        File.Delete(Path.Combine(target.FullName, "Data", "Required.json"));
+        File.Delete(Path.Combine(target.FullName, "Resources", "Required.resw"));
+        await WriteAsync(target, @"Assets\Placeholder.json", """{"placeholder":true}""");
+        await WriteAsync(target, @"Assets\ByteMatch.json", """{"required":true}""");
+        await WriteAsync(target, @"Assets\Placeholder.resw", "<root />");
+        await AppendTargetProjectXmlAsync(
+            target,
+            """
+            <ItemGroup>
+              <Content Include="Assets\Placeholder.json" />
+              <Content Include="Assets\ByteMatch.json" />
+            </ItemGroup>
+            """);
+
+        var verify = await InvokeVerifyAsync(target);
+        Assert.AreEqual(1, verify.ExitCode, verify.Output);
+        var items = await ReadDecisionItemsAsync(target);
+        var contentId = ItemId(items, @"Data\Required.json");
+        var resourceId = ItemId(items, @"Resources\Required.resw");
+
+        var unrelatedExplicit = await InvokeDecisionAsync(
+            target,
+            "--item", contentId,
+            "--strategy", "explicit-target-item",
+            "--target-path", @"Assets\Placeholder.json",
+            "--target-item-type", "Content",
+            "--rationale", "An unrelated active Content item must not satisfy the missing source item.");
+        var unrelatedSdkDefault = await InvokeDecisionAsync(
+            target,
+            "--item", resourceId,
+            "--strategy", "sdk-default-item",
+            "--target-path", @"Assets\Placeholder.resw",
+            "--rationale", "An unrelated SDK-default PRIResource must not satisfy the missing source item.");
+        var unrelatedByteMatch = await InvokeDecisionAsync(
+            target,
+            "--item", contentId,
+            "--strategy", "copied-linked-content",
+            "--target-path", @"Assets\ByteMatch.json",
+            "--target-item-type", "Content",
+            "--rationale", "Matching bytes at an unrelated path must not substitute for the intended target path.");
+
+        Assert.AreEqual(1, unrelatedExplicit.ExitCode, unrelatedExplicit.Output);
+        Assert.AreEqual(1, unrelatedSdkDefault.ExitCode, unrelatedSdkDefault.Output);
+        Assert.AreEqual(1, unrelatedByteMatch.ExitCode, unrelatedByteMatch.Output);
+        StringAssert.Contains(unrelatedExplicit.Output, "expected target path 'Data/Required.json'");
+        StringAssert.Contains(unrelatedSdkDefault.Output, "expected target path 'Resources/Required.resw'");
+        StringAssert.Contains(unrelatedByteMatch.Output, "expected target path 'Data/Required.json'");
+        using (var stillPending = await ReadReportAsync(target))
+        {
+            Assert.AreEqual(
+                2,
+                stillPending.RootElement
+                    .GetProperty("mechanicalVerification")
+                    .GetProperty("projectItems")
+                    .GetProperty("missingTargetItems")
+                    .GetArrayLength());
+            Assert.IsTrue(stillPending.RootElement.GetProperty("todos").EnumerateArray().Any(todo =>
+                todo.GetProperty("id").GetString() == "UWMIG012"));
+        }
+
+        var replacement = await InvokeDecisionAsync(
+            target,
+            "--item", contentId,
+            "--strategy", "target-owned-replacement",
+            "--target-path", @"Assets\Placeholder.json",
+            "--target-item-type", "Content",
+            "--rationale", "The target intentionally uses this actively included target-owned replacement.");
+        Assert.AreEqual(0, replacement.ExitCode, replacement.Output);
+        StringAssert.Contains(replacement.Output, "Recorded target-owned-replacement");
+        StringAssert.Contains(replacement.Output, "UWMIG012 remains pending.");
+        using (var firstPersisted = await ReadReportAsync(target))
+        {
+            var recordedReplacement = firstPersisted.RootElement
+                .GetProperty("projectItemDecisions")
+                .EnumerateArray()
+                .Single(decision =>
+                    decision.GetProperty("strategy").GetString()
+                    == "target-owned-replacement");
+            Assert.AreEqual(
+                "verified",
+                recordedReplacement
+                    .GetProperty("verification")
+                    .GetProperty("status")
+                    .GetString());
+            Assert.AreEqual(
+                1,
+                firstPersisted.RootElement
+                    .GetProperty("mechanicalVerification")
+                    .GetProperty("projectItems")
+                    .GetProperty("missingTargetItems")
+                    .GetArrayLength());
+        }
+        var incompleteVerify = await InvokeVerifyAsync(target);
+        Assert.AreEqual(1, incompleteVerify.ExitCode, incompleteVerify.Output);
+
+        var notRequired = await InvokeDecisionAsync(
+            target,
+            "--item", resourceId,
+            "--strategy", "target-not-required",
+            "--reason-code", "target-platform-not-applicable",
+            "--rationale", "The source PRIResource is not applicable to the target platform.");
+        Assert.AreEqual(0, notRequired.ExitCode, notRequired.Output);
+
+        using var accounted = await ReadReportAsync(target);
+        var projectItems = accounted.RootElement
+            .GetProperty("mechanicalVerification")
+            .GetProperty("projectItems");
+        Assert.AreEqual(0, projectItems.GetProperty("missingTargetItems").GetArrayLength());
+        Assert.AreEqual(1, projectItems.GetProperty("verifiedDecisionItems").GetInt32());
+        Assert.AreEqual(1, projectItems.GetProperty("acceptedDecisionItems").GetInt32());
+        Assert.IsFalse(accounted.RootElement.GetProperty("todos").EnumerateArray().Any(todo =>
+            todo.GetProperty("id").GetString() == "UWMIG012"));
+        var completeVerify = await InvokeVerifyAsync(target);
+        Assert.AreEqual(0, completeVerify.ExitCode, completeVerify.Output);
+    }
+
+    [TestMethod]
+    public async Task Verify_SourceProjectItemOperationIsStructuredAndSelectable()
+    {
+        var (source, target) = await CreateDecisionMigrationAsync(
+            "ProjectItemOperationApp",
+            includeConditionalItem: false);
+        var sourceProject = Path.Combine(
+            source.FullName,
+            "ProjectItemOperationApp.csproj");
+        var sourceXml = await File.ReadAllTextAsync(
+            sourceProject,
+            TestContext.CancellationToken);
+        sourceXml = sourceXml.Replace(
+            "</ItemGroup>",
+            """  <Content Remove="UwpOnly\**\*" /></ItemGroup>""",
+            StringComparison.Ordinal);
+        await File.WriteAllTextAsync(
+            sourceProject,
+            sourceXml,
+            TestContext.CancellationToken);
+
+        var verify = await InvokeVerifyAsync(target);
+        Assert.AreEqual(0, verify.ExitCode, verify.Output);
+        var items = await ReadDecisionItemsAsync(target);
+        var operation = items.Single(item =>
+            item!["itemOperation"]!.GetValue<string>() == "Remove");
+        Assert.AreEqual(
+            @"UwpOnly\**\*",
+            operation!["itemSpec"]!.GetValue<string>());
+
+        var selected = await InvokeDecisionAsync(
+            target,
+            "--item", operation["id"]!.GetValue<string>(),
+            "--strategy", "target-not-required",
+            "--reason-code", "target-platform-not-applicable",
+            "--rationale", "The source-only removal has no target-platform equivalent.");
+        Assert.AreEqual(0, selected.ExitCode, selected.Output);
+    }
+
+    [TestMethod]
+    public async Task Verify_RefreshesExplicitRenamedTargetProject()
+    {
+        var (_, target) = await CreateDecisionMigrationAsync(
+            "RenamedTargetProjectApp",
+            includeConditionalItem: false);
+        var oldProject = Directory.EnumerateFiles(
+            target.FullName,
+            "*.csproj",
+            SearchOption.TopDirectoryOnly)
+            .Single();
+        var renamedProject = Path.Combine(
+            target.FullName,
+            "CustomMediaTransportControls.csproj");
+        File.Move(oldProject, renamedProject);
+
+        var withoutSelection = await InvokeVerifyAsync(target);
+        Assert.AreEqual(1, withoutSelection.ExitCode, withoutSelection.Output);
+        var refreshed = await InvokeVerifyAsync(
+            target,
+            "--target-project",
+            "CustomMediaTransportControls.csproj");
+
+        Assert.AreEqual(0, refreshed.ExitCode, refreshed.Output);
+        using var report = await ReadReportAsync(target);
+        Assert.AreEqual(
+            "CustomMediaTransportControls.csproj",
+            report.RootElement
+                .GetProperty("target")
+                .GetProperty("projectFile")
+                .GetString());
+
+        var items = await ReadDecisionItemsAsync(target);
+        var subsequentDecision = await InvokeDecisionAsync(
+            target,
+            "--item", ItemId(items, @"Resources\fr-fr\Resources.resw"),
+            "--strategy", "target-not-required",
+            "--reason-code", "target-platform-not-applicable",
+            "--rationale", "The refreshed target project remains usable by subsequent decisions.");
+        Assert.AreEqual(
+            0,
+            subsequentDecision.ExitCode,
+            subsequentDecision.Output);
+    }
+
+    [TestMethod]
+    public async Task Verify_NormalizesSchema13DecisionInventoryTo14()
+    {
+        var (_, target) = await CreateDecisionMigrationAsync(
+            "Schema13InventoryApp",
+            includeConditionalItem: false);
+        var reportPath = Path.Combine(target.FullName, "migration-report.json");
+        var report = JsonNode.Parse(await File.ReadAllTextAsync(
+            reportPath,
+            TestContext.CancellationToken))!;
+        report["schemaVersion"] = "1.3";
+        var projectItems = report["mechanicalVerification"]!["projectItems"]!.AsObject();
+        projectItems.Remove("decisionRequiredItems");
+        foreach (var item in projectItems["reviewRequiredItems"]!.AsArray())
+        {
+            item!.AsObject().Remove("itemOperation");
+            item.AsObject().Remove("itemSpec");
+        }
+        await File.WriteAllTextAsync(
+            reportPath,
+            report.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
+            TestContext.CancellationToken);
+
+        var result = await InvokeVerifyAsync(target);
+
+        Assert.AreEqual(0, result.ExitCode, result.Output);
+        using var upgraded = await ReadReportAsync(target);
+        Assert.AreEqual(
+            "1.4",
+            upgraded.RootElement.GetProperty("schemaVersion").GetString());
+        var upgradedItems = upgraded.RootElement
+            .GetProperty("mechanicalVerification")
+            .GetProperty("projectItems");
+        Assert.AreEqual(
+            upgradedItems.GetProperty("reviewRequiredItems").GetArrayLength(),
+            upgradedItems.GetProperty("decisionRequiredItems").GetArrayLength());
     }
 
     [TestMethod]
@@ -1347,10 +2038,13 @@ public sealed class MigrateProjectItemDecisionTests : MigrateCommandTestBase
             .GetProperty("reviewRequiredItems")
             .EnumerateArray()
             .ToList();
-        Assert.HasCount(2, reviewItems);
-        Assert.IsTrue(reviewItems.All(item =>
+        Assert.HasCount(3, reviewItems);
+        Assert.HasCount(2, reviewItems.Where(item =>
             item.GetProperty("reviewReason").GetString()
             == "unmodeled-ancestor"));
+        Assert.IsTrue(reviewItems.Any(item =>
+            item.GetProperty("reviewReason").GetString()
+            == "project-item-operation"));
         Assert.AreEqual(0, projectItems.GetProperty("migratedItems").GetInt32());
         Assert.IsTrue(
             projectItems.GetProperty("unresolvedItems").GetArrayLength() >= 5);
@@ -1929,6 +2623,35 @@ public sealed class MigrateProjectItemDecisionTests : MigrateCommandTestBase
     }
 
     [TestMethod]
+    public async Task DecideProjectItem_ReportWriteFailureReturnsNonzero()
+    {
+        var (source, target) = await CreateDecisionMigrationAsync(
+            "DecisionReportWriteFailureApp",
+            includeConditionalItem: false);
+        await AddTargetEvidenceAsync(source, target);
+        var items = await ReadReviewItemsAsync(target);
+        var reportPath = Path.Combine(target.FullName, "migration-report.json");
+        await using var lockedReport = new FileStream(
+            reportPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read);
+
+        var result = await InvokeDecisionAsync(
+            target,
+            "--item", ItemId(items, @"Resources\en-us\Resources.resw"),
+            "--strategy", "sdk-default-item",
+            "--target-path", @"Resources\en-us\Resources.resw",
+            "--evidence-file", "Directory.Build.targets",
+            "--rationale", "A valid decision must still fail when its report update cannot be persisted.");
+
+        Assert.AreEqual(1, result.ExitCode, result.Output);
+        StringAssert.Contains(
+            result.Output,
+            "Could not persist migration-report.json");
+    }
+
+    [TestMethod]
     public async Task Verify_RejectsRootedTraversalAndPrefixEscapeProjectPaths()
     {
         var (_, target) = await CreateDecisionMigrationAsync(
@@ -2252,7 +2975,7 @@ public sealed class MigrateProjectItemDecisionTests : MigrateCommandTestBase
         Assert.AreEqual(
             "decision-test",
             activation.GetProperty("contracts")[0].GetProperty("protocolName").GetString());
-        Assert.AreEqual("1.3", report.RootElement.GetProperty("schemaVersion").GetString());
+        Assert.AreEqual("1.4", report.RootElement.GetProperty("schemaVersion").GetString());
     }
 
     [TestMethod]
@@ -2273,7 +2996,8 @@ public sealed class MigrateProjectItemDecisionTests : MigrateCommandTestBase
             "--evidence-file", "Directory.Build.targets",
             "--rationale", "Recording an item decision must not erase prior activation facts.");
 
-        Assert.AreEqual(1, result.ExitCode, result.Output);
+        Assert.AreEqual(0, result.ExitCode, result.Output);
+        StringAssert.Contains(result.Output, "Recorded sdk-default-item");
         using var report = await ReadReportAsync(target);
         Assert.AreEqual(
             "failed",
@@ -2619,6 +3343,14 @@ public sealed class MigrateProjectItemDecisionTests : MigrateCommandTestBase
         return report["mechanicalVerification"]!["projectItems"]!["reviewRequiredItems"]!.AsArray();
     }
 
+    private async Task<JsonArray> ReadDecisionItemsAsync(DirectoryInfo target)
+    {
+        var report = JsonNode.Parse(await File.ReadAllTextAsync(
+            Path.Combine(target.FullName, "migration-report.json"),
+            TestContext.CancellationToken))!;
+        return report["mechanicalVerification"]!["projectItems"]!["decisionRequiredItems"]!.AsArray();
+    }
+
     private static string ItemId(JsonArray items, string include) =>
         items.Single(item =>
                 item!["include"]!.GetValue<string>() == include)!["id"]!
@@ -2645,10 +3377,11 @@ public sealed class MigrateProjectItemDecisionTests : MigrateCommandTestBase
             target.FullName);
 
     private Task<(int ExitCode, string Output)> InvokeVerifyAsync(
-        DirectoryInfo target) =>
+        DirectoryInfo target,
+        params string[] arguments) =>
         InvokeCapturingConsoleAsync(
             GetRequiredService<MigrateVerifyCommand>(),
-            target.FullName);
+            [target.FullName, .. arguments]);
 
     private Task<(int ExitCode, string Output)> InvokeDecisionAsync(
         DirectoryInfo target,

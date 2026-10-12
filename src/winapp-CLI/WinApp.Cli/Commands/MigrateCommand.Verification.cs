@@ -58,8 +58,9 @@ internal partial class MigrateCommand
             List<MigrationProjectItem> AccountedItems,
             List<MigrationLocation> UnresolvedItems,
             List<MigrationLocation> MissingTargetItems,
-            List<MigrationReviewRequiredProjectItem> ReviewRequiredItems,
+            List<MigrationReviewRequiredProjectItem> DecisionRequiredItems,
             int VerifiedDecisionItems,
+            int AcceptedDecisionItems,
             int ChangedFiles);
 
         private static int RewriteReswNamespaces(string targetRoot)
@@ -128,7 +129,7 @@ internal partial class MigrateCommand
         {
             if (sourceProject is null)
             {
-                return new ProjectItemMigrationResult(0, 0, [], [], [], [], 0, 0);
+                return new ProjectItemMigrationResult(0, 0, [], [], [], [], 0, 0, 0);
             }
 
             XDocument sourceDocument;
@@ -153,27 +154,31 @@ internal partial class MigrateCommand
                     [],
                     [],
                     0,
+                    0,
                     0);
             }
 
             var sourceConditionContext = new ProjectConditionContext(
                 Path.GetFileNameWithoutExtension(sourceProject));
-            var sourceItems = sourceDocument
+            var sourceProjectItems = sourceDocument
                 .Descendants()
                 .Where(element => MigratedProjectItemKinds.Contains(element.Name.LocalName))
-                .Where(element => element.Attribute("Include") is not null)
+                .Where(HasClosureRelevantItemOperation)
                 .Where(element =>
                     EvaluateElementCondition(
                         element,
                         sourceConditionContext) != DeterministicCondition.False)
                 .ToList();
+            var sourceItems = sourceProjectItems
+                .Where(element => element.Attribute("Include") is not null)
+                .ToList();
             var stableItemIds = CreateStableProjectItemIds(
                 sourceRoot,
                 sourceProject,
-                sourceItems);
+                sourceProjectItems);
             var unresolved = new List<MigrationLocation>();
             var missingTargetItems = new List<MigrationLocation>();
-            var reviewRequiredItems = new List<MigrationReviewRequiredProjectItem>();
+            var decisionRequiredItems = new List<MigrationReviewRequiredProjectItem>();
             foreach (var sourceImport in sourceDocument.Descendants().Where(element =>
                 IsProjectElement(element, "Import")
                 && !IsEvaluationImport(element)
@@ -204,15 +209,22 @@ internal partial class MigrateCommand
                 && MigratedProjectItemKinds.Contains(element.Name.LocalName)
                 && element.Attribute("Include") is null
                 && HasClosureRelevantItemOperation(element)
-                && !IsEvaluationItem(element)
                 && EvaluateElementCondition(
                     element,
                     sourceConditionContext) != DeterministicCondition.False))
             {
-                unresolved.Add(ProjectItemLocation(
+                _ = TryCanonicalizeMigratedProjectItemKind(
+                    sourceItemOperation.Name.LocalName,
+                    out var itemKind);
+                AddReviewRequiredItem(
                     sourceRoot,
                     sourceProject,
-                    sourceItemOperation));
+                    sourceItemOperation,
+                    stableItemIds[sourceItemOperation],
+                    itemKind,
+                    "project-item-operation",
+                    unresolved,
+                    decisionRequiredItems);
             }
             var migratable = new List<(
                 string Kind,
@@ -239,7 +251,7 @@ internal partial class MigrateCommand
                         itemKind,
                         "unmodeled-ancestor",
                         unresolved,
-                        reviewRequiredItems);
+                        decisionRequiredItems);
                     continue;
                 }
                 if (item.AncestorsAndSelf().Any(element =>
@@ -253,7 +265,7 @@ internal partial class MigrateCommand
                         itemKind,
                         "conditional",
                         unresolved,
-                        reviewRequiredItems);
+                        decisionRequiredItems);
                     continue;
                 }
                 if (include.IndexOfAny(['*', '?']) >= 0)
@@ -266,7 +278,7 @@ internal partial class MigrateCommand
                         itemKind,
                         "wildcard",
                         unresolved,
-                        reviewRequiredItems);
+                        decisionRequiredItems);
                     continue;
                 }
                 if (include.Contains("$(", StringComparison.Ordinal)
@@ -280,7 +292,7 @@ internal partial class MigrateCommand
                         itemKind,
                         "msbuild-expression",
                         unresolved,
-                        reviewRequiredItems);
+                        decisionRequiredItems);
                     continue;
                 }
                 if (Path.IsPathRooted(include))
@@ -293,7 +305,7 @@ internal partial class MigrateCommand
                         itemKind,
                         "absolute-path",
                         unresolved,
-                        reviewRequiredItems);
+                        decisionRequiredItems);
                     continue;
                 }
 
@@ -315,7 +327,7 @@ internal partial class MigrateCommand
                         itemKind,
                         "invalid-path",
                         unresolved,
-                        reviewRequiredItems);
+                        decisionRequiredItems);
                     continue;
                 }
                 var relativePath = Path.GetRelativePath(sourceRoot, sourcePath);
@@ -331,13 +343,23 @@ internal partial class MigrateCommand
                         itemKind,
                         "external-or-missing-source",
                         unresolved,
-                        reviewRequiredItems);
+                        decisionRequiredItems);
                     continue;
                 }
 
                 var targetPath = Path.Combine(targetRoot, relativePath);
                 if (!File.Exists(targetPath))
                 {
+                    AddDecisionRequiredItem(
+                        sourceRoot,
+                        sourceProject,
+                        item,
+                        stableItemIds[item],
+                        itemKind,
+                        "missing-target-item",
+                        NormalizePath(relativePath),
+                        unresolved,
+                        decisionRequiredItems);
                     missingTargetItems.Add(new MigrationLocation
                     {
                         Path = NormalizePath(relativePath)
@@ -358,7 +380,7 @@ internal partial class MigrateCommand
                         itemKind,
                         "default-item-metadata",
                         unresolved,
-                        reviewRequiredItems);
+                        decisionRequiredItems);
                     continue;
                 }
 
@@ -398,6 +420,16 @@ internal partial class MigrateCommand
                 {
                     if (!targetEntries.Contains((item.Kind, item.RelativePath)))
                     {
+                        AddDecisionRequiredItem(
+                            sourceRoot,
+                            sourceProject,
+                            item.SourceElement,
+                            stableItemIds[item.SourceElement],
+                            item.Kind,
+                            "missing-target-item-entry",
+                            NormalizePath(item.RelativePath),
+                            unresolved,
+                            decisionRequiredItems);
                         missingTargetItems.Add(new MigrationLocation
                         {
                             Path = NormalizePath(item.RelativePath)
@@ -406,12 +438,14 @@ internal partial class MigrateCommand
                 }
 
                 return new ProjectItemMigrationResult(
-                    sourceItems.Count,
-                    migratable.Count - missingTargetItems.Count,
+                    sourceProjectItems.Count,
+                    migratable.Count - decisionRequiredItems.Count(item =>
+                        item.ReviewReason == "missing-target-item-entry"),
                     accountedItems,
                     unresolved,
                     missingTargetItems,
-                    reviewRequiredItems,
+                    decisionRequiredItems,
+                    0,
                     0,
                     0);
             }
@@ -419,12 +453,13 @@ internal partial class MigrateCommand
             if (explicitItems.Count == 0)
             {
                 return new ProjectItemMigrationResult(
-                    sourceItems.Count,
+                    sourceProjectItems.Count,
                     migratable.Count,
                     accountedItems,
                     unresolved,
                     missingTargetItems,
-                    reviewRequiredItems,
+                    decisionRequiredItems,
+                    0,
                     0,
                     0);
             }
@@ -464,12 +499,13 @@ internal partial class MigrateCommand
             targetDocument.Root.Add(itemGroup);
             targetDocument.Save(targetProject, SaveOptions.DisableFormatting);
             return new ProjectItemMigrationResult(
-                sourceItems.Count,
+                sourceProjectItems.Count,
                 migratable.Count,
                 accountedItems,
                 unresolved,
                 missingTargetItems,
-                reviewRequiredItems,
+                decisionRequiredItems,
+                0,
                 0,
                 1);
         }
@@ -604,6 +640,29 @@ internal partial class MigrateCommand
             reviewRequiredItems.Add(reviewItem);
         }
 
+        private static void AddDecisionRequiredItem(
+            string sourceRoot,
+            string sourceProject,
+            XElement item,
+            string stableId,
+            string itemKind,
+            string reviewReason,
+            string expectedTargetPath,
+            List<MigrationLocation> unresolved,
+            List<MigrationReviewRequiredProjectItem> decisionRequiredItems)
+        {
+            var decisionItem = CreateReviewRequiredItem(
+                sourceRoot,
+                sourceProject,
+                item,
+                stableId,
+                itemKind,
+                reviewReason);
+            decisionItem.ExpectedTargetPath = expectedTargetPath;
+            unresolved.Add(decisionItem.SourceLocation);
+            decisionRequiredItems.Add(decisionItem);
+        }
+
         private static MigrationReviewRequiredProjectItem CreateReviewRequiredItem(
             string sourceRoot,
             string sourceProject,
@@ -615,7 +674,14 @@ internal partial class MigrateCommand
             var sourceProjectPath = NormalizePath(
                 Path.GetRelativePath(sourceRoot, sourceProject));
             var location = ProjectItemLocation(sourceRoot, sourceProject, item);
-            var include = item.Attribute("Include")!.Value.Trim();
+            var operationAttribute =
+                item.Attribute("Include")
+                ?? item.Attribute("Update")
+                ?? item.Attribute("Remove")
+                ?? item.Attribute("RemoveMetadata");
+            var itemOperation = operationAttribute?.Name.LocalName ?? "Unknown";
+            var itemSpec = operationAttribute?.Value.Trim() ?? string.Empty;
+            var include = item.Attribute("Include")?.Value.Trim() ?? itemSpec;
             var link = item.Elements()
                 .FirstOrDefault(element => element.Name.LocalName == "Link")
                 ?.Value
@@ -630,6 +696,23 @@ internal partial class MigrateCommand
                     Value = element.Value
                 })
                 .ToList();
+            var expectedTargetPath =
+                TryNormalizeDeterministicTargetPath(
+                    sourceRoot,
+                    link,
+                    out var normalizedLink)
+                    ? normalizedLink
+                    : reviewReason is
+                        "conditional"
+                        or "wildcard"
+                        or "msbuild-expression"
+                        ? null
+                        : TryNormalizeDeterministicTargetPath(
+                            sourceRoot,
+                            item.Attribute("Include")?.Value,
+                            out var normalizedInclude)
+                            ? normalizedInclude
+                            : null;
             return new MigrationReviewRequiredProjectItem
             {
                 Id = stableId,
@@ -637,12 +720,34 @@ internal partial class MigrateCommand
                 SourceLocation = location,
                 ItemType = itemKind,
                 Include = include,
+                ItemOperation = itemOperation,
+                ItemSpec = itemSpec,
                 Link = string.IsNullOrWhiteSpace(link) ? null : link,
                 Condition = condition,
                 ParentCondition = parentCondition,
                 Metadata = metadata,
-                ReviewReason = reviewReason
+                ReviewReason = reviewReason,
+                ExpectedTargetPath = expectedTargetPath
             };
+        }
+
+        private static bool TryNormalizeDeterministicTargetPath(
+            string sourceRoot,
+            string? value,
+            out string normalizedPath)
+        {
+            normalizedPath = string.Empty;
+            if (string.IsNullOrWhiteSpace(value)
+                || value.Contains(';'))
+            {
+                return false;
+            }
+            return MigrationPathResolver.TryResolveContainedRelativePath(
+                sourceRoot,
+                value.Trim(),
+                out _,
+                out normalizedPath,
+                out _);
         }
 
         private static IEnumerable<string> RemovalKinds(string itemKind) =>
@@ -741,8 +846,13 @@ internal partial class MigrateCommand
                     AccountedItems = projectItems.AccountedItems,
                     UnresolvedItems = projectItems.UnresolvedItems,
                     MissingTargetItems = projectItems.MissingTargetItems,
-                    ReviewRequiredItems = projectItems.ReviewRequiredItems,
-                    VerifiedDecisionItems = projectItems.VerifiedDecisionItems
+                    ReviewRequiredItems = projectItems.DecisionRequiredItems,
+                    DecisionRequiredItems = projectItems.DecisionRequiredItems,
+                    VerifiedDecisionItems = projectItems.VerifiedDecisionItems,
+                    AcceptedDecisionItems = projectItems.AcceptedDecisionItems,
+                    AccountedDecisionItems =
+                        projectItems.VerifiedDecisionItems
+                        + projectItems.AcceptedDecisionItems
                 },
                 TargetProjectGraph = targetProjectGraph,
                 ActivationContracts = activationContracts
@@ -802,8 +912,13 @@ internal partial class MigrateCommand
                     AccountedItems = projectItems.AccountedItems,
                     UnresolvedItems = projectItems.UnresolvedItems,
                     MissingTargetItems = projectItems.MissingTargetItems,
-                    ReviewRequiredItems = projectItems.ReviewRequiredItems,
-                    VerifiedDecisionItems = projectItems.VerifiedDecisionItems
+                    ReviewRequiredItems = projectItems.DecisionRequiredItems,
+                    DecisionRequiredItems = projectItems.DecisionRequiredItems,
+                    VerifiedDecisionItems = projectItems.VerifiedDecisionItems,
+                    AcceptedDecisionItems = projectItems.AcceptedDecisionItems,
+                    AccountedDecisionItems =
+                        projectItems.VerifiedDecisionItems
+                        + projectItems.AcceptedDecisionItems
                 },
                 TargetProjectGraph = targetProjectGraph,
                 ActivationContracts = activationContracts
@@ -964,7 +1079,7 @@ internal partial class MigrateCommand
                     Category = "project-items",
                     Priority = "required",
                     Summary = "Resolve source Content or PRIResource items that could not be migrated deterministically",
-                    Reason = "Conditional, wildcard, external, metadata-bearing, or missing source project items require an explicit target-project decision. Use 'winapp migrate decide-project-item' when one of the supported deterministic strategies applies.",
+                    Reason = "Conditional, wildcard, external, metadata-bearing, missing, or non-Include source project items require explicit mechanical accounting. Use 'winapp migrate decide-project-item' to prove target coverage or record a constrained target-platform exclusion. This resolves deterministic accounting only and does not establish behavioral parity.",
                     Locations = projectItems.UnresolvedItems
                         .Concat(projectItems.MissingTargetItems)
                         .ToList()

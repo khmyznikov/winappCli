@@ -19,6 +19,7 @@ internal static class MigrationReportStore
         new(StringComparer.Ordinal)
         {
             "1.2",
+            "1.3",
             MigrationReport.CurrentSchemaVersion
         };
 
@@ -199,6 +200,31 @@ internal static class MigrationReportStore
         report.MechanicalVerification.ActivationContracts ??= new MigrationActivationVerification();
         report.MechanicalVerification.TargetProjectGraph ??= new MigrationTargetProjectGraphVerification();
         report.MechanicalVerification.ProjectItems.ReviewRequiredItems ??= [];
+        report.MechanicalVerification.ProjectItems.DecisionRequiredItems ??= [];
+        if (report.MechanicalVerification.ProjectItems.DecisionRequiredItems.Count == 0
+            && report.MechanicalVerification.ProjectItems.ReviewRequiredItems.Count > 0)
+        {
+            report.MechanicalVerification.ProjectItems.DecisionRequiredItems =
+                [.. report.MechanicalVerification.ProjectItems.ReviewRequiredItems];
+        }
+        if (report.MechanicalVerification.ProjectItems.ReviewRequiredItems.Count == 0
+            && report.MechanicalVerification.ProjectItems.DecisionRequiredItems.Count > 0)
+        {
+            report.MechanicalVerification.ProjectItems.ReviewRequiredItems =
+                [.. report.MechanicalVerification.ProjectItems.DecisionRequiredItems];
+        }
+        foreach (var item in report.MechanicalVerification.ProjectItems
+            .DecisionRequiredItems
+            .Concat(report.MechanicalVerification.ProjectItems.ReviewRequiredItems)
+            .DistinctBy(item => item.Id, StringComparer.OrdinalIgnoreCase))
+        {
+            item.ItemOperation = string.IsNullOrWhiteSpace(item.ItemOperation)
+                ? "Include"
+                : item.ItemOperation;
+            item.ItemSpec = string.IsNullOrWhiteSpace(item.ItemSpec)
+                ? item.Include
+                : item.ItemSpec;
+        }
         report.MechanicalVerification.TargetProjectGraph.NestedProjects ??= [];
         report.MechanicalVerification.TargetProjectGraph.Issues ??= [];
         foreach (var issue in report.MechanicalVerification.TargetProjectGraph.Issues)

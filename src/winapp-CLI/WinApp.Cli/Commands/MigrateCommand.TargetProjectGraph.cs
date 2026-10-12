@@ -1297,6 +1297,7 @@ internal partial class MigrateCommand
             var importValue = import.Attribute("Project")?.Value;
             if (string.IsNullOrWhiteSpace(importValue)
                 || !TryResolveLiteralImport(
+                    graph.BuildContextRoot,
                     graph.TargetRoot,
                     graph.FullPaths[importingProject],
                     importValue,
@@ -1685,6 +1686,7 @@ internal partial class MigrateCommand
             var importValue = import.Attribute("Project")?.Value;
             if (string.IsNullOrWhiteSpace(importValue)
                 || !TryResolveLiteralImport(
+                    graph.BuildContextRoot,
                     graph.TargetRoot,
                     graph.FullPaths[importingProject],
                     importValue,

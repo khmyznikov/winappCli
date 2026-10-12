@@ -10,7 +10,7 @@ namespace WinApp.Cli.Commands;
 internal sealed class MigrateProjectItemDecisionCommand : Command, IShortDescription
 {
     public string ShortDescription =>
-        "Record and verify an explicit decision for a review-required project item";
+        "Record and verify an explicit decision for a decision-required project item";
 
     public static Argument<DirectoryInfo> TargetArgument { get; } = new("target")
     {
@@ -20,19 +20,19 @@ internal sealed class MigrateProjectItemDecisionCommand : Command, IShortDescrip
 
     public static Argument<string> ItemArgument { get; } = new("item")
     {
-        Description = "Stable project-item ID from mechanicalVerification.projectItems.reviewRequiredItems. A unique ID prefix is accepted.",
+        Description = "Stable project-item ID from mechanicalVerification.projectItems.decisionRequiredItems. A unique ID prefix is accepted.",
         Arity = ArgumentArity.ExactlyOne
     };
 
     public static Argument<string> StrategyArgument { get; } = new("strategy")
     {
-        Description = "Decision strategy: sdk-default-item, explicit-target-item, copied-linked-content, or intentionally-not-migrated.",
+        Description = "Decision strategy: sdk-default-item, explicit-target-item, copied-linked-content, target-owned-replacement, target-not-required, or intentionally-not-migrated.",
         Arity = ArgumentArity.ExactlyOne
     };
 
     public static Argument<string> RationaleArgument { get; } = new("rationale")
     {
-        Description = "Concise explanation of why this deterministic strategy preserves the source item.",
+        Description = "Concise explanation of why this strategy mechanically accounts for the source item.",
         Arity = ArgumentArity.ExactlyOne
     };
 
@@ -53,10 +53,15 @@ internal sealed class MigrateProjectItemDecisionCommand : Command, IShortDescrip
         AllowMultipleArgumentsPerToken = false
     };
 
+    public static Option<string?> ReasonCodeOption { get; } = new("--reason-code")
+    {
+        Description = "Constrained reason code required by target-not-required. Supported: target-platform-not-applicable."
+    };
+
     public MigrateProjectItemDecisionCommand()
         : base(
             "decide-project-item",
-            "Record a structured, deterministically verified decision for one review-required source Content or PRIResource item. Target, item, strategy, and rationale are required positional arguments; the command never edits CLI-owned verification fields directly.")
+            "Record a structured decision for one decision-required source Content or PRIResource item. Target, item, strategy, and rationale are required positional arguments; the command never edits CLI-owned verification fields directly.")
     {
         TargetArgument.AcceptExistingOnly();
         Arguments.Add(TargetArgument);
@@ -66,6 +71,7 @@ internal sealed class MigrateProjectItemDecisionCommand : Command, IShortDescrip
         Options.Add(TargetPathOption);
         Options.Add(TargetItemTypeOption);
         Options.Add(EvidenceFileOption);
+        Options.Add(ReasonCodeOption);
     }
 
     internal sealed class Handler : AsynchronousCommandLineAction
@@ -173,7 +179,7 @@ internal sealed class MigrateProjectItemDecisionCommand : Command, IShortDescrip
             var selector = parseResult.GetValue(ItemArgument)?.Trim();
             var exactMatches = string.IsNullOrWhiteSpace(selector)
                 ? []
-                : projectItems.ReviewRequiredItems
+                : projectItems.DecisionRequiredItems
                     .Where(item =>
                         item.Id.Equals(selector, StringComparison.OrdinalIgnoreCase))
                     .ToList();
@@ -181,7 +187,7 @@ internal sealed class MigrateProjectItemDecisionCommand : Command, IShortDescrip
                 ? exactMatches
                 : string.IsNullOrWhiteSpace(selector)
                     ? []
-                    : projectItems.ReviewRequiredItems
+                    : projectItems.DecisionRequiredItems
                         .Where(item => item.Id.StartsWith(
                             selector,
                             StringComparison.OrdinalIgnoreCase))
@@ -190,7 +196,7 @@ internal sealed class MigrateProjectItemDecisionCommand : Command, IShortDescrip
             {
                 Console.Out.WriteLine(
                     $"[ERROR] No review-required project item matched '{selector}'.");
-                WriteAvailableItems(projectItems.ReviewRequiredItems);
+                WriteAvailableItems(projectItems.DecisionRequiredItems);
                 return 1;
             }
             if (itemMatches.Count > 1)
@@ -226,13 +232,42 @@ internal sealed class MigrateProjectItemDecisionCommand : Command, IShortDescrip
             var targetPath = parseResult.GetValue(TargetPathOption);
             var targetItemType = parseResult.GetValue(TargetItemTypeOption);
             var evidenceFiles = parseResult.GetValue(EvidenceFileOption) ?? [];
+            var reasonCode = parseResult.GetValue(ReasonCodeOption)?
+                .Trim()
+                .ToLowerInvariant();
             if (strategy == MigrateCommand.Handler.IntentionallyNotMigratedStrategy
+                && (!string.IsNullOrWhiteSpace(reasonCode)
+                    || !string.IsNullOrWhiteSpace(targetPath)
+                    || !string.IsNullOrWhiteSpace(targetItemType)
+                    || evidenceFiles.Length > 0))
+            {
+                Console.Out.WriteLine(
+                    "[ERROR] intentionally-not-migrated cannot include a reason code or target evidence.");
+                return 1;
+            }
+            if (strategy == MigrateCommand.Handler.TargetNotRequiredStrategy
                 && (!string.IsNullOrWhiteSpace(targetPath)
                     || !string.IsNullOrWhiteSpace(targetItemType)
                     || evidenceFiles.Length > 0))
             {
                 Console.Out.WriteLine(
-                    "[ERROR] intentionally-not-migrated cannot include target evidence.");
+                    "[ERROR] target-not-required cannot include target evidence.");
+                return 1;
+            }
+            if (strategy == MigrateCommand.Handler.TargetNotRequiredStrategy
+                && (string.IsNullOrWhiteSpace(reasonCode)
+                    || !MigrateCommand.Handler.SupportedTargetNotRequiredReasons.Contains(
+                        reasonCode)))
+            {
+                Console.Out.WriteLine(
+                    $"[ERROR] target-not-required requires --reason-code {MigrateCommand.Handler.TargetPlatformNotApplicableReason}.");
+                return 1;
+            }
+            if (strategy != MigrateCommand.Handler.TargetNotRequiredStrategy
+                && !string.IsNullOrWhiteSpace(reasonCode))
+            {
+                Console.Out.WriteLine(
+                    "[ERROR] --reason-code is supported only with target-not-required.");
                 return 1;
             }
 
@@ -244,7 +279,8 @@ internal sealed class MigrateProjectItemDecisionCommand : Command, IShortDescrip
                 TargetPath = targetPath,
                 TargetItemType = targetItemType,
                 EvidenceFiles = [.. evidenceFiles],
-                Rationale = rationale
+                Rationale = rationale,
+                ReasonCode = reasonCode
             };
             decision.Verification =
                 MigrateCommand.Handler.VerifyProjectItemDecision(
@@ -282,10 +318,23 @@ internal sealed class MigrateProjectItemDecisionCommand : Command, IShortDescrip
                 ? "mechanical-migration-complete"
                 : "mechanical-verification-failed";
             report.Summary.TodoCategories = report.Todos.Count;
-            await MigrationReportStore.WriteAtomicAsync(
-                reportPath,
-                report,
-                cancellationToken);
+            try
+            {
+                await MigrationReportStore.WriteAtomicAsync(
+                    reportPath,
+                    report,
+                    cancellationToken);
+            }
+            catch (Exception exception) when (
+                exception is IOException
+                or UnauthorizedAccessException
+                or NotSupportedException
+                or System.Security.SecurityException)
+            {
+                Console.Out.WriteLine(
+                    $"[ERROR] Could not persist migration-report.json: {exception.Message}");
+                return 1;
+            }
 
             var recorded = report.ProjectItemDecisions.Single(existing =>
                 existing.ItemId.Equals(
@@ -301,10 +350,8 @@ internal sealed class MigrateProjectItemDecisionCommand : Command, IShortDescrip
             Console.Out.WriteLine(
                 report.Todos.Any(todo => todo.Id == "UWMIG012")
                     ? "UWMIG012 remains pending."
-                    : "UWMIG012 is resolved by verified project-item decisions.");
-            return report.MechanicalVerification.Status == "passed"
-                ? 0
-                : 1;
+                    : "UWMIG012 is resolved by accounted project-item decisions.");
+            return 0;
         }
 
         private static void WriteAvailableItems(
@@ -313,7 +360,7 @@ internal sealed class MigrateProjectItemDecisionCommand : Command, IShortDescrip
             foreach (var item in items)
             {
                 Console.Out.WriteLine(
-                    $"  {item.Id}  {item.ItemType} Include=\"{item.Include}\" " +
+                    $"  {item.Id}  {item.ItemType} {item.ItemOperation}=\"{item.ItemSpec}\" " +
                     $"({item.SourceLocation.Path}:{item.SourceLocation.Line})");
             }
         }

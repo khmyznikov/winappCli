@@ -3,6 +3,8 @@
 
 using System.CommandLine;
 using System.CommandLine.Invocation;
+using System.Xml;
+using System.Xml.Linq;
 using WinApp.Cli.Models;
 
 namespace WinApp.Cli.Commands;
@@ -16,11 +18,17 @@ internal sealed class MigrateVerifyCommand : Command, IShortDescription
         Description = "Migrated WinUI project directory containing migration-report.json."
     };
 
+    public static Option<string?> TargetProjectOption { get; } = new("--target-project")
+    {
+        Description = "Target-relative path to the contained existing supported target project. Use this after renaming the migrated project."
+    };
+
     public MigrateVerifyCommand()
         : base("verify", "Re-run namespace residual, activation declaration, project-item decision, and target-project ownership checks against the recorded migration inventory without modifying application source or behavioral validation.")
     {
         TargetArgument.AcceptExistingOnly();
         Arguments.Add(TargetArgument);
+        Options.Add(TargetProjectOption);
     }
 
     internal sealed class Handler : AsynchronousCommandLineAction
@@ -104,11 +112,21 @@ internal sealed class MigrateVerifyCommand : Command, IShortDescription
                     return 1;
                 }
             }
+            var requestedTargetProject = parseResult.GetValue(TargetProjectOption);
+            var targetProjectValue = string.IsNullOrWhiteSpace(requestedTargetProject)
+                ? report.Target.ProjectFile
+                : requestedTargetProject;
+            if (string.IsNullOrWhiteSpace(targetProjectValue))
+            {
+                Console.Out.WriteLine(
+                    "[ERROR] The migration report does not identify a target project. Specify --target-project.");
+                return 1;
+            }
             if (!MigrationPathResolver.TryResolveContainedRelativePath(
                     targetRoot,
-                    report.Target.ProjectFile,
+                    targetProjectValue,
                     out var targetProject,
-                    out _,
+                    out var normalizedTargetProject,
                     out var targetProjectError))
             {
                 Console.Out.WriteLine(
@@ -123,9 +141,42 @@ internal sealed class MigrateVerifyCommand : Command, IShortDescription
             }
             if (!File.Exists(targetProject))
             {
-                Console.Out.WriteLine("[ERROR] The target project recorded by migration-report.json was not found.");
+                Console.Out.WriteLine(
+                    string.IsNullOrWhiteSpace(requestedTargetProject)
+                        ? "[ERROR] The target project recorded by migration-report.json was not found. Specify --target-project after renaming it."
+                        : "[ERROR] The selected target project was not found.");
                 return 1;
             }
+            if (!Path.GetExtension(targetProject).Equals(
+                    ".csproj",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                Console.Out.WriteLine(
+                    "[ERROR] --target-project must select a supported .csproj target project.");
+                return 1;
+            }
+            XDocument targetDocument;
+            try
+            {
+                targetDocument = XDocument.Load(targetProject);
+            }
+            catch (Exception exception) when (
+                exception is XmlException
+                or IOException
+                or UnauthorizedAccessException)
+            {
+                Console.Out.WriteLine(
+                    $"[ERROR] The selected target project could not be read: {exception.Message}");
+                return 1;
+            }
+            if (!MigrateCommand.Handler.IsSupportedMigrationTargetProject(
+                    targetDocument))
+            {
+                Console.Out.WriteLine(
+                    "[ERROR] --target-project must select a supported Microsoft.NET.Sdk target project.");
+                return 1;
+            }
+            report.Target.ProjectFile = normalizedTargetProject;
 
             report.ActivationAnalysis = MigrateCommand.Handler.AnalyzeActivationContracts(
                 sourceRoot,

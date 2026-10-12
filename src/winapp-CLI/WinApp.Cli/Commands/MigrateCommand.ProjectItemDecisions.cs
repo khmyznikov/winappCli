@@ -13,7 +13,11 @@ internal partial class MigrateCommand
         internal const string SdkDefaultItemStrategy = "sdk-default-item";
         internal const string ExplicitTargetItemStrategy = "explicit-target-item";
         internal const string CopiedLinkedContentStrategy = "copied-linked-content";
+        internal const string TargetOwnedReplacementStrategy = "target-owned-replacement";
+        internal const string TargetNotRequiredStrategy = "target-not-required";
         internal const string IntentionallyNotMigratedStrategy = "intentionally-not-migrated";
+        internal const string TargetPlatformNotApplicableReason =
+            "target-platform-not-applicable";
 
         internal static readonly HashSet<string> SupportedProjectItemDecisionStrategies =
             new(StringComparer.Ordinal)
@@ -21,7 +25,15 @@ internal partial class MigrateCommand
                 SdkDefaultItemStrategy,
                 ExplicitTargetItemStrategy,
                 CopiedLinkedContentStrategy,
+                TargetOwnedReplacementStrategy,
+                TargetNotRequiredStrategy,
                 IntentionallyNotMigratedStrategy
+            };
+
+        internal static readonly HashSet<string> SupportedTargetNotRequiredReasons =
+            new(StringComparer.Ordinal)
+            {
+                TargetPlatformNotApplicableReason
             };
 
         internal static ProjectItemMigrationResult ReconcileProjectItemDecisions(
@@ -31,7 +43,7 @@ internal partial class MigrateCommand
             ProjectItemMigrationResult projectItems,
             MigrationReport report)
         {
-            var reviewById = projectItems.ReviewRequiredItems
+            var decisionItemsById = projectItems.DecisionRequiredItems
                 .GroupBy(item => item.Id, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(
                     group => group.Key,
@@ -47,11 +59,11 @@ internal partial class MigrateCommand
             foreach (var decision in report.ProjectItemDecisions)
             {
                 decision.Verification = new MigrationProjectItemDecisionVerification();
-                if (!reviewById.TryGetValue(decision.ItemId, out var matchingItems))
+                if (!decisionItemsById.TryGetValue(decision.ItemId, out var matchingItems))
                 {
                     decision.Verification.Status = "stale";
                     decision.Verification.Reason =
-                        "The source item is no longer present in the current review-required inventory.";
+                        "The source item is no longer present in the current decision-required inventory.";
                     continue;
                 }
                 if (matchingItems.Count != 1)
@@ -77,27 +89,38 @@ internal partial class MigrateCommand
                     decision);
             }
 
-            var verifiedIds = report.ProjectItemDecisions
-                .Where(decision => decision.Verification.Status == "verified")
+            var accountedIds = report.ProjectItemDecisions
+                .Where(decision => decision.Verification.Status is "verified" or "accepted")
                 .Select(decision => decision.ItemId)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var structuredLocations = projectItems.ReviewRequiredItems
+            var structuredLocations = projectItems.DecisionRequiredItems
                 .Select(item => item.SourceLocation)
                 .ToHashSet(MigrationLocationComparer.Instance);
             var unresolved = projectItems.UnresolvedItems
                 .Where(location => !structuredLocations.Contains(location))
-                .Concat(projectItems.ReviewRequiredItems
-                    .Where(item => !verifiedIds.Contains(item.Id))
+                .Concat(projectItems.DecisionRequiredItems
+                    .Where(item => !accountedIds.Contains(item.Id))
                     .Select(item => item.SourceLocation))
                 .Distinct(MigrationLocationComparer.Instance)
+                .ToList();
+            var accountedExpectedTargets = projectItems.DecisionRequiredItems
+                .Where(item => accountedIds.Contains(item.Id))
+                .Select(item => item.ExpectedTargetPath)
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var missingTargetItems = projectItems.MissingTargetItems
+                .Where(location => !accountedExpectedTargets.Contains(location.Path))
                 .ToList();
             var verifiedDecisions = report.ProjectItemDecisions
                 .Where(decision => decision.Verification.Status == "verified")
                 .ToList();
+            var acceptedDecisions = report.ProjectItemDecisions
+                .Where(decision => decision.Verification.Status == "accepted")
+                .ToList();
             var accountedItems = projectItems.AccountedItems
                 .Concat(verifiedDecisions.Select(decision =>
                 {
-                    var sourceItem = reviewById[decision.ItemId][0];
+                    var sourceItem = decisionItemsById[decision.ItemId][0];
                     _ = TryCanonicalizeMigratedProjectItemKind(
                         decision.TargetItemType ?? sourceItem.ItemType,
                         out var itemKind);
@@ -116,7 +139,9 @@ internal partial class MigrateCommand
                 MigratedItems = projectItems.MigratedItems + verifiedDecisions.Count,
                 AccountedItems = accountedItems,
                 UnresolvedItems = unresolved,
-                VerifiedDecisionItems = verifiedDecisions.Count
+                MissingTargetItems = missingTargetItems,
+                VerifiedDecisionItems = verifiedDecisions.Count,
+                AcceptedDecisionItems = acceptedDecisions.Count
             };
         }
 
@@ -135,24 +160,86 @@ internal partial class MigrateCommand
                     $"Unsupported strategy '{decision.Strategy}'.";
                 return verification;
             }
+            if (string.IsNullOrWhiteSpace(decision.Rationale)
+                || decision.Rationale.Length > 500)
+            {
+                verification.Status = "invalid";
+                verification.Reason =
+                    "A project-item decision requires a rationale containing 1 to 500 non-whitespace characters.";
+                return verification;
+            }
             if (decision.Strategy == IntentionallyNotMigratedStrategy)
             {
+                if (!string.IsNullOrWhiteSpace(decision.ReasonCode)
+                    || !string.IsNullOrWhiteSpace(decision.TargetPath)
+                    || !string.IsNullOrWhiteSpace(decision.TargetItemType)
+                    || decision.EvidenceFiles.Count > 0)
+                {
+                    verification.Status = "invalid";
+                    verification.Reason =
+                        "intentionally-not-migrated cannot include a reason code or target evidence.";
+                    return verification;
+                }
                 verification.Status = "review-required";
                 verification.Reason =
                     "Intentionally omitted items remain review-required and do not close UWMIG012.";
                 return verification;
             }
-            if (sourceItem.ReviewReason is
+            if (decision.Strategy == TargetNotRequiredStrategy)
+            {
+                if (!string.IsNullOrWhiteSpace(decision.TargetPath)
+                    || !string.IsNullOrWhiteSpace(decision.TargetItemType)
+                    || decision.EvidenceFiles.Count > 0)
+                {
+                    verification.Status = "invalid";
+                    verification.Reason =
+                        "target-not-required cannot include target path, item type, or project evidence.";
+                    return verification;
+                }
+                if (string.IsNullOrWhiteSpace(decision.ReasonCode)
+                    || !SupportedTargetNotRequiredReasons.Contains(decision.ReasonCode))
+                {
+                    verification.Status = "invalid";
+                    verification.Reason =
+                        $"target-not-required requires --reason-code {TargetPlatformNotApplicableReason}.";
+                    return verification;
+                }
+                if (!TryBuildProjectEvidenceGraph(
+                        targetRoot,
+                        targetProject,
+                        out var targetGraph,
+                        out var targetGraphError))
+                {
+                    verification.Status = "invalid";
+                    verification.Reason =
+                        $"target-not-required could not be anchored to the current target project: {targetGraphError}";
+                    return verification;
+                }
+                verification.ProjectEvidence =
+                [
+                    new MigrationLocation
+                    {
+                        Path = NormalizePath(targetGraph.TargetProject)
+                    }
+                ];
+                verification.Status = "accepted";
+                verification.Reason = null;
+                return verification;
+            }
+            if (decision.Strategy != TargetOwnedReplacementStrategy
+                && sourceItem.ReviewReason is
                 "conditional"
                 or "wildcard"
-                or "unmodeled-ancestor")
+                or "unmodeled-ancestor"
+                or "project-item-operation")
             {
                 verification.Status = "invalid";
                 verification.Reason =
                     $"Source item reason '{sourceItem.ReviewReason}' cannot be resolved by a single deterministic target path.";
                 return verification;
             }
-            if (sourceItem.ReviewReason == "msbuild-expression"
+            if (decision.Strategy != TargetOwnedReplacementStrategy
+                && sourceItem.ReviewReason == "msbuild-expression"
                 && decision.Strategy != CopiedLinkedContentStrategy)
             {
                 verification.Status = "invalid";
@@ -177,7 +264,8 @@ internal partial class MigrateCommand
                 out var sourcePathError);
             var sourceContentExternal = sourceContentAvailable
                 && !IsPathContainedByRoot(sourceRoot, availableSourcePath);
-            if ((sourceItem.ReviewReason == "absolute-path"
+            if (decision.Strategy != TargetOwnedReplacementStrategy
+                && (sourceItem.ReviewReason == "absolute-path"
                     || (sourceItem.ReviewReason == "external-or-missing-source"
                         && sourceContentExternal))
                 && sourceContentAvailable
@@ -188,7 +276,9 @@ internal partial class MigrateCommand
                     "Available absolute or external source content must use copied-linked-content so source and target bytes can be verified.";
                 return verification;
             }
-            if (sourceItem.ReviewReason is "absolute-path" or "external-or-missing-source"
+            if (decision.Strategy != TargetOwnedReplacementStrategy
+                && sourceItem.ReviewReason is
+                    ("absolute-path" or "external-or-missing-source")
                 && !sourceContentAvailable)
             {
                 verification.Status = "invalid";
@@ -208,6 +298,21 @@ internal partial class MigrateCommand
                 return verification;
             }
             decision.TargetPath = normalizedTargetPath;
+            if (!string.IsNullOrWhiteSpace(sourceItem.ExpectedTargetPath)
+                && decision.Strategy != TargetOwnedReplacementStrategy)
+            {
+                var expectedTargetPath = NormalizeProjectItemPath(
+                    sourceItem.ExpectedTargetPath);
+                if (!normalizedTargetPath.Equals(
+                        expectedTargetPath,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    verification.Status = "invalid";
+                    verification.Reason =
+                        $"{decision.Strategy} must target the source item's expected target path '{expectedTargetPath}'. Use target-owned-replacement for a different target-owned path.";
+                    return verification;
+                }
+            }
             if (!File.Exists(targetPath))
             {
                 verification.Status = "invalid";
@@ -231,14 +336,42 @@ internal partial class MigrateCommand
             }
             decision.TargetItemType = targetItemType;
 
+            if (!TryBuildProjectEvidenceGraph(
+                    targetRoot,
+                    targetProject,
+                    out var evidenceGraph,
+                    out var evidenceGraphError))
+            {
+                verification.Status = "invalid";
+                verification.Reason = evidenceGraphError;
+                return verification;
+            }
             var evidenceFiles = new List<string>();
             foreach (var evidenceFile in decision.EvidenceFiles
                 .Where(path => !string.IsNullOrWhiteSpace(path))
                 .Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                if (!TryResolveTargetPath(
-                        targetRoot,
+                if (!string.Equals(
                         evidenceFile,
+                        evidenceFile.Trim(),
+                        StringComparison.Ordinal))
+                {
+                    verification.Status = "invalid";
+                    verification.Reason =
+                        "Evidence paths cannot use a trailing-dot/space path alias.";
+                    return verification;
+                }
+                if (Path.IsPathRooted(evidenceFile))
+                {
+                    verification.Status = "invalid";
+                    verification.Reason =
+                        "Evidence paths must be relative to the migration target.";
+                    return verification;
+                }
+                var evidenceCandidate = Path.Combine(targetRoot, evidenceFile);
+                if (!TryResolveBuildContextPath(
+                        evidenceGraph,
+                        evidenceCandidate,
                         out var evidencePath,
                         out var normalizedEvidencePath,
                         out pathError))
@@ -257,16 +390,6 @@ internal partial class MigrateCommand
                 evidenceFiles.Add(normalizedEvidencePath);
             }
             decision.EvidenceFiles = evidenceFiles;
-            if (!TryBuildProjectEvidenceGraph(
-                    targetRoot,
-                    targetProject,
-                    out var evidenceGraph,
-                    out var evidenceGraphError))
-            {
-                verification.Status = "invalid";
-                verification.Reason = evidenceGraphError;
-                return verification;
-            }
             if (!TryValidateProjectEvidenceFiles(
                     evidenceGraph,
                     evidenceFiles,
@@ -328,12 +451,29 @@ internal partial class MigrateCommand
                 return verification;
             }
 
+            if (decision.Strategy == TargetOwnedReplacementStrategy
+                && targetItemType == "PRIResource"
+                && normalizedTargetPath.EndsWith(
+                    ".resw",
+                    StringComparison.OrdinalIgnoreCase)
+                && TryVerifySdkDefaultPriResourceCoverage(
+                    evidenceGraph,
+                    normalizedTargetPath,
+                    out _))
+            {
+                verification.Status = "verified";
+                verification.Reason = null;
+                return verification;
+            }
+
             var projectEvidence = FindProjectItemEvidence(
                 evidenceGraph,
                 evidenceFiles,
                 targetItemType,
                 normalizedTargetPath,
-                sourceItem.Metadata,
+                decision.Strategy == TargetOwnedReplacementStrategy
+                    ? []
+                    : sourceItem.Metadata,
                 allowUpdate: false);
             verification.ProjectEvidence = projectEvidence.Matches;
             if (projectEvidence.Matches.Count == 0)

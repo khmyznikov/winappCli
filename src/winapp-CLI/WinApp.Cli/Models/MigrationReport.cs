@@ -7,7 +7,7 @@ namespace WinApp.Cli.Models;
 
 internal sealed class MigrationReport
 {
-    internal const string CurrentSchemaVersion = "1.3";
+    internal const string CurrentSchemaVersion = "1.4";
 
     [JsonPropertyName("schemaVersion")]
     public string SchemaVersion { get; set; } = CurrentSchemaVersion;
@@ -408,8 +408,17 @@ internal sealed class MigrationProjectItemVerification
     [JsonPropertyName("reviewRequiredItems")]
     public List<MigrationReviewRequiredProjectItem> ReviewRequiredItems { get; set; } = [];
 
+    [JsonPropertyName("decisionRequiredItems")]
+    public List<MigrationReviewRequiredProjectItem> DecisionRequiredItems { get; set; } = [];
+
     [JsonPropertyName("verifiedDecisionItems")]
     public int VerifiedDecisionItems { get; set; }
+
+    [JsonPropertyName("acceptedDecisionItems")]
+    public int AcceptedDecisionItems { get; set; }
+
+    [JsonPropertyName("accountedDecisionItems")]
+    public int AccountedDecisionItems { get; set; }
 }
 
 internal sealed class MigrationProjectItem
@@ -441,6 +450,12 @@ internal sealed class MigrationReviewRequiredProjectItem
     [JsonPropertyName("include")]
     public required string Include { get; set; }
 
+    [JsonPropertyName("itemOperation")]
+    public string ItemOperation { get; set; } = "Include";
+
+    [JsonPropertyName("itemSpec")]
+    public string ItemSpec { get; set; } = string.Empty;
+
     [JsonPropertyName("link")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Link { get; set; }
@@ -458,6 +473,10 @@ internal sealed class MigrationReviewRequiredProjectItem
 
     [JsonPropertyName("reviewReason")]
     public required string ReviewReason { get; set; }
+
+    [JsonPropertyName("expectedTargetPath")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ExpectedTargetPath { get; set; }
 }
 
 internal sealed class MigrationProjectItemMetadata
@@ -490,6 +509,10 @@ internal sealed class MigrationProjectItemDecision
 
     [JsonPropertyName("rationale")]
     public required string Rationale { get; set; }
+
+    [JsonPropertyName("reasonCode")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ReasonCode { get; set; }
 
     [JsonPropertyName("verification")]
     public MigrationProjectItemDecisionVerification Verification { get; set; } = new();

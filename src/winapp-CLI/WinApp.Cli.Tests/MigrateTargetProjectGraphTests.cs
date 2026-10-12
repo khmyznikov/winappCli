@@ -322,7 +322,7 @@ public class MigrateTargetProjectGraphTests : MigrateCommandTestBase
         using var verifiedReport =
             await ReadReportAsync(target);
         Assert.AreEqual(
-            "1.3",
+            "1.4",
             verifiedReport.RootElement
                 .GetProperty("schemaVersion")
                 .GetString());

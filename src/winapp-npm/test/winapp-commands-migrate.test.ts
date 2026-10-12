@@ -47,16 +47,19 @@ test('migrate parent and verify wrappers retain their distinct command paths', a
   const state = captureSpawnArgs();
 
   await migrate({ source: 'C:\\source', output: 'C:\\target' });
-  await migrateVerify({ target: 'C:\\target' });
+  await migrateVerify({
+    target: 'C:\\target',
+    targetProject: 'CustomMediaTransportControls.csproj',
+  });
 
-  assert.deepEqual(
-    state.calls[0].slice(0, 4),
-    ['migrate', 'C:\\source', '--output', 'C:\\target']
-  );
-  assert.deepEqual(
-    state.calls[1].slice(0, 3),
-    ['migrate', 'verify', 'C:\\target']
-  );
+  assert.deepEqual(state.calls[0].slice(0, 4), ['migrate', 'C:\\source', '--output', 'C:\\target']);
+  assert.deepEqual(state.calls[1], [
+    'migrate',
+    'verify',
+    'C:\\target',
+    '--target-project',
+    'CustomMediaTransportControls.csproj',
+  ]);
 });
 
 test('migrate decide-project-item emits required positionals before repeatable evidence options', async () => {
@@ -87,5 +90,28 @@ test('migrate decide-project-item emits required positionals before repeatable e
     'Content',
     '--target-path',
     'Strings\\NOTICE.json',
+  ]);
+});
+
+test('migrate decision wrapper emits target-not-required reason code without target evidence', async () => {
+  const state = captureSpawnArgs();
+
+  await migrateDecideProjectItem({
+    target: 'C:\\target',
+    item: 'project-item-0123456789abcdef',
+    strategy: 'target-not-required',
+    reasonCode: 'target-platform-not-applicable',
+    rationale: 'UWP-only metadata does not apply to the target platform.',
+  });
+
+  assert.deepEqual(state.calls[0], [
+    'migrate',
+    'decide-project-item',
+    'C:\\target',
+    'project-item-0123456789abcdef',
+    'target-not-required',
+    'UWP-only metadata does not apply to the target platform.',
+    '--reason-code',
+    'target-platform-not-applicable',
   ]);
 });

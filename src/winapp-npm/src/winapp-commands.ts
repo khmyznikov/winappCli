@@ -746,14 +746,16 @@ export async function migrate(options: MigrateOptions): Promise<WinappResult> {
 export interface MigrateDecideProjectItemOptions extends CommonOptions {
   /** Migrated WinUI project directory containing migration-report.json. */
   target: string;
-  /** Stable project-item ID from mechanicalVerification.projectItems.reviewRequiredItems. A unique ID prefix is accepted. */
+  /** Stable project-item ID from mechanicalVerification.projectItems.decisionRequiredItems. A unique ID prefix is accepted. */
   item: string;
-  /** Decision strategy: sdk-default-item, explicit-target-item, copied-linked-content, or intentionally-not-migrated. */
+  /** Decision strategy: sdk-default-item, explicit-target-item, copied-linked-content, target-owned-replacement, target-not-required, or intentionally-not-migrated. */
   strategy: string;
-  /** Concise explanation of why this deterministic strategy preserves the source item. */
+  /** Concise explanation of why this strategy mechanically accounts for the source item. */
   rationale: string;
   /** Target-relative project/props/targets file that participates in the target build and contains matching item evidence. Repeat for multiple files. */
   evidenceFile?: string | string[];
+  /** Constrained reason code required by target-not-required. Supported: target-platform-not-applicable. */
+  reasonCode?: string;
   /** Target MSBuild item type when an explicit item is required: Content or PRIResource. */
   targetItemType?: string;
   /** Literal target-relative file path that represents the source item. */
@@ -761,7 +763,7 @@ export interface MigrateDecideProjectItemOptions extends CommonOptions {
 }
 
 /**
- * Record a structured, deterministically verified decision for one review-required source Content or PRIResource item. Target, item, strategy, and rationale are required positional arguments; the command never edits CLI-owned verification fields directly.
+ * Record a structured decision for one decision-required source Content or PRIResource item. Target, item, strategy, and rationale are required positional arguments; the command never edits CLI-owned verification fields directly.
  */
 export async function migrateDecideProjectItem(options: MigrateDecideProjectItemOptions): Promise<WinappResult> {
   const args: string[] = ['migrate', 'decide-project-item'];
@@ -773,6 +775,7 @@ export async function migrateDecideProjectItem(options: MigrateDecideProjectItem
     const evidenceFileArr = Array.isArray(options.evidenceFile) ? options.evidenceFile : [options.evidenceFile];
     for (const v of evidenceFileArr) args.push('--evidence-file', v);
   }
+  if (options.reasonCode) args.push('--reason-code', options.reasonCode);
   if (options.targetItemType) args.push('--target-item-type', options.targetItemType);
   if (options.targetPath) args.push('--target-path', options.targetPath);
   return execCommand(args, options);
@@ -785,6 +788,8 @@ export async function migrateDecideProjectItem(options: MigrateDecideProjectItem
 export interface MigrateVerifyOptions extends CommonOptions {
   /** Migrated WinUI project directory containing migration-report.json. */
   target: string;
+  /** Target-relative path to the contained existing supported target project. Use this after renaming the migrated project. */
+  targetProject?: string;
 }
 
 /**
@@ -793,6 +798,7 @@ export interface MigrateVerifyOptions extends CommonOptions {
 export async function migrateVerify(options: MigrateVerifyOptions): Promise<WinappResult> {
   const args: string[] = ['migrate', 'verify'];
   args.push(options.target);
+  if (options.targetProject) args.push('--target-project', options.targetProject);
   return execCommand(args, options);
 }
 
