@@ -95,6 +95,7 @@
     <PackageReference Include="Svg.Skia" />
     <PackageReference Include="System.CommandLine" />
     <PackageReference Include="System.Diagnostics.EventLog" />
+    <PackageReference Include="Tomlyn" />
     <PackageReference Include="System.Drawing.Common" />
     <PackageReference Include="Microsoft.Diagnostics.Runtime" />
     <PackageReference Include="Microsoft.Diagnostics.Runtime.Utilities" />

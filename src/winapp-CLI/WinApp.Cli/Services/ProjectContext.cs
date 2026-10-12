@@ -13,6 +13,7 @@ internal enum ProjectFamily
     Dart,
     Hybrid,
     Mixed,
+    Python,
 }
 
 internal enum ProjectAppFramework

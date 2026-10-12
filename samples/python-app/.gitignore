@@ -1,0 +1,8 @@
+.venv/
+.winapp/
+Assets/
+Package.appxmanifest
+__pycache__/
+build/
+dist/
+PythonCounter.spec

@@ -3,6 +3,7 @@
 
 using System.CommandLine;
 using System.CommandLine.Invocation;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Spectre.Console;
 using WinApp.Cli.Helpers;
@@ -206,7 +207,12 @@ internal class InitCommand : Command, IShortDescription
                     };
                 });
 
-                return await RunSparseInitAsync(exe, name, publisher, outputDir, useDefaults, force, cancellationToken);
+                var sparseResult = await RunSparseInitAsync(exe, name, publisher, outputDir, useDefaults, force, cancellationToken);
+                if (sparseResult == 0 && !WritePythonInitResult(baseDirectory, configDir, "sparse", null))
+                {
+                    return 1;
+                }
+                return sparseResult;
             }
 
             DirectoryInfo? selectedDirectory;
@@ -281,6 +287,15 @@ internal class InitCommand : Command, IShortDescription
             };
 
             var result = await workspaceSetupService.SetupWorkspaceAsync(options, cancellationToken);
+            if (result == 0 && !WritePythonInitResult(
+                selectedDirectory, configDir,
+                configOnly ? "config-only"
+                    : options.SdkInstallMode == SdkInstallMode.None ? "none"
+                    : ignoreConfig ? "unmanaged" : "sdk",
+                options.MetadataDirectory))
+            {
+                return 1;
+            }
 
             // If init ran in a nested directory, remind the user to cd there for further commands
             if (result == 0 && selectedDirectory.FullName != baseDirectory.FullName)
@@ -290,6 +305,36 @@ internal class InitCommand : Command, IShortDescription
             }
 
             return result;
+        }
+
+        private bool WritePythonInitResult(
+            DirectoryInfo projectDirectory, DirectoryInfo configDirectory,
+            string mode, DirectoryInfo? metadataDirectory)
+        {
+            var destination = Environment.GetEnvironmentVariable("WINAPP_PY_INIT_RESULT");
+            if (string.IsNullOrEmpty(destination)
+                || !string.Equals(Environment.GetEnvironmentVariable("WINAPP_CLI_CALLER"), "python", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            try
+            {
+                using var stream = File.Create(destination);
+                using var writer = new Utf8JsonWriter(stream);
+                writer.WriteStartObject();
+                writer.WriteNumber("schema", 1);
+                writer.WriteString("project", projectDirectory.FullName);
+                writer.WriteString("config_directory", configDirectory.FullName);
+                writer.WriteString("metadata_directory", metadataDirectory?.FullName);
+                writer.WriteString("mode", mode);
+                writer.WriteEndObject();
+                return true;
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                logger.LogError("Native initialization completed, but its selected workspace could not be reported to the Python wrapper: {Error}", error.Message);
+                return false;
+            }
         }
 
         /// <summary>

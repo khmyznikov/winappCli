@@ -1,6 +1,6 @@
 ---
 name: winapp-frameworks
-description: Framework-specific Windows development guidance for Electron, .NET (WPF, WinForms), C++, Rust, Flutter, and Tauri. Use when packaging or adding Windows features to an Electron app, .NET desktop app, Flutter app, Tauri app, Rust app, or C++ app.
+description: Framework-specific Windows development guidance for Electron, .NET (WPF, WinForms), C++, Rust, Flutter, Tauri, and Python WinRT bindings. Use when packaging or adding Windows features to these apps, or generating Python WinRT bindings.
 ---
 ## When to use
 
@@ -22,6 +22,7 @@ Each framework has a detailed guide — refer to the links below rather than try
 | **Rust** | `winget install Microsoft.winappcli` | [Rust guide](https://github.com/microsoft/WinAppCli/blob/main/docs/guides/rust.md) |
 | **Flutter** | `winget install Microsoft.winappcli` | [Flutter guide](https://github.com/microsoft/WinAppCli/blob/main/docs/guides/flutter.md) |
 | **Tauri** | `winget install Microsoft.winappcli` | [Tauri guide](https://github.com/microsoft/WinAppCli/blob/main/docs/guides/tauri.md) |
+| **Python** | `python -m pip install winapp-cli` | [Python guide](https://github.com/microsoft/WinAppCli/blob/main/docs/guides/python.md) |
 
 ## Key differences by framework
 
@@ -110,6 +111,29 @@ C++ projects use winapp primarily for SDK projections (CppWinRT headers) and pac
 - Use winapp specifically for **MSIX distribution** and package identity features
 - winapp adds capabilities beyond what Tauri's built-in bundler provides (identity, sparse packages, Windows API access)
 
+### Python
+Use the **Python package** (`winapp-cli`) and the `winapp-py` command. The package includes:
+- The native winapp CLI binary
+- Python WinRT binding generation with DynWinRT
+- A development identity runner for Python scripts
+
+Quick start (existing Python project):
+```powershell
+python -m pip install winapp-cli
+winapp-py init . --use-defaults --add-python-bindings
+winapp-py run --identity .\app.py
+```
+
+Windows integration guidance:
+
+- Use generated bindings to call Windows SDK and Windows App SDK APIs from Python.
+- Use `winapp-py restore` after cloning or changing SDK configuration, and `winapp-py generate` after changing API selections.
+- Use `winapp-py run .\app.py` for the existing project `.venv`, or add `--identity` for development package identity.
+- Prepare an application directory before creating an MSIX with `winapp-py package`.
+
+Python guide:
+- [Setup, bindings, runtime initialization and packaging](https://github.com/microsoft/WinAppCli/blob/main/docs/guides/python.md)
+
 ## Debugging by framework
 
 | Framework | Recommended command | Notes |
@@ -120,12 +144,13 @@ C++ projects use winapp primarily for SDK projections (CppWinRT headers) and pac
 | **Flutter** | `winapp run .\build\windows\x64\runner\Debug` | GUI app — plain `winapp run` works |
 | **Tauri** | `winapp run .\dist` | Stage exe to `dist/` first (avoids copying entire `target/` tree); GUI app |
 | **Electron** | `npx winapp node add-electron-debug-identity` | Uses Electron-specific identity registration; `winapp run` is **not** recommended for Electron |
+| **Python** | `winapp-py run --identity .\app.py` | Uses project-private PBS and declared dependencies; see the Python guide. IDE breakpoint integration is not provided. |
 
 **Key rules:**
 - **GUI apps** (Flutter, Tauri, WPF): use `winapp run <build-output>` — launches via AUMID activation
 - **Console apps** (C++, Rust, .NET console): plain `winapp run <build-output>` — winapp detects a console app from the built binary's PE subsystem and launches it via an execution alias, so stdin/stdout reach your terminal. It stages the required `uap5:ExecutionAlias` into the AppX layout itself, so no manifest edit is needed. Pass `--without-alias` to force AUMID activation instead (the app then prints nothing); `--with-alias` only forces an alias for a *windowed* app
 - **Electron**: different mechanism — uses `npx winapp node add-electron-debug-identity` because `electron.exe` is in `node_modules/`, not your build output
-- **Startup debugging (any framework)**: use `winapp create-debug-identity <exe>` so your IDE can F5-launch the exe with identity from the first instruction
+- **Startup debugging (built EXEs)**: use `winapp create-debug-identity <exe>` so your IDE can F5-launch the exe with identity from the first instruction. For Python, use the private runner described above rather than modifying a shared Python executable.
 
 For full debugging scenarios and IDE setup, see the [Debugging Guide](https://github.com/microsoft/WinAppCli/blob/main/docs/debugging.md).
 

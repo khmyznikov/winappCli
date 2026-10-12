@@ -123,6 +123,29 @@ public sealed class ProjectContextDetectorTests
     }
 
     [TestMethod]
+    public void DetectDirectory_Python_UsesOnlyRecognizedProjectMetadata()
+    {
+        var python = CreateDirectory("python");
+        File.WriteAllText(Path.Join(python.FullName, "pyproject.toml"), "[project]\nname=\"python-app\"\n");
+        var context = _detector.DetectDirectory(python);
+        Assert.AreEqual(ProjectFamily.Python, context.Family);
+        Assert.AreEqual(ProjectAppFramework.Unknown, context.Framework);
+        Assert.AreEqual(ProjectContextConfidence.High, context.Confidence);
+        var formatter = CreateDirectory("formatter");
+        File.WriteAllText(Path.Join(formatter.FullName, "pyproject.toml"), "[tool.ruff]\nline-length=100\n");
+        Assert.IsFalse(_detector.DetectDirectory(formatter).IsKnown);
+        var scripts = CreateDirectory("scripts");
+        File.WriteAllText(Path.Join(scripts.FullName, "requirements.txt"), "");
+        File.WriteAllText(Path.Join(scripts.FullName, "app.py"), "");
+        Assert.IsFalse(_detector.DetectDirectory(scripts).IsKnown,
+            "Telemetry classification must not scan Python source files.");
+        var legacyScript = CreateDirectory("legacy-script");
+        File.WriteAllText(Path.Join(legacyScript.FullName, "setup.py"), "raise Exception()\n");
+        Assert.IsFalse(_detector.DetectDirectory(legacyScript).IsKnown,
+            "Telemetry classification must not read executable setup scripts.");
+    }
+
+    [TestMethod]
     [DataRow("[]")]
     [DataRow("""{"winapp":true}""")]
     [DataRow("""{"winapp":{"jsBindings":true}}""")]

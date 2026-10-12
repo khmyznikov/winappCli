@@ -38,5 +38,10 @@ internal enum DetectedProjectType
     /// <summary>
     /// C++ project (CMakeLists.txt at project root)
     /// </summary>
-    CPP
+    CPP,
+
+    /// <summary>
+    /// Python project metadata or requirements with a root-level script
+    /// </summary>
+    Python
 }

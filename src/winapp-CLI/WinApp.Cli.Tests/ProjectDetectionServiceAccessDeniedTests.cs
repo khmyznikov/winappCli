@@ -201,6 +201,24 @@ public class ProjectDetectionServiceAccessDeniedTests
     }
 
     [TestMethod]
+    [DataRow("pyproject.toml", "[project]\nname=\"python-app\"\n")]
+    [DataRow("setup.cfg", "[metadata]\nname=python-app\n")]
+    [DataRow("setup.py", "raise Exception()\n")]
+    public void DetectProjectAt_PythonMetadataReadDenied_IsNotDetected(string filename, string contents)
+    {
+        var projectDir = Path.Combine(_tempDir, "python-app");
+        Directory.CreateDirectory(projectDir);
+        var marker = Path.Combine(projectDir, filename);
+        File.WriteAllText(marker, contents);
+        if (!TryDenyFileRead(marker))
+        {
+            Assert.Inconclusive("Deny ACL had no effect (test likely running elevated).");
+        }
+
+        Assert.IsNull(_sut.DetectProjectAt(new DirectoryInfo(projectDir)));
+    }
+
+    [TestMethod]
     public async Task DetectProjectsAsync_DeniedSubdirectory_IsSkippedAndScanContinues()
     {
         // BFS reaches an unreadable subdirectory: enumerating its children to enqueue them throws

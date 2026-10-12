@@ -23,6 +23,7 @@ internal class WorkspaceSetupOptions
     public bool RequireExistingConfig { get; set; }
     public bool ForceLatestBuildTools { get; set; }
     public bool ConfigOnly { get; set; }
+    public DirectoryInfo? MetadataDirectory { get; set; }
 }
 
 /// <summary>
@@ -201,6 +202,7 @@ internal class WorkspaceSetupService(
                 // Step 3: Initialize workspace
                 globalWinappDir = winappDirectoryService.GetGlobalWinappDirectory();
                 localWinappDir = winappDirectoryService.GetLocalWinappDirectory(options.BaseDirectory);
+                options.MetadataDirectory = localWinappDir;
 
                 // Setup-specific startup messages
                 if (!options.RequireExistingConfig)
@@ -588,7 +590,7 @@ internal class WorkspaceSetupService(
                             return (2, "No .winmd files found for C++/WinRT projection.");
                         }
 
-                        // Cache the WinMD inventory for the npm JS-bindings pipeline.
+                        // Cache the WinMD inventory for language wrappers.
                         var yamlHash = (options.RequireExistingConfig && config?.Packages.Count > 0)
                             ? YamlPackagesHasher.Compute(config.Packages)
                             : YamlPackagesHasher.ComputeFromVersions(usedVersions

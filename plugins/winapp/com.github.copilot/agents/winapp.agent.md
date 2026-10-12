@@ -453,6 +453,14 @@ and app interactions.
 - Tauri has its own `.msi` bundler; use winapp specifically for MSIX and package identity features
 - Guide: https://github.com/microsoft/WinAppCli/blob/main/docs/guides/tauri.md
 
+### Python
+- **Setup:** Install `winapp-cli` from PyPI, then run `winapp-py init . --use-defaults --add-python-bindings` to prepare SDKs and Python bindings.
+- **Restore / generate:** Use `winapp-py restore` after cloning or changing SDK configuration; use `winapp-py generate` after changing API selections.
+- **Run:** `winapp-py run .\app.py` uses the existing project-root `.venv`.
+- **Run with identity:** `winapp-py run --identity .\app.py` prepares a separate development environment with package identity.
+- **Package:** Prepare the application directory first, then use `winapp-py package`; see the [WinUI counter sample](https://github.com/microsoft/WinAppCli/blob/main/samples/python-app/README.md#4-package-as-msix).
+- Guide: https://github.com/microsoft/WinAppCli/blob/main/docs/guides/python.md
+
 ## Common end-to-end workflows
 
 ### Add winapp to an existing project
