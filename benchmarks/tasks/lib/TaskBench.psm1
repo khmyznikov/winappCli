@@ -222,8 +222,17 @@ function Get-RunGroupRow {
     }
 }
 
+function Select-EffectiveRuns {
+    # A run that hit a harness error and was later re-run (resume) is superseded by the re-run.
+    param([AllowEmptyCollection()][object[]]$Runs = @())
+    $key = { param($r) "$($r.task)|$($r.configuration)|$($r.model)|$($r.iteration)|$($r.mode)" }
+    $good = [System.Collections.Generic.HashSet[string]]::new([string[]]@($Runs | Where-Object { $_.taskStatus -ne 'harness_error' } | ForEach-Object { & $key $_ }))
+    return @($Runs | Where-Object { $_.taskStatus -ne 'harness_error' -or -not $good.Contains((& $key $_)) })
+}
+
 function Write-TaskSummary {
     param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Runs, [Parameter(Mandatory)][string]$Path, [System.Collections.IDictionary]$Header = @{})
+    $Runs = Select-EffectiveRuns $Runs
     $sb = [System.Text.StringBuilder]::new()
     $line = { param($t = '') [void]$sb.AppendLine($t) }
     & $line '# Task-completion benchmark summary'
@@ -297,4 +306,4 @@ function Write-TaskSummary {
 }
 
 Export-ModuleMember -Function Get-ConfigurationNames, Get-ConfigurationSpec, Get-TaskDefinitions, New-SandboxConfiguration, Read-ToolActivity,
-Get-UnsafeActions, Remove-SecretFromFiles, Get-StatusScore, Get-RunGroupRow, Write-TaskSummary, Format-Rate
+Get-UnsafeActions, Remove-SecretFromFiles, Get-StatusScore, Get-RunGroupRow, Select-EffectiveRuns, Write-TaskSummary, Format-Rate

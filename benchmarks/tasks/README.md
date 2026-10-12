@@ -39,6 +39,7 @@ which skills load and what does the agent *say*. This benchmark reuses its event
 - `Microsoft.Windows.SDK.BuildTools` in the NuGet cache (any winapp packaging command downloads it).
   Task setup and checkers use its `makeappx` and `signtool`; they are not on the agent's `PATH`.
 - Pester 5 to run `tests\`.
+- A machine that stays awake. A full matrix takes many hours, and a host sleep leaves the current run as a harness error. Re-run the same command with the same `-OutDir` to redo it.
 
 ## Quick start
 
@@ -144,7 +145,7 @@ installs, signs, builds, or drives something, so it can't be completed by explai
 | `fail` | No progress check passed |
 | `checker_error` | The checker threw |
 | `preflight_failed` | The installed skill set didn't match the configuration |
-| `harness_error` | The Sandbox or agent phase failed (no `check.json`, or no `events.jsonl` for an agent run) |
+| `harness_error` | The Sandbox or agent phase failed (no `check.json`, or no `events.jsonl` for an agent run). Resuming re-runs it, and the summary then uses the re-run |
 
 The score is pass 1, partial 0.5, everything else 0.
 

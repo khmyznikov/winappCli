@@ -156,6 +156,19 @@ Describe 'Task definitions' {
     It 'marks exactly three pilot tasks' { @($tasks | Where-Object Pilot).Count | Should -Be 3 }
 }
 
+Describe 'Select-EffectiveRuns' {
+    It 'drops a harness error superseded by a re-run but keeps unresolved ones' {
+        $runs = @(
+            [pscustomobject]@{ task = 't'; configuration = 'both'; model = 'm'; iteration = 2; mode = 'agent'; taskStatus = 'harness_error' }
+            [pscustomobject]@{ task = 't'; configuration = 'both'; model = 'm'; iteration = 2; mode = 'agent'; taskStatus = 'pass' }
+            [pscustomobject]@{ task = 'u'; configuration = 'both'; model = 'm'; iteration = 2; mode = 'agent'; taskStatus = 'harness_error' }
+        )
+        $e = Select-EffectiveRuns $runs
+        $e.Count | Should -Be 2
+        ($e | Where-Object task -eq 't').taskStatus | Should -Be 'pass'
+    }
+}
+
 Describe 'Summary' {
     It 'scores pass, partial, and other statuses' {
         Get-StatusScore 'pass' | Should -Be 1
