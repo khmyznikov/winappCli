@@ -232,6 +232,103 @@ class CliTests(ProjectTest):
         self.assertEqual(run.call_args.args[0], ["winapp.exe", "restore", str(self.project)])
         self.assertEqual(run.call_args.kwargs, {"verbose": False})
 
+    def test_output_options_before_or_after_commands_keep_python_workflows(self):
+        cases = (
+            (["--quiet"], False, True), (["-q", "true"], False, True),
+            (["--quiet=false"], False, False), (["-q", "FALSE"], False, False),
+            (["--verbose"], True, False), (["-v"], True, False),
+            (["--verbose", "false"], False, False), (["-v=TRUE"], True, False),
+            (["--json=false"], False, False),
+        )
+        for command in ("restore", "update", "generate"):
+            for flags, verbose, quiet in cases:
+                for leading in (True, False):
+                    arguments = [*flags, command] if leading else [command, *flags]
+                    self.stdout.seek(0)
+                    self.stdout.truncate()
+                    with (
+                        self.subTest(command=command, flags=flags, leading=leading),
+                        patch("winapp_cli.cli.find_native_cli", return_value=Path("winapp.exe")),
+                        patch("winapp_cli.cli.run_tool") as native,
+                        patch("winapp_cli.cli.forward_native") as forward,
+                        patch("winapp_cli.cli._bindings_after_sdk",
+                              side_effect=lambda *a, **kw: print("Python bindings completed")) as bindings,
+                    ):
+                        self.assertEqual(self.invoke(*arguments), 0)
+                        bindings.assert_called_once()
+                        self.assertEqual(bindings.call_args.kwargs["verbose"], verbose)
+                        forward.assert_not_called()
+                        self.assertEqual(native.call_count, {"restore": 1, "update": 2, "generate": 0}[command])
+                        for call in native.call_args_list:
+                            self.assertEqual(call.kwargs["verbose"], verbose)
+                        if quiet:
+                            self.assertEqual(self.stdout.getvalue(), "")
+                        else:
+                            self.assertIn("Python bindings completed", self.stdout.getvalue())
+
+    def test_python_json_and_conflicting_or_invalid_output_options_fail_before_work(self):
+        commands = (
+            ["restore"], ["update"], ["generate"], ["identity", "clear"],
+            ["run", "--project", str(self.project), "app.py"],
+            ["run", "--identity", "--project", str(self.project), "app.py"],
+        )
+        cases = (
+            (["--json"], "--json is not supported"),
+            (["--json", "TRUE"], "--json is not supported"),
+            (["--quiet", "--verbose"], "Cannot specify both"),
+            (["--quiet=bogus"], "expected true or false"),
+            (["-v="], "expected true or false"),
+        )
+        for command in commands:
+            for flags, message in cases:
+                for leading in (True, False):
+                    arguments = [*flags, *command] if leading else [command[0], *flags, *command[1:]]
+                    self.stderr.seek(0)
+                    self.stderr.truncate()
+                    with (
+                        self.subTest(command=command, flags=flags, leading=leading),
+                        patch("winapp_cli.cli.find_native_cli") as native,
+                        patch("winapp_cli.cli._bindings_after_sdk") as bindings,
+                        patch("winapp_cli.cli.clear_identity") as clear,
+                        patch("winapp_cli.cli._run_in_project_venv") as ordinary,
+                        patch("winapp_cli.cli.run_with_identity") as identity,
+                        self.assertRaises(SystemExit) as failure,
+                        redirect_stdout(self.stdout), redirect_stderr(self.stderr),
+                    ):
+                        main(arguments)
+                    self.assertEqual(failure.exception.code, 2)
+                    self.assertIn(message, self.stderr.getvalue())
+                    native.assert_not_called()
+                    bindings.assert_not_called()
+                    clear.assert_not_called()
+                    ordinary.assert_not_called()
+                    identity.assert_not_called()
+
+    def test_quiet_python_workflow_keeps_error_diagnostics(self):
+        with (
+            patch("winapp_cli.cli.find_native_cli", return_value=Path("winapp.exe")),
+            patch("winapp_cli.cli.run_tool", side_effect=WinappError("SDK restore failed")),
+        ):
+            self.assertEqual(self.invoke("--quiet", "restore"), 1)
+        self.assertEqual(self.stdout.getvalue(), "")
+        self.assertIn("error: SDK restore failed", self.stderr.getvalue())
+
+    def test_identity_clear_output_options_work_at_each_command_level(self):
+        for arguments in (
+            ["--quiet", "identity", "clear"],
+            ["identity", "-q", "clear"],
+            ["identity", "clear", "--quiet=true"],
+        ):
+            with (
+                self.subTest(arguments=arguments),
+                patch("winapp_cli.cli.clear_identity", side_effect=lambda *a: print("Cleared identity") or 0) as clear,
+                patch("winapp_cli.cli.find_native_cli") as native,
+            ):
+                self.assertEqual(self.invoke(*arguments), 0)
+                clear.assert_called_once_with(self.project)
+                native.assert_not_called()
+                self.assertEqual(self.stdout.getvalue(), "")
+
     def test_restore_failure_stops_generation(self):
         with patch("winapp_cli.cli._prepare_codegen", return_value=(Path("codegen.exe"), self.project_python, self.codegen_version)):
             with patch("winapp_cli.cli.find_native_cli", return_value=Path("winapp.exe")):
@@ -468,6 +565,25 @@ class CliTests(ProjectTest):
         locate.assert_called_once_with("selected.exe")
         self.assertEqual(native.call_args.args[1], ["cert", "info", "--json"])
 
+    def test_native_forwarding_keeps_output_options_and_prefix_selection(self):
+        for arguments, override, forwarded in (
+            (["--quiet", "package", "--help"], None, ["--quiet", "package", "--help"]),
+            (["--json", "false", "cert", "info", "--verbose=false"], None,
+             ["--json", "false", "cert", "info", "--verbose=false"]),
+            (["-v", "--winapp", "chosen.exe", "tool", "--help"], "chosen.exe", ["-v", "tool", "--help"]),
+            (["--quiet=false", "--winapp=chosen.exe", "--json", "cert", "info"], "chosen.exe",
+             ["--quiet=false", "--json", "cert", "info"]),
+            (["--winapp", "chosen.exe", "-q", "package", "--help"], "chosen.exe", ["-q", "package", "--help"]),
+        ):
+            with (
+                self.subTest(arguments=arguments),
+                patch("winapp_cli.cli.find_native_cli", return_value=Path("winapp.exe")) as locate,
+                patch("winapp_cli.cli.forward_native", return_value=37) as native,
+            ):
+                self.assertEqual(main(arguments), 37)
+                locate.assert_called_once_with(override)
+                self.assertEqual(native.call_args.args[1], forwarded)
+
     def test_native_word_is_not_a_wrapper_escape(self):
         arguments = ["native", "cert", "info", "--json"]
         with (
@@ -510,6 +626,11 @@ class CliTests(ProjectTest):
             ["run", "--exe", "launcher.py", ".\\dist"],
             ["run", ".\\App.csproj", "--identity"],
             ["run", "--identity", ".\\dist"],
+            ["--quiet", "run", ".\\dist"],
+            ["--json", "run", ".\\App.exe"],
+            ["run", "--json", ".\\dist"],
+            ["-v", "false", "run", "--json=true", ".\\App.csproj"],
+            ["run", "--quiet", "false", "--args", "input.py", ".\\dist"],
         ):
             with (
                 self.subTest(arguments=arguments),
@@ -565,6 +686,54 @@ class CliTests(ProjectTest):
         self.assertEqual(self.stdout.getvalue(), payload)
         self.assertIn("Using project .venv:", self.stderr.getvalue())
 
+    def test_quiet_python_run_preserves_application_streams_and_exit_status(self):
+        (self.project / "app.py").write_text("", encoding="utf-8")
+
+        def run_script(*arguments, **kwargs):
+            print('{"result": 42}')
+            print("application error", file=sys.stderr)
+            return subprocess.CompletedProcess([], 37)
+
+        for arguments in (
+            ["--quiet", "run"], ["run", "-q"], ["-q", "TRUE", "run"],
+        ):
+            self.stdout.seek(0)
+            self.stdout.truncate()
+            self.stderr.seek(0)
+            self.stderr.truncate()
+            with (
+                self.subTest(arguments=arguments),
+                patch("winapp_cli.cli.subprocess.run", side_effect=run_script) as launch,
+                patch("winapp_cli.cli.forward_native") as native,
+                redirect_stdout(self.stdout), redirect_stderr(self.stderr),
+            ):
+                self.assertEqual(main([*arguments, "--project", str(self.project), "app.py"]), 37)
+                self.assertEqual(self.stdout.getvalue(), '{"result": 42}\n')
+                self.assertEqual(self.stderr.getvalue(), "application error\n")
+                self.assertNotIn("stdout", launch.call_args.kwargs)
+                self.assertNotIn("stderr", launch.call_args.kwargs)
+                native.assert_not_called()
+
+    def test_python_run_output_options_are_forwarded_to_identity_preparation(self):
+        for flags, verbose, quiet in (
+            (["--quiet"], False, True), (["-v", "TRUE"], True, False),
+            (["--quiet=false", "--verbose=false"], False, False),
+        ):
+            for leading in (True, False):
+                arguments = [*flags, "run"] if leading else ["run", *flags]
+                with (
+                    self.subTest(flags=flags, leading=leading),
+                    patch("winapp_cli.cli.find_native_cli", return_value=Path("winapp.exe")),
+                    patch("winapp_cli.cli.run_with_identity", return_value=37) as identity,
+                    redirect_stdout(self.stdout), redirect_stderr(self.stderr),
+                ):
+                    self.assertEqual(main([
+                        *arguments, "--identity", "--project", str(self.project), "app.py", "--", "--json",
+                    ]), 37)
+                    self.assertEqual(identity.call_args.kwargs["verbose"], verbose)
+                    self.assertEqual(identity.call_args.kwargs["quiet"], quiet)
+                    self.assertEqual(identity.call_args.args[2], ["--json"])
+
     def test_build_output_directory_named_py_is_still_a_native_input(self):
         directory = self.project / "build.py"
         directory.mkdir()
@@ -602,6 +771,8 @@ class CliTests(ProjectTest):
             ["--", "--identity", "--help", "two words"],
             ["--identity", "--help", "two words"],
             ["--", "--project", "elsewhere", "--python", "custom.exe"],
+            ["--quiet", "--verbose", "false", "--json", "true"],
+            ["--", "-q", "FALSE", "-v=true", "--json=false"],
         ):
             with (
                 self.subTest(suffix=suffix),

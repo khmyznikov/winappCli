@@ -3,7 +3,7 @@
 
 """Opt-in development identity backed by a project-owned PBS runtime."""
 
-from contextlib import contextmanager, redirect_stdout
+from contextlib import contextmanager, nullcontext, redirect_stdout
 import hashlib
 import json
 import os
@@ -382,7 +382,7 @@ def _clear_owned_files(project: Path, record: dict) -> None:
 def run_with_identity(
     project: Path, script: Path, script_args: list[str], native: Path,
     manifest_option: Path | None, *, python_option: Path | None = None,
-    requirements_option: Path | None = None, verbose: bool = False,
+    requirements_option: Path | None = None, verbose: bool = False, quiet: bool = False,
 ) -> int:
     if not project.is_dir():
         raise WinappError(f"Project directory does not exist: {project}")
@@ -420,7 +420,9 @@ def run_with_identity(
         action = "Rebuilding" if changes else "Reusing" if record is not None else "Preparing"
         architecture = {"x86_64": "x64", "aarch64": "ARM64", "i686": "x86"}[interpreter.architecture]
         python_label = f"Python: {interpreter.version} ({architecture})"
-        with redirect_stdout(sys.stderr), Workflow(f"{action} development identity", verbose=verbose) as workflow:
+        with (
+            open(os.devnull, "w", encoding="utf-8") if quiet else nullcontext(sys.stderr)
+        ) as diagnostics, redirect_stdout(diagnostics), Workflow(f"{action} development identity", verbose=verbose) as workflow:
             if changes:
                 print(f"  Changed: {', '.join(changes)}", flush=True)
                 if package_name != record["package"] and _packages(package_name):
@@ -508,7 +510,8 @@ def run_with_identity(
                 with workflow.step("Verify identity", "Existing runtime verified"):
                     _verify_interpreter(project, record)
             workflow.succeed("Identity ready.")
-        print(f"Running {script.name}...", file=sys.stderr, flush=True)
+        if not quiet:
+            print(f"Running {script.name}...", file=sys.stderr, flush=True)
         try:
             return subprocess.run(
                 [record["entry"], str(script), *script_args], cwd=project, check=False,

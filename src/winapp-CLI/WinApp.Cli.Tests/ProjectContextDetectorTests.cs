@@ -17,6 +17,7 @@ public sealed class ProjectContextDetectorTests
         _root = Directory.CreateDirectory(Path.Join(
             Path.GetTempPath(),
             $"{nameof(ProjectContextDetectorTests)}_{Guid.NewGuid():N}"));
+        File.WriteAllText(Path.Join(_root.FullName, ".git"), "gitdir: fixture");
         _detector = new ProjectContextDetector();
     }
 

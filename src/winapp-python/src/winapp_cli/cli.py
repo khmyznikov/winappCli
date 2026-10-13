@@ -41,6 +41,8 @@ from .tools import (
 
 PYTHON_COMMANDS = frozenset({"init", "restore", "generate", "update", "run", "identity"})
 HELP_FLAGS = frozenset({"--help", "-h", "-?", "/?"})
+OUTPUT_OPTIONS = frozenset({"--verbose", "-v", "--quiet", "-q", "--json"})
+RUN_VALUE_OPTIONS = frozenset({"--project", "--manifest", "--winapp", "--python", "--requirements"})
 NATIVE_CLI_HELP = "Native winapp.exe path (otherwise WINAPP_CLI_PATH, bundled CLI, then PATH for source installs)."
 
 
@@ -92,6 +94,22 @@ class _VersionAction(argparse.Action):
         parser.exit(forward_native(native, ["--version"], Path.cwd()))
 
 
+def _boolean(value: str) -> bool:
+    if value.lower() not in {"true", "false"}:
+        raise argparse.ArgumentTypeError("expected true or false")
+    return value.lower() == "true"
+
+
+def _add_output_options(parser: argparse.ArgumentParser) -> None:
+    for names, help_text in (
+        (("--verbose", "-v"), "Show native CLI and codegen output."),
+        (("--quiet", "-q"), "Suppress wrapper status without changing application output."),
+        (("--json",), argparse.SUPPRESS),
+    ):
+        parser.add_argument(*names, type=_boolean, nargs="?", const=True,
+                            default=argparse.SUPPRESS, help=help_text)
+
+
 def build_parser(override: str | None = None) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="winapp-py",
@@ -105,6 +123,8 @@ def build_parser(override: str | None = None) -> argparse.ArgumentParser:
                         help="Show native CLI help followed by Python extensions.")
     parser.add_argument("--version", action=_VersionAction, override=override,
                         help="Show Python package and native CLI versions.")
+    _add_output_options(parser)
+    parser.set_defaults(verbose=False, quiet=False, json=False)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser(
         "init", add_help=False,
@@ -124,7 +144,7 @@ def build_parser(override: str | None = None) -> argparse.ArgumentParser:
                            help="Project directory (default: current directory).")
         child.add_argument("--python", type=Path,
                            help="Project venv Python for generation and dependency installation (default: project .venv).")
-        child.add_argument("--verbose", action="store_true", help="Show native CLI and codegen output.")
+        _add_output_options(child)
         if command != "generate":
             child.add_argument("--winapp", help=NATIVE_CLI_HELP)
         if command == "update":
@@ -134,9 +154,11 @@ def build_parser(override: str | None = None) -> argparse.ArgumentParser:
             child.add_argument("--force", action="store_true", help="Regenerate even when inputs are unchanged.")
 
     identity = commands.add_parser("identity", help="Manage this project's development identity.")
+    _add_output_options(identity)
     identity_commands = identity.add_subparsers(dest="identity_command", required=True)
     clear = identity_commands.add_parser("clear", help="Unregister only the project-owned identity, preserving app data.")
     clear.add_argument("--project", type=Path, default=Path.cwd())
+    _add_output_options(clear)
 
     run = commands.add_parser("run", add_help=False,
                               help="Run a Python script in the project .venv, optionally with development identity.")
@@ -148,7 +170,7 @@ def build_parser(override: str | None = None) -> argparse.ArgumentParser:
     run.add_argument("--manifest", type=Path,
                      help="Identity only: project manifest (default: auto-detect in project).")
     run.add_argument("--winapp", help=NATIVE_CLI_HELP)
-    run.add_argument("--verbose", action="store_true")
+    _add_output_options(run)
     run.add_argument("--python", type=Path,
                      help="Identity only: project Python to match exactly (default: project .venv).")
     run.add_argument("--requirements", type=Path,
@@ -158,15 +180,55 @@ def build_parser(override: str | None = None) -> argparse.ArgumentParser:
     return parser
 
 
+def _command_index(argv: list[str]) -> int:
+    index = 0
+    while index < len(argv) and argv[index].partition("=")[0] in OUTPUT_OPTIONS:
+        attached = "=" in argv[index]
+        index += 1
+        if not attached and index < len(argv) and argv[index].lower() in {"true", "false"}:
+            index += 1
+    return index
+
+
 def _native_prefix(argv: list[str]) -> tuple[str | None, list[str]]:
-    if len(argv) >= 2 and argv[0] == "--winapp":
-        return argv[1], argv[2:]
-    if argv and argv[0].startswith("--winapp="):
-        return argv[0].partition("=")[2], argv[1:]
+    index = _command_index(argv)
+    if len(argv) >= index + 2 and argv[index] == "--winapp":
+        return argv[index + 1], argv[:index] + argv[index + 2:]
+    if index < len(argv) and argv[index].startswith("--winapp="):
+        return argv[index].partition("=")[2], argv[:index] + argv[index + 1:]
     return None, argv
 
 
-def _run_in_project_venv(project: Path, script: Path, script_args: list[str]) -> int:
+def _normalize_output_options(argv: list[str], command_index: int) -> list[str]:
+    command = argv[command_index]
+    arguments = argv[:command_index] + argv[command_index + 1:]
+    normalized = ["--help" if command == "help" else command]
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "--" or (command == "run" and not argument.startswith("-")):
+            normalized.extend(arguments[index:])
+            break
+        name, separator, value = argument.partition("=")
+        if command == "run" and name in RUN_VALUE_OPTIONS and not separator:
+            normalized.extend(arguments[index:index + 2])
+            index += 2
+            continue
+        index += 1
+        if name in OUTPUT_OPTIONS:
+            if not separator:
+                value = "true"
+                if index < len(arguments) and arguments[index].lower() in {"true", "false"}:
+                    value = arguments[index]
+                    index += 1
+            argument = f"{name}={value}"
+        normalized.append(argument)
+    return normalized
+
+
+def _run_in_project_venv(
+    project: Path, script: Path, script_args: list[str], *, quiet: bool = False,
+) -> int:
     if not project.is_dir():
         raise WinappError(f"Project directory does not exist: {project}")
     script = local_path(project / script, boundary=project)
@@ -178,7 +240,8 @@ def _run_in_project_venv(project: Path, script: Path, script_args: list[str]) ->
             f"Project .venv Python was not found: {python}. "
             "Run the script with your own Python interpreter, or use 'uv run <script>' for a uv project."
         )
-    print(f"Using project .venv: {python}", file=sys.stderr, flush=True)
+    if not quiet:
+        print(f"Using project .venv: {python}", file=sys.stderr, flush=True)
     try:
         return subprocess.run([str(python), str(script), *script_args], cwd=project, check=False).returncode
     except OSError as error:
@@ -214,7 +277,7 @@ def _prepare_codegen(
 
 def _bindings_after_sdk(
     project: Path, *, verbose: bool, force: bool = False, python_option: Path | None = None,
-    progress: Workflow | None = None, upgrade_codegen: bool = False,
+    progress: Workflow | None = None, upgrade_codegen: bool = False, configure_dependencies: bool = False,
 ) -> None:
     config = try_load_config(project)
     if config is None:
@@ -235,6 +298,8 @@ def _bindings_after_sdk(
         with workflow.step("Generate bindings") as step:
             output = generate(config, codegen, selected, verbose=verbose, force=force, report=step.complete)
         with workflow.step("Install dependencies", "Project dependencies installed"):
+            if configure_dependencies:
+                register_dependencies(project, config.package)
             synchronize_project(project, python, output, verbose=verbose)
         if progress is None:
             workflow.succeed("Python bindings ready.")
@@ -253,17 +318,19 @@ def _configure_after_init(project: Path, *, reset: bool, config_only: bool, verb
     package = existing.package if existing is not None else DEFAULT_PACKAGE
     with Workflow("Setting up Python bindings", verbose=verbose) as workflow:
         with workflow.step("Configure project", "Project configured"):
-            register_dependencies(project, package)
             if existing is None or reset:
                 add_config(project, package, reset=reset)
         if config_only:
             _prepare_codegen(project, load_config(project).codegen_version, verbose=verbose, progress=workflow)
+            with workflow.step("Register bindings dependency", "Bindings dependency registered"):
+                register_dependencies(project, package)
             workflow.succeed("Bindings configured; run 'winapp-py restore' to generate and install them.")
             return
         load_inventory(project)
         _bindings_after_sdk(
             project, verbose=verbose, progress=workflow,
             upgrade_codegen=load_config(project).codegen_version is None,
+            configure_dependencies=True,
         )
         workflow.succeed("Python bindings ready.")
 
@@ -419,19 +486,20 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if not parsed:
             return _show_forwarded_help(build_parser(override), None, override) or 2
-        if parsed[0] == "help":
-            parsed = ["--help", *parsed[1:]]
-        if parsed and parsed[0] == "init":
+        command_index = _command_index(parsed)
+        command = parsed[command_index] if command_index < len(parsed) else None
+        if command == "init":
             return _initialize(parsed, override)
         if (
-            parsed and parsed[0] not in PYTHON_COMMANDS
-            and parsed[0] not in {"--help", "-h", "--version"}
+            command not in PYTHON_COMMANDS
+            and command not in {"--help", "-h", "--version", "help"}
         ):
             native = find_native_cli(override)
             return forward_native(native, parsed, Path.cwd())
         parser = build_parser(override)
-        if parsed[0] == "run":
-            args, unknown = parser.parse_known_args(parsed)
+        python_args = _normalize_output_options(parsed, command_index)
+        if command == "run":
+            args, unknown = parser.parse_known_args(python_args)
             if unknown or (args.script is None and not args.identity) or (
                 args.script is not None and (
                     args.script.suffix.lower() != ".py" or (args.project / args.script).is_dir()
@@ -440,11 +508,13 @@ def main(argv: list[str] | None = None) -> int:
                 native = find_native_cli(override)
                 return forward_native(native, parsed, Path.cwd())
         else:
-            args = parser.parse_args(parsed)
+            args = parser.parse_args(python_args)
+        if args.json:
+            parser.error("--json is not supported for Python workflows; use it only with native commands or after the script.")
+        if args.quiet and args.verbose:
+            parser.error("Cannot specify both --quiet and --verbose options together.")
         _require_supported_python()
 
-        if args.command == "identity":
-            return clear_identity(local_path(args.project))
         if args.command == "run":
             if args.script is None:
                 parser.error("the following arguments are required: script")
@@ -455,42 +525,46 @@ def main(argv: list[str] | None = None) -> int:
                         "--python, --requirements, --manifest and --winapp require --identity for Python scripts. "
                         "Ordinary Python runs use the project .venv."
                     )
-                return _run_in_project_venv(local_path(args.project), args.script, script_args)
+                return _run_in_project_venv(local_path(args.project), args.script, script_args, quiet=args.quiet)
             native = find_native_cli(args.winapp or override)
             return run_with_identity(local_path(args.project), args.script, script_args, native, args.manifest,
                                      python_option=args.python, requirements_option=args.requirements,
-                                     verbose=args.verbose)
+                                     verbose=args.verbose, quiet=args.quiet)
 
-        project = local_path(args.project)
-        if args.python is not None:
-            ensure_project_python(project, args.python, verbose=args.verbose)
-        if args.command == "generate":
-            config = load_config(project)
-            packages_hash(project)
-            _bindings_after_sdk(config.project, verbose=args.verbose, force=args.force, python_option=args.python)
-        else:
-            config = try_load_config(project)
-            if config is not None:
-                packages_hash(project)
-            native = find_native_cli(args.winapp or override)
-            if args.command == "restore":
-                native_args = [str(native), "restore", str(project)]
-            else:
-                native_args = [str(native), "update", "--setup-sdks", args.channel]
-            action = "Restoring" if args.command == "restore" else "Updating"
-            with Workflow(f"{action} {'Python project' if config is not None else 'SDK packages'}",
-                          verbose=args.verbose) as workflow:
-                with workflow.step("Restore SDKs and projections" if args.command == "restore" else "Update SDK packages",
-                                   "SDK packages ready"):
-                    run_tool(native_args, project, verbose=args.verbose)
-                if args.command == "update" and config is not None:
-                    with workflow.step("Restore updated SDKs and projections", "SDKs and projections ready"):
-                        run_tool([str(native), "restore", str(project)], project, verbose=args.verbose)
-                _bindings_after_sdk(
-                    project, verbose=args.verbose, python_option=args.python, progress=workflow,
-                    upgrade_codegen=args.command == "update",
-                )
-                workflow.succeed("Python bindings ready." if config is not None else "SDK packages ready.")
+        with open(os.devnull, "w", encoding="utf-8") if args.quiet else nullcontext() as output:
+            with redirect_stdout(output) if args.quiet else nullcontext():
+                if args.command == "identity":
+                    return clear_identity(local_path(args.project))
+                project = local_path(args.project)
+                if args.python is not None:
+                    ensure_project_python(project, args.python, verbose=args.verbose)
+                if args.command == "generate":
+                    config = load_config(project)
+                    packages_hash(project)
+                    _bindings_after_sdk(config.project, verbose=args.verbose, force=args.force, python_option=args.python)
+                else:
+                    config = try_load_config(project)
+                    if config is not None:
+                        packages_hash(project)
+                    native = find_native_cli(args.winapp or override)
+                    if args.command == "restore":
+                        native_args = [str(native), "restore", str(project)]
+                    else:
+                        native_args = [str(native), "update", "--setup-sdks", args.channel]
+                    action = "Restoring" if args.command == "restore" else "Updating"
+                    with Workflow(f"{action} {'Python project' if config is not None else 'SDK packages'}",
+                                  verbose=args.verbose) as workflow:
+                        with workflow.step("Restore SDKs and projections" if args.command == "restore" else "Update SDK packages",
+                                           "SDK packages ready"):
+                            run_tool(native_args, project, verbose=args.verbose)
+                        if args.command == "update" and config is not None:
+                            with workflow.step("Restore updated SDKs and projections", "SDKs and projections ready"):
+                                run_tool([str(native), "restore", str(project)], project, verbose=args.verbose)
+                        _bindings_after_sdk(
+                            project, verbose=args.verbose, python_option=args.python, progress=workflow,
+                            upgrade_codegen=args.command == "update",
+                        )
+                        workflow.succeed("Python bindings ready." if config is not None else "SDK packages ready.")
         return 0
     except (WinappError, OSError, UnicodeError) as error:
         print(f"error: {error}", file=sys.stderr)

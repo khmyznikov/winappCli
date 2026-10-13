@@ -241,6 +241,17 @@ Run `winapp-py update` to use a new DynWinRT release without upgrading winapp. I
 
 Declare your application's own dependencies in project metadata or requirements files; the private identity environment does not copy manually installed packages from `.venv`.
 
+### Output options
+
+```powershell
+winapp-py --quiet restore
+winapp-py run .\app.py -- --json
+```
+
+Use `--quiet` (`-q`) to hide wrapper status or `--verbose` (`-v`) to show tool diagnostics. Put these options before or after the command; for `run`, put wrapper options before the script. Do not combine quiet and verbose. Quiet mode preserves application stdout, stderr and errors.
+
+Python workflows do not support `--json` and reject it before making changes. Native commands retain their supported JSON output. Arguments after a Python script, with or without `--`, go unchanged to the application, as in the second command above.
+
 ### Editor workflow
 
 Select `.venv\Scripts\python.exe` as the editor interpreter. Do not edit generated files under `.winapp`.

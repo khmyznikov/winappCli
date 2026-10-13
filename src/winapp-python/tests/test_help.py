@@ -83,12 +83,30 @@ class HelpTests(ProjectTest):
                 self.assertIn(f"winapp-py {command}", text)
                 self.assertIn(option, text)
                 self.assertIn("--project", text)
+                self.assertIn("--quiet", text)
+                self.assertIn("-q", text)
+                self.assertIn("--verbose", text)
+                self.assertIn("-v", text)
+
+    def test_output_options_before_help_do_not_bypass_python_help(self):
+        for command in ("restore", "update", "generate", "identity"):
+            with (
+                self.subTest(command=command),
+                patch("winapp_cli.cli.forward_native") as forward,
+                patch("winapp_cli.cli._prepare_codegen") as codegen,
+            ):
+                text = self.invoke_help(["--quiet", command, "--help"])
+            self.assertIn(f"winapp-py {command}", text)
+            self.assertIn("--quiet", text)
+            forward.assert_not_called()
+            codegen.assert_not_called()
 
     def test_native_selection_prefix_is_respected_by_help(self):
         for arguments in (
             ["--winapp", "chosen.exe", "--help"],
             ["--winapp=chosen.exe", "run", "--help"],
             ["run", "--winapp", "chosen.exe", "--help"],
+            ["--quiet", "--winapp", "chosen.exe", "run", "--help"],
         ):
             with self.subTest(arguments=arguments):
                 with (

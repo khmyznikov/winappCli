@@ -234,6 +234,33 @@ class PythonIdentityTests(ProjectTest):
         self.assertIn("Reusing development identity", diagnostics.getvalue())
         self.assertIn("Running app.py", diagnostics.getvalue())
 
+    def test_quiet_identity_keeps_application_streams_and_exit_status(self):
+        output = io.StringIO()
+        diagnostics = io.StringIO()
+
+        def run_script(*arguments, **kwargs):
+            print('{"identity": "ready"}')
+            print("application error", file=sys.stderr)
+            return subprocess.CompletedProcess([], 37)
+
+        with (
+            patch.object(identity, "_packages", side_effect=[[], [], [self.package()]]),
+            patch.object(identity, "resolve_distribution", return_value=self.distribution),
+            patch.object(identity, "prepare_runtime", side_effect=self.prepare_files),
+            patch.object(identity, "synchronize_dependencies", side_effect=lambda *a, **kw: print("installer status")),
+            patch.object(identity, "run_tool", side_effect=lambda *a, **kw: print("native status")),
+            patch.object(identity, "_verify_interpreter"),
+            patch.object(identity.subprocess, "run", side_effect=run_script) as launch,
+            redirect_stdout(output), redirect_stderr(diagnostics),
+        ):
+            self.assertEqual(identity.run_with_identity(
+                self.project, Path("app.py"), [], Path("winapp.exe"), None, quiet=True,
+            ), 37)
+        self.assertEqual(output.getvalue(), '{"identity": "ready"}\n')
+        self.assertEqual(diagnostics.getvalue(), "application error\n")
+        self.assertNotIn("stdout", launch.call_args.kwargs)
+        self.assertNotIn("stderr", launch.call_args.kwargs)
+
     def test_changed_python_version_architecture_or_abi_rebuilds_owned_identity(self):
         record = self.record()
         for info in (

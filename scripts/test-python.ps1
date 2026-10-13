@@ -189,13 +189,29 @@ with zipfile.ZipFile(wheel) as archive:
     [IO.File]::WriteAllText((Join-Path $clone 'pip.py'), "raise SystemExit('PROJECT_PIP_EXECUTED')`n")
     [IO.File]::AppendAllText((Join-Path $clone 'requirements.txt'),
         "packaging==26.3 \`n    ; python_version >= '3.11'`n")
-    Invoke-Checked $interpreter @('-m', 'winapp_cli', 'restore', '--project', $clone)
+    $jsonStderr = Join-Path $temporary 'unsupported-json.stderr.log'
+    $rejectedJson = & $interpreter -m winapp_cli --json restore --project $clone 2> $jsonStderr
+    if ($LASTEXITCODE -ne 2 -or @($rejectedJson).Count -ne 0 -or
+        (Get-Content -LiteralPath $jsonStderr -Raw) -notlike '*--json is not supported for Python workflows*' -or
+        (Test-Path -LiteralPath (Join-Path $clone '.winapp'))) {
+        throw "Python JSON mode did not fail before restoring the project: $rejectedJson"
+    }
+    $quietOutput = & $interpreter -m winapp_cli --quiet restore --project $clone
+    if ($LASTEXITCODE -ne 0 -or @($quietOutput).Count -ne 0) {
+        throw "Leading quiet mode did not restore Python bindings without status output: $quietOutput"
+    }
     $clonePython = Join-Path $clone '.venv\Scripts\python.exe'
     Invoke-Checked $clonePython @('-c',
         'import importlib.metadata as m; assert m.version("packaging") == "26.3"')
     $actual = & $clonePython (Join-Path $clone 'app.py')
     if ($LASTEXITCODE -ne 0 -or ($actual -join "`n").Trim() -ne 'Host: example.com') {
         throw "Fresh requirements clone was not usable after restore: $actual"
+    }
+    $runStderr = Join-Path $temporary 'quiet-run.stderr.log'
+    $actual = & $interpreter -m winapp_cli run -q --project $clone app.py 2> $runStderr
+    if ($LASTEXITCODE -ne 0 -or ($actual -join "`n").Trim() -ne 'Host: example.com' -or
+        -not [string]::IsNullOrEmpty((Get-Content -LiteralPath $runStderr -Raw))) {
+        throw "Quiet Python run changed application output or printed wrapper status: $actual"
     }
 
     # Exercise default metadata plus an additional Windows type.
@@ -311,7 +327,10 @@ types = ["Windows.Foundation.Uri"]
         if ($NuGetConfigPath) {
             Copy-Item -LiteralPath $NuGetConfigPath -Destination (Join-Path $uvClone 'nuget.config')
         }
-        Invoke-Checked $interpreter @('-m', 'winapp_cli', 'restore', '--project', $uvClone)
+        $quietOutput = & $interpreter -m winapp_cli restore --quiet --project $uvClone
+        if ($LASTEXITCODE -ne 0 -or @($quietOutput).Count -ne 0) {
+            throw "Trailing quiet mode did not restore uv Python bindings without status output: $quietOutput"
+        }
         Invoke-Checked (Join-Path $uvClone '.venv\Scripts\python.exe') @('-c', 'from myapp_winrt.windows.foundation import Uri; import dynwinrt')
     }
 
@@ -363,14 +382,15 @@ types = ["Windows.Foundation.Uri"]
             throw "Ordinary Python unexpectedly had application identity: $plainOutput"
         }
 
+        $identityStderr = Join-Path $temporary 'identity.stderr.log'
         $identifiedOutput = & $identityPython -m winapp_cli run --identity --project $identityProject `
-            identity_probe.py -- --children from-ci
+            identity_probe.py -- --children from-ci 2> $identityStderr
         if ($LASTEXITCODE -ne 0) {
-            throw "Private Python identity registration or launch failed: $identifiedOutput"
+            throw "Private Python identity registration or launch failed: $identifiedOutput`n$(Get-Content -LiteralPath $identityStderr -Raw)"
         }
         $identified = @($identifiedOutput | Where-Object { $_ -like 'IDENTITY_JSON:*' } |
             ForEach-Object { $_.Substring('IDENTITY_JSON:'.Length) } | ConvertFrom-Json)
-        if ($identified.Count -ne 1 -or $identified[0].code -ne 0 -or
+        if (@($identifiedOutput).Count -ne 1 -or $identified.Count -ne 1 -or $identified[0].code -ne 0 -or
             -not $identified[0].package.StartsWith("$identityName`_") -or
             $identified[0].python_prefix -ne (Join-Path $identityProject '.winapp\python-identity\venv') -or
             $identified[0].process_image -ne (Join-Path $identityProject '.winapp\python-identity\venv\runtime\python.exe') -or
@@ -389,25 +409,49 @@ types = ["Windows.Foundation.Uri"]
                 throw "PBS child did not preserve identity and dependencies: $($child | ConvertTo-Json -Compress)"
             }
         }
-        $again = & $identityPython -m winapp_cli run --identity --project $identityProject `
-            identity_probe.py -- from-ci
-        if ($LASTEXITCODE -ne 0 -or @($again | Where-Object { $_ -eq 'Reusing development identity' }).Count -ne 1) {
-            throw "Unchanged PBS identity was not reused: $again"
-        }
         $record = Get-Content -LiteralPath (Join-Path $identityProject '.winapp\python-identity.json') -Raw | ConvertFrom-Json
         if ($record.interpreter.version -ne $expectedVersion -or $record.state -ne 'ready') {
             throw "PBS ownership record does not contain the selected interpreter and ready state."
         }
+        $again = & $identityPython -m winapp_cli run --identity --project $identityProject `
+            identity_probe.py -- from-ci 2> $identityStderr
+        $reuseDiagnostics = @(Get-Content -LiteralPath $identityStderr)
+        if ($LASTEXITCODE -ne 0 -or
+            @($reuseDiagnostics | Where-Object { $_ -eq 'Reusing development identity' }).Count -ne 1) {
+            throw "Unchanged PBS identity was not reused: $again`n$($reuseDiagnostics -join "`n")"
+        }
+        $reused = @($again | Where-Object { $_ -like 'IDENTITY_JSON:*' } |
+            ForEach-Object { $_.Substring('IDENTITY_JSON:'.Length) } | ConvertFrom-Json)
+        $reusedRecord = Get-Content -LiteralPath (Join-Path $identityProject '.winapp\python-identity.json') -Raw | ConvertFrom-Json
+        if (@($again).Count -ne 1 -or $reused.Count -ne 1 -or $reused[0].code -ne 0 -or
+            $reused[0].package -ne $identified[0].package -or
+            $reused[0].python_prefix -ne $identified[0].python_prefix -or
+            $reused[0].process_image -ne $identified[0].process_image -or
+            $reused[0].python_version -ne $expectedVersion -or $reused[0].host -ne 'example.com' -or
+            @($reused[0].arguments).Count -ne 1 -or $reused[0].arguments[0] -ne 'from-ci' -or
+            $reusedRecord.owner -ne $record.owner -or $reusedRecord.state -ne 'ready') {
+            throw "Reused PBS identity changed ownership or did not preserve script output: $again"
+        }
+        $quietIdentity = & $identityPython -m winapp_cli -q run --identity --project $identityProject `
+            identity_probe.py -- from-ci 2> $identityStderr
+        $quietRecord = Get-Content -LiteralPath (Join-Path $identityProject '.winapp\python-identity.json') -Raw | ConvertFrom-Json
+        if ($LASTEXITCODE -ne 0 -or ($quietIdentity -join "`n") -ne ($again -join "`n") -or
+            -not [string]::IsNullOrEmpty((Get-Content -LiteralPath $identityStderr -Raw)) -or
+            $quietRecord.owner -ne $record.owner) {
+            throw "Quiet identity execution changed application output or printed wrapper status: $quietIdentity"
+        }
         [IO.File]::AppendAllText((Join-Path $identityProject 'requirements.txt'), "# changed input`n")
         $rebuiltOutput = & $identityPython -m winapp_cli run --identity --project $identityProject `
-            identity_probe.py -- --children
-        if ($LASTEXITCODE -ne 0 -or @($rebuiltOutput | Where-Object { $_ -eq 'Rebuilding development identity' }).Count -ne 1) {
-            throw "Changed PBS dependency inputs did not automatically rebuild the identity: $rebuiltOutput"
+            identity_probe.py -- --children 2> $identityStderr
+        $rebuildDiagnostics = @(Get-Content -LiteralPath $identityStderr)
+        if ($LASTEXITCODE -ne 0 -or
+            @($rebuildDiagnostics | Where-Object { $_ -eq 'Rebuilding development identity' }).Count -ne 1) {
+            throw "Changed PBS dependency inputs did not automatically rebuild the identity: $rebuiltOutput`n$($rebuildDiagnostics -join "`n")"
         }
         $rebuilt = @($rebuiltOutput | Where-Object { $_ -like 'IDENTITY_JSON:*' } |
             ForEach-Object { $_.Substring('IDENTITY_JSON:'.Length) } | ConvertFrom-Json)
         $newRecord = Get-Content -LiteralPath (Join-Path $identityProject '.winapp\python-identity.json') -Raw | ConvertFrom-Json
-        if ($newRecord.owner -eq $record.owner -or $newRecord.state -ne 'ready' -or
+        if (@($rebuiltOutput).Count -ne 1 -or $newRecord.owner -eq $record.owner -or $newRecord.state -ne 'ready' -or
             $rebuilt.Count -ne 1 -or $rebuilt[0].code -ne 0 -or
             $rebuilt[0].package -ne $identified[0].package -or
             $rebuilt[0].python_version -ne $expectedVersion -or $rebuilt[0].host -ne 'example.com') {
