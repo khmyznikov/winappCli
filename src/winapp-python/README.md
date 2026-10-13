@@ -32,7 +32,7 @@ From your Python project directory, initialize SDKs and enable bindings:
 winapp-py init --use-defaults --add-python-bindings
 ```
 
-The command creates or reuses a normal project `.venv`, generates bindings and installs declared dependencies there. Application dependencies are separate from the tool's installation environment. See the guide's [DynWinRT and application dependency handling](https://github.com/microsoft/WinAppCli/blob/main/docs/guides/python.md#dependency-declarations) for version upgrades.
+The command creates or reuses a normal project `.venv`, records the generator version in project configuration, generates bindings and installs declared dependencies there. `--use-defaults` preserves existing binding selections and recorded versions; resetting API selections requires interactive confirmation. Application dependencies are separate from the tool's installation environment. See the guide's [DynWinRT and application dependency handling](https://github.com/microsoft/WinAppCli/blob/main/docs/guides/python.md#dependency-declarations) for version upgrades.
 
 ### Commands overview
 
@@ -42,7 +42,7 @@ The command creates or reuses a normal project `.venv`, generates bindings and i
 | --- | --- |
 | [`init`](https://github.com/microsoft/WinAppCli/blob/main/docs/guides/python.md#2-initialize-the-project) | Initialize SDKs and Windows project files; enable Python bindings with `--add-python-bindings`. |
 | [`restore`](https://github.com/microsoft/WinAppCli/blob/main/docs/guides/python.md#5-restore-when-needed) | Run native SDK and projection restoration, then generate configured bindings and install declared dependencies. |
-| [`update`](https://github.com/microsoft/WinAppCli/blob/main/docs/guides/python.md#5-restore-when-needed) | Update SDK pins, restore the updated SDKs and projections, then regenerate configured bindings and install dependencies. |
+| [`update`](https://github.com/microsoft/WinAppCli/blob/main/docs/guides/python.md#5-restore-when-needed) | Update SDK and generator pins, restore SDKs and projections, then regenerate configured bindings and install dependencies. |
 | [`generate`](https://github.com/microsoft/WinAppCli/blob/main/docs/guides/python.md#configure-bindings) | Regenerate bindings from existing SDK metadata after changing type selections. |
 
 **Run Python:**
@@ -52,6 +52,8 @@ The command creates or reuses a normal project `.venv`, generates bindings and i
 | [`run`](https://github.com/microsoft/WinAppCli/blob/main/docs/guides/python.md#run-without-identity) | Run a project-local `.py` script with the existing project `.venv`; other inputs are forwarded to native `run`. |
 | [`run --identity`](https://github.com/microsoft/WinAppCli/blob/main/docs/guides/python.md#4-run-with-identity) | Run a script in a private Python environment with the project's package identity. |
 | [`identity clear`](https://github.com/microsoft/WinAppCli/blob/main/docs/guides/python.md#clean-up-development-identity) | Remove the development registration and private environment while preserving application data. |
+
+For Python scripts, interpreter selection and identity-preparation status go to stderr. The script's stdout, stderr and exit code pass through unchanged, so `winapp-py run .\app.py > output.json` keeps wrapper status out of the output file.
 
 **Shared Windows tools:**
 

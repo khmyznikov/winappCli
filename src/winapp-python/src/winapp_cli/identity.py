@@ -3,7 +3,7 @@
 
 """Opt-in development identity backed by a project-owned PBS runtime."""
 
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
 import hashlib
 import json
 import os
@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import uuid
 import xml.etree.ElementTree as ET
@@ -419,7 +420,7 @@ def run_with_identity(
         action = "Rebuilding" if changes else "Reusing" if record is not None else "Preparing"
         architecture = {"x86_64": "x64", "aarch64": "ARM64", "i686": "x86"}[interpreter.architecture]
         python_label = f"Python: {interpreter.version} ({architecture})"
-        with Workflow(f"{action} development identity", verbose=verbose) as workflow:
+        with redirect_stdout(sys.stderr), Workflow(f"{action} development identity", verbose=verbose) as workflow:
             if changes:
                 print(f"  Changed: {', '.join(changes)}", flush=True)
                 if package_name != record["package"] and _packages(package_name):
@@ -507,7 +508,7 @@ def run_with_identity(
                 with workflow.step("Verify identity", "Existing runtime verified"):
                     _verify_interpreter(project, record)
             workflow.succeed("Identity ready.")
-        print(f"Running {script.name}...", flush=True)
+        print(f"Running {script.name}...", file=sys.stderr, flush=True)
         try:
             return subprocess.run(
                 [record["entry"], str(script), *script_args], cwd=project, check=False,

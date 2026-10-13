@@ -132,6 +132,7 @@ Windows integration guidance:
 
 - Use generated bindings to call Windows SDK and Windows App SDK APIs from Python.
 - Use `winapp-py restore` after cloning or changing SDK configuration, and `winapp-py generate` after changing API selections.
+- Use `winapp-py update` to upgrade SDK and DynWinRT versions; `restore` and `generate` use the generator version recorded in the project's `pyproject.toml`.
 - Use `winapp-py run .\app.py` for the existing project `.venv`, or add `--identity` for development package identity.
 - Prepare an application directory before creating an MSIX with `winapp-py package`.
 

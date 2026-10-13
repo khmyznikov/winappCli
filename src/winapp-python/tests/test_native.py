@@ -43,7 +43,7 @@ class NativePayloadTests(ProjectTest):
             patch("winapp_cli.native.__file__", str(self.project / "native.py")),
             patch("winapp_cli.native.sysconfig.get_platform", return_value="win-amd64"),
         ):
-            self.assertEqual(bundled_cli(), path)
+            self.assertEqual(bundled_cli(), path.resolve())
 
     def test_wrong_architecture_is_not_silently_used(self):
         self.executable(0xAA64)

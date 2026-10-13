@@ -120,15 +120,46 @@ class NativeInitTests(ProjectTest):
                     self.assertEqual(self.invoke(*arguments, "--add-python-bindings"), 1)
                 native.assert_not_called()
 
-    def test_existing_defaults_reset_metadata_but_explicit_opt_in_preserves_it(self):
-        for flags, reset in ((["--use-defaults"], True), (["--use-defaults", "--add-python-bindings"], False)):
+    def test_existing_defaults_and_explicit_opt_in_preserve_metadata(self):
+        for flags in (["--use-defaults"], ["--no-prompt"], ["--use-defaults", "--add-python-bindings"]):
             with self.subTest(flags=flags):
                 with (
                     patch("winapp_cli.cli.forward_native", side_effect=self.native),
                     patch("winapp_cli.cli._configure_after_init") as setup,
                 ):
                     self.assertEqual(self.invoke(*flags), 0)
-                self.assertEqual(setup.call_args.kwargs["reset"], reset)
+                self.assertFalse(setup.call_args.kwargs["reset"])
+
+    def test_config_only_defaults_keep_the_existing_bindings_table(self):
+        self.write_config(package="custom_winrt", types=["Windows.Foundation.Uri"], scope="types")
+        source = self.project / "pyproject.toml"
+        before = source.read_bytes()
+        expected = self.config()
+
+        def native(executable, arguments, working_directory, *, init_result):
+            context = self.context(mode="config-only")
+            context["metadata_directory"] = None
+            init_result.write_text(json.dumps(context), encoding="utf-8")
+            return 0
+
+        with (
+            patch("winapp_cli.cli.forward_native", side_effect=native),
+            patch("winapp_cli.cli._prepare_codegen"),
+        ):
+            self.assertEqual(self.invoke("--use-defaults", "--config-only"), 0)
+        self.assertEqual(source.read_bytes(), before)
+        self.assertEqual(self.config(), expected)
+
+    def test_existing_metadata_can_still_be_reset_with_explicit_confirmation(self):
+        with (
+            patch("winapp_cli.cli.sys.stdin.isatty", return_value=True),
+            patch("winapp_cli.cli.forward_native", side_effect=self.native),
+            patch("builtins.input", return_value="yes") as prompt,
+            patch("winapp_cli.cli._configure_after_init") as setup,
+        ):
+            self.assertEqual(self.invoke(), 0)
+        prompt.assert_called_once()
+        self.assertTrue(setup.call_args.kwargs["reset"])
 
     def test_explicit_false_preserves_interactive_reset_confirmation(self):
         for flags in (
@@ -158,7 +189,7 @@ class NativeInitTests(ProjectTest):
                 ):
                     self.assertEqual(self.invoke(flag), 0)
                 prompt.assert_not_called()
-                self.assertTrue(setup.call_args.kwargs["reset"])
+                self.assertFalse(setup.call_args.kwargs["reset"])
 
     def test_explicit_false_quiet_and_verbose_do_not_override_python_output(self):
         with (
@@ -334,6 +365,15 @@ class NativeInitTests(ProjectTest):
         ):
             self.assertEqual(self.invoke("--add-python-bindings"), 0)
         self.assertEqual(self.config().package, "custom_winrt")
+
+    def test_existing_init_uses_the_recorded_generator_without_advancing_it(self):
+        with (
+            patch("winapp_cli.cli.forward_native", side_effect=self.native),
+            patch("winapp_cli.cli._bindings_after_sdk") as bindings,
+        ):
+            self.assertEqual(self.invoke("--use-defaults"), 0)
+        self.assertFalse(bindings.call_args.kwargs["upgrade_codegen"])
+        self.assertEqual(self.config().codegen_version, self.codegen_version)
 
     def test_init_does_not_add_dynwinrt_or_codegen_project_dependencies(self):
         self.unconfigured()

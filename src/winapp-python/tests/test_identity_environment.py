@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from packaging.version import Version
 
+from winapp_cli.config import set_codegen_version
 from winapp_cli import identity_environment as environment
 from winapp_cli.errors import WinappError
 from winapp_cli.generate import generate
@@ -80,16 +81,16 @@ class IdentityEnvironmentTests(ProjectTest):
         (self.project / "app.py").write_text("print('source edit')\n", encoding="utf-8")
         self.assertEqual(before, environment.dependency_inputs(self.project, None, self.info)[2])
 
-    def test_dynwinrt_upgrade_rebuilds_private_dependencies_without_project_pins(self):
+    def test_project_dynwinrt_upgrade_rebuilds_private_dependencies(self):
         self.write_config()
-        declarations = (self.project / "pyproject.toml").read_bytes()
         with patch("winapp_cli.generate.run_tool", side_effect=self.fake_codegen):
             generate(self.config(), Path("codegen.exe"), self.codegen_version)
             before = environment.dependency_inputs(self.project, None, self.info)[2]
             self.codegen_version = Version("0.1.0rc23")
+            set_codegen_version(self.project, self.codegen_version)
             generate(self.config(), Path("codegen.exe"), self.codegen_version)
         self.assertNotEqual(before, environment.dependency_inputs(self.project, None, self.info)[2])
-        self.assertEqual((self.project / "pyproject.toml").read_bytes(), declarations)
+        self.assertIn('codegen-version = "0.1.0rc23"', (self.project / "pyproject.toml").read_text())
 
     def test_python_home_and_path_are_only_removed_from_child_copy(self):
         original = {"PYTHONHOME": "other", "PYTHONPATH": "other-modules",

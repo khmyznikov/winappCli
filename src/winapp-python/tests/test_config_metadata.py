@@ -6,9 +6,10 @@ from pathlib import Path
 import stat
 from types import SimpleNamespace
 import unittest
+from packaging.version import Version
 from unittest.mock import patch
 
-from winapp_cli.config import DEFAULT_PACKAGE, add_config, load_config, try_load_config
+from winapp_cli.config import DEFAULT_PACKAGE, add_config, load_config, set_codegen_version, try_load_config
 from winapp_cli.errors import WinappError
 from winapp_cli.metadata import packages_hash, read_inventory, select_metadata
 from winapp_cli.paths import local_path
@@ -22,6 +23,7 @@ class ConfigTests(ProjectTest):
         self.assertEqual(config.package, "myapp_winrt")
         self.assertEqual(config.types, ("Windows.Foundation.Uri",))
         self.assertEqual(config.scope, "types")
+        self.assertEqual(config.codegen_version, self.codegen_version)
         self.assertEqual(config.output, self.project / ".winapp" / "python" / "myapp_winrt")
 
     def test_deduplicates_types(self):
@@ -74,6 +76,7 @@ class ConfigTests(ProjectTest):
         self.assertEqual(config.scope, "default")
         self.assertEqual(config.types, ())
         self.assertIn('keep = "yes"', source.read_text())
+        self.assertEqual(config.codegen_version, self.codegen_version)
 
     def test_default_package_is_short_and_does_not_depend_on_project_name(self):
         self.assertEqual(DEFAULT_PACKAGE, "winapp_bindings")
@@ -153,10 +156,33 @@ class ConfigTests(ProjectTest):
         with self.assertRaisesRegex(WinappError, "missing"):
             self.config()
 
-    def test_codegen_pin_is_not_accepted_in_the_bindings_table(self):
-        self.write_config(extra='codegen-version = "0.1.0rc21"\n')
-        with self.assertRaisesRegex(WinappError, "manages the latest codegen"):
-            self.config()
+    def test_codegen_version_is_project_configuration_not_a_dependency(self):
+        selected = Version("0.1.0rc23")
+        source = self.project / "pyproject.toml"
+        before = self.config()
+        config = set_codegen_version(self.project, selected)
+        self.assertEqual(config.codegen_version, selected)
+        self.assertEqual(config.types, before.types)
+        self.assertEqual(config.package, before.package)
+        self.assertNotIn("dynwinrt", source.read_text())
+        self.assertEqual(self.config().codegen_version, selected)
+
+    def test_codegen_version_requires_an_exact_package_version(self):
+        source = self.project / "pyproject.toml"
+        for value in ('"latest"', '">=0.1.0"', '"0.1.*"', '23', '""', '" 0.1.0rc23"'):
+            with self.subTest(value=value):
+                self.write_config()
+                text = source.read_text().replace(
+                    f'codegen-version = "{self.codegen_version}"', f"codegen-version = {value}",
+                )
+                source.write_text(text, encoding="utf-8")
+                with self.assertRaisesRegex(WinappError, "exact Python package version"):
+                    self.config()
+
+    def test_initial_bindings_table_can_await_version_resolution(self):
+        source = self.project / "pyproject.toml"
+        source.write_text(source.read_text().replace(f'codegen-version = "{self.codegen_version}"\n', ""), encoding="utf-8")
+        self.assertIsNone(self.config().codegen_version)
 
 
 class InventoryTests(ProjectTest):

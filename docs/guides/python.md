@@ -215,7 +215,7 @@ After cloning the project or removing generated files, run:
 winapp-py restore
 ```
 
-To change API selections, edit `types` and run `winapp-py generate`. To update SDK versions, run `winapp-py update`.
+To change API selections, edit `types` and run `winapp-py generate`. To update SDK and DynWinRT versions, run `winapp-py update`.
 
 ## 6. Package as MSIX
 
@@ -237,7 +237,7 @@ The run command above uses package identity to make Windows App Runtime availabl
 
 ### Dependency declarations
 
-Run `winapp-py generate` to use a new DynWinRT release without upgrading winapp. Bindings workflows fetch the latest available `dynwinrt-codegen`, including previews, and automatically install the matching `dynwinrt` runtime. Neither package is added to your project's dependency declarations. Running the app uses the runtime matched to its generated bindings, without checking for updates.
+Run `winapp-py update` to use a new DynWinRT release without upgrading winapp. Initial bindings setup records the resolved `codegen-version` in `[tool.winapp.python-bindings]` in your project's `pyproject.toml`; commit that file with the project. `restore` and `generate` reuse or install that exact generator version and automatically install the matching `dynwinrt` runtime through the generated package. Neither package needs a direct application dependency declaration. Running the app uses its generated bindings without checking for updates.
 
 Declare your application's own dependencies in project metadata or requirements files; the private identity environment does not copy manually installed packages from `.venv`.
 
@@ -261,6 +261,7 @@ Run `winapp-py --version` to see both the installed Python package version and t
 | The picker fails | Read the error printed in the terminal, fix the reported cause and retry. |
 | Ordinary `run` cannot find `.venv` | Use your chosen interpreter or `uv run <script>`; the wrapper does not create an environment or fall back to global Python. |
 | DynWinRT dependency versions conflict | Remove direct `dynwinrt` and `dynwinrt-codegen` declarations from project dependencies, then run `winapp-py generate`. |
+| The project has no recorded codegen version | Run `winapp-py init . --use-defaults --add-python-bindings` to record a version without resetting existing API selections, or run `winapp-py update` to select a new version. |
 
 ## Next Steps
 

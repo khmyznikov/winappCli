@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation and Contributors. All rights reserved.
 # Licensed under the MIT License.
 
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 import io
 import json
 from pathlib import Path
@@ -122,7 +122,7 @@ class PythonIdentityTests(ProjectTest):
             patch.object(identity, "run_tool") as native,
             patch.object(identity, "_verify_interpreter") as verify,
             patch.object(identity.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)),
-            redirect_stdout(output),
+            redirect_stderr(output),
         ):
             self.assertEqual(self.run_app(), 0)
         if record["interpreter"] == info.document():
@@ -184,6 +184,55 @@ class PythonIdentityTests(ProjectTest):
         prepare.assert_not_called()
         install.assert_not_called()
         self.assertEqual(identity._load_record(self.project), record)
+
+    def test_identity_setup_progress_and_verbose_tools_do_not_pollute_script_stdout(self):
+        output = io.StringIO()
+        diagnostics = io.StringIO()
+        payload = '{"identity": "ready"}\n'
+
+        def run_script(*arguments, **kwargs):
+            print(payload, end="")
+            return subprocess.CompletedProcess([], 37)
+
+        with (
+            patch.object(identity, "_packages", side_effect=[[], [], [self.package()]]),
+            patch.object(identity, "resolve_distribution", return_value=self.distribution),
+            patch.object(identity, "prepare_runtime", side_effect=self.prepare_files),
+            patch.object(identity, "synchronize_dependencies", side_effect=lambda *a, **kw: print("installer status")),
+            patch.object(identity, "run_tool", side_effect=lambda *a, **kw: print("native verbose output")),
+            patch.object(identity, "_verify_interpreter"),
+            patch.object(identity.subprocess, "run", side_effect=run_script) as launch,
+            redirect_stdout(output), redirect_stderr(diagnostics),
+        ):
+            self.assertEqual(identity.run_with_identity(
+                self.project, Path("app.py"), [], Path("winapp.exe"), None, verbose=True,
+            ), 37)
+        self.assertEqual(output.getvalue(), payload)
+        for message in ("Preparing development identity", "installer status", "native verbose output", "Running app.py"):
+            self.assertIn(message, diagnostics.getvalue())
+        self.assertNotIn("stdout", launch.call_args.kwargs)
+        self.assertNotIn("stderr", launch.call_args.kwargs)
+
+    def test_reused_identity_keeps_script_stdout_separate_from_status(self):
+        self.record()
+        output = io.StringIO()
+        diagnostics = io.StringIO()
+        payload = '{"reuse": true}\n'
+
+        def run_script(*arguments, **kwargs):
+            print(payload, end="")
+            return subprocess.CompletedProcess([], 0)
+
+        with (
+            patch.object(identity, "_packages", return_value=[self.package()]),
+            patch.object(identity, "_verify_interpreter"),
+            patch.object(identity.subprocess, "run", side_effect=run_script),
+            redirect_stdout(output), redirect_stderr(diagnostics),
+        ):
+            self.assertEqual(self.run_app(), 0)
+        self.assertEqual(output.getvalue(), payload)
+        self.assertIn("Reusing development identity", diagnostics.getvalue())
+        self.assertIn("Running app.py", diagnostics.getvalue())
 
     def test_changed_python_version_architecture_or_abi_rebuilds_owned_identity(self):
         record = self.record()

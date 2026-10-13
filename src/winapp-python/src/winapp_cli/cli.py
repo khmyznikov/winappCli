@@ -19,6 +19,7 @@ from .config import (
     DEFAULT_PACKAGE,
     add_config,
     load_config,
+    set_codegen_version,
     try_load_config,
 )
 from .dependencies import (
@@ -110,9 +111,9 @@ def build_parser(override: str | None = None) -> argparse.ArgumentParser:
         help="Forward native init, then optionally configure, generate and install Python bindings.",
     )
     for command, help_text in (
-        ("restore", "Restore pinned SDKs and generate configured Python bindings."),
-        ("generate", "Regenerate bindings using the existing SDK metadata inventory."),
-        ("update", "Update pinned SDKs, restore metadata, and regenerate bindings."),
+        ("restore", "Restore pinned SDKs and the project's codegen version, then generate Python bindings."),
+        ("generate", "Regenerate bindings with the project's codegen version and existing SDK metadata."),
+        ("update", "Update SDK and codegen versions, restore metadata, and regenerate bindings."),
     ):
         child = commands.add_parser(command, add_help=command == "generate",
                                     help=help_text, description=help_text)
@@ -177,7 +178,7 @@ def _run_in_project_venv(project: Path, script: Path, script_args: list[str]) ->
             f"Project .venv Python was not found: {python}. "
             "Run the script with your own Python interpreter, or use 'uv run <script>' for a uv project."
         )
-    print(f"Using project .venv: {python}", flush=True)
+    print(f"Using project .venv: {python}", file=sys.stderr, flush=True)
     try:
         return subprocess.run([str(python), str(script), *script_args], cwd=project, check=False).returncode
     except OSError as error:
@@ -185,7 +186,7 @@ def _run_in_project_venv(project: Path, script: Path, script_args: list[str]) ->
 
 
 def _prepare_codegen(
-    project: Path, *, python_option: Path | None = None, verbose: bool = False,
+    project: Path, codegen_version: Version | None, *, python_option: Path | None = None, verbose: bool = False,
     progress: Workflow | None = None,
 ) -> tuple[Path, Path, Version]:
     with progress.step("Prepare environment", "Project environment ready") if progress else nullcontext() as step:
@@ -196,12 +197,16 @@ def _prepare_codegen(
             step.complete(f"Environment: {location}")
         if verbose:
             print(f"Project Python: {python}", flush=True)
-    with progress.step("Prepare latest codegen") if progress else nullcontext() as step:
-        install_codegen(project, python, verbose=verbose)
+    with progress.step("Prepare codegen") if progress else nullcontext() as step:
+        install_codegen(project, python, codegen_version, verbose=verbose)
         selected = installed_codegen_version(project, python)
         if selected is None:
             raise WinappError("The installer did not provide dynwinrt-codegen package metadata.")
+        if codegen_version is not None and selected != codegen_version:
+            raise WinappError(f"The project requires dynwinrt-codegen=={codegen_version}, but the environment has {selected}.")
         codegen = find_codegen(project, selected, python)
+        if codegen_version is None:
+            set_codegen_version(project, selected)
         if step is not None:
             step.complete(f"Codegen: {selected}")
     return codegen, python, selected
@@ -209,16 +214,24 @@ def _prepare_codegen(
 
 def _bindings_after_sdk(
     project: Path, *, verbose: bool, force: bool = False, python_option: Path | None = None,
-    progress: Workflow | None = None,
+    progress: Workflow | None = None, upgrade_codegen: bool = False,
 ) -> None:
     config = try_load_config(project)
     if config is None:
         print("SDK packages restored; this project has no Python bindings configuration.", flush=True)
         return
+    if config.codegen_version is None and not upgrade_codegen:
+        raise WinappError(
+            "The project has no codegen-version recorded. "
+            "Run 'winapp-py init . --use-defaults --add-python-bindings' or 'winapp-py update' to record it."
+        )
     with nullcontext(progress) if progress is not None else Workflow("Preparing Python bindings", verbose=verbose) as workflow:
         codegen, python, selected = _prepare_codegen(
-            project, python_option=python_option, verbose=verbose, progress=workflow,
+            project, None if upgrade_codegen else config.codegen_version,
+            python_option=python_option, verbose=verbose, progress=workflow,
         )
+        if upgrade_codegen:
+            config = load_config(project)
         with workflow.step("Generate bindings") as step:
             output = generate(config, codegen, selected, verbose=verbose, force=force, report=step.complete)
         with workflow.step("Install dependencies", "Project dependencies installed"):
@@ -244,11 +257,14 @@ def _configure_after_init(project: Path, *, reset: bool, config_only: bool, verb
             if existing is None or reset:
                 add_config(project, package, reset=reset)
         if config_only:
-            _prepare_codegen(project, verbose=verbose, progress=workflow)
+            _prepare_codegen(project, load_config(project).codegen_version, verbose=verbose, progress=workflow)
             workflow.succeed("Bindings configured; run 'winapp-py restore' to generate and install them.")
             return
         load_inventory(project)
-        _bindings_after_sdk(project, verbose=verbose, progress=workflow)
+        _bindings_after_sdk(
+            project, verbose=verbose, progress=workflow,
+            upgrade_codegen=load_config(project).codegen_version is None,
+        )
         workflow.succeed("Python bindings ready.")
 
 
@@ -286,7 +302,7 @@ def _bindings_decision(project: Path, arguments: list[str], add: bool) -> tuple[
         if add:
             return True, False
         if defaults:
-            return True, True
+            return True, False
         if noninteractive:
             return True, False
         return True, _confirmation("Python bindings are already configured. Reset metadata selections to defaults?")
@@ -470,7 +486,10 @@ def main(argv: list[str] | None = None) -> int:
                 if args.command == "update" and config is not None:
                     with workflow.step("Restore updated SDKs and projections", "SDKs and projections ready"):
                         run_tool([str(native), "restore", str(project)], project, verbose=args.verbose)
-                _bindings_after_sdk(project, verbose=args.verbose, python_option=args.python, progress=workflow)
+                _bindings_after_sdk(
+                    project, verbose=args.verbose, python_option=args.python, progress=workflow,
+                    upgrade_codegen=args.command == "update",
+                )
                 workflow.succeed("Python bindings ready." if config is not None else "SDK packages ready.")
         return 0
     except (WinappError, OSError, UnicodeError) as error:

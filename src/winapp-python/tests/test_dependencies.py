@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import tomllib
+from packaging.version import Version
 from unittest.mock import patch
 
 from winapp_cli import dependencies as deps
@@ -55,6 +56,38 @@ class DependencyTests(ProjectTest):
         self.assertFalse((self.project / "pyproject.toml").exists())
         self.assertTrue((self.project / "requirements.txt").exists())
         self.assertFalse((self.project / "requirements-dev.txt").exists())
+
+    def test_application_include_does_not_gain_a_reverse_development_include(self):
+        source = self.project / "requirements.txt"
+        development = self.project / "requirements-dev.txt"
+        source.write_text("-r requirements-dev.txt\n", encoding="utf-8")
+        development.write_text("# development\npytest\n", encoding="utf-8")
+        before = development.read_bytes()
+
+        deps.register_dependencies(self.project, "myapp_winrt")
+
+        self.assertEqual(development.read_bytes(), before)
+        self.assertNotIn("-r requirements.txt", development.read_text())
+        self.assertIn(r"-e '.\.winapp\python\myapp_winrt'", source.read_text())
+        snapshot = (source.read_bytes(), development.read_bytes())
+        deps.register_dependencies(self.project, "myapp_winrt")
+        self.assertEqual(snapshot, (source.read_bytes(), development.read_bytes()))
+
+    def test_nested_application_include_does_not_create_a_requirements_cycle(self):
+        source = self.project / "requirements.txt"
+        development = self.project / "requirements-dev.txt"
+        directory = self.project / "deps"
+        directory.mkdir()
+        included = directory / "application.txt"
+        source.write_text("-r deps\\application.txt\n", encoding="utf-8")
+        included.write_text("-r ..\\requirements-dev.txt\n", encoding="utf-8")
+        development.write_text("pytest\n", encoding="utf-8")
+
+        deps.register_dependencies(self.project, "myapp_winrt")
+
+        self.assertEqual(development.read_text(), "pytest\n")
+        self.assertIn(development, deps.requirements_files(self.project, source))
+        self.assertIn(r"-e '.\.winapp\python\myapp_winrt'", source.read_text())
 
     def test_registration_removes_managed_declarations_and_preserves_included_comments(self):
         source = self.project / "requirements.txt"
@@ -317,7 +350,7 @@ class DependencyTests(ProjectTest):
         python = self.project / ".venv" / "Scripts" / "python.exe"
         declarations = (self.project / "pyproject.toml").read_bytes()
         with patch.object(deps, "run_tool") as run:
-            deps.install_codegen(self.project, python)
+            deps.install_codegen(self.project, python, None)
         self.assertEqual(run.call_args.args[0][5], str(python))
         self.assertIn("--upgrade", run.call_args.args[0])
         self.assertIn("--force-reinstall", run.call_args.args[0])
@@ -329,7 +362,7 @@ class DependencyTests(ProjectTest):
             patch.object(deps, "uv_executable", return_value="uv.exe"),
             patch.object(deps, "run_tool") as run,
         ):
-            deps.install_codegen(self.project, python)
+            deps.install_codegen(self.project, python, None)
         self.assertEqual(run.call_args.args[0][:3], ["uv.exe", "pip", "install"])
         self.assertIn("--upgrade", run.call_args.args[0])
         self.assertIn("--reinstall", run.call_args.args[0])
@@ -340,7 +373,44 @@ class DependencyTests(ProjectTest):
             patch.object(deps, "run_tool", side_effect=WinappError("package source unavailable")),
             self.assertRaisesRegex(WinappError, "package source unavailable"),
         ):
-            deps.install_codegen(self.project, self.project / ".venv" / "Scripts" / "python.exe")
+            deps.install_codegen(self.project, self.project / ".venv" / "Scripts" / "python.exe", None)
+
+    def test_project_codegen_install_is_exact_with_no_latest_resolution(self):
+        python = self.project / ".venv" / "Scripts" / "python.exe"
+        selected = Version("0.1.0rc23")
+        with patch.object(deps, "run_tool") as run:
+            deps.install_codegen(self.project, python, selected)
+        command = run.call_args.args[0]
+        self.assertEqual(command[-1], "dynwinrt-codegen==0.1.0rc23")
+        self.assertNotIn("--upgrade", command)
+        self.assertNotIn("--pre", command)
+        self.pyproject(uv=True)
+        with (
+            patch.object(deps, "uv_executable", return_value="uv.exe"),
+            patch.object(deps, "run_tool") as run,
+        ):
+            deps.install_codegen(self.project, python, selected)
+        command = run.call_args.args[0]
+        self.assertEqual(command[-1], "dynwinrt-codegen==0.1.0rc23")
+        self.assertNotIn("--upgrade", command)
+        self.assertNotIn("--prerelease", command)
+
+    def test_matching_project_codegen_is_reused_without_install_or_network(self):
+        python = self.project / ".venv" / "Scripts" / "python.exe"
+        python.parent.mkdir(parents=True)
+        launcher = python.with_name("dynwinrt-codegen.exe")
+        launcher.write_bytes(b"codegen")
+        with (
+            patch.object(deps, "installed_codegen_version", return_value=self.codegen_version) as metadata,
+            patch.object(deps, "run_tool") as run,
+        ):
+            deps.install_codegen(self.project, python, self.codegen_version)
+        metadata.assert_called_once_with(self.project, python)
+        run.assert_not_called()
+        launcher.unlink()
+        with patch.object(deps, "run_tool") as run:
+            deps.install_codegen(self.project, python, self.codegen_version)
+        self.assertEqual(run.call_args.args[0][-1], f"dynwinrt-codegen=={self.codegen_version}")
 
     def test_global_python_is_rejected_without_installing_packages(self):
         with (

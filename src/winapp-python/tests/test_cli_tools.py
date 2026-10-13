@@ -248,8 +248,10 @@ class CliTests(ProjectTest):
                     self.assertEqual(self.invoke("generate"), 1)
         self.assertIn("pip failed", self.stderr.getvalue())
 
-    def test_latest_codegen_is_checked_each_time_even_with_an_existing_installation(self):
-        selected = Version("0.1.0rc23")
+    def test_prepare_codegen_uses_the_project_pin_and_preserves_configuration(self):
+        selected = self.codegen_version
+        source = self.project / "pyproject.toml"
+        before = source.read_bytes()
         with (
             patch("winapp_cli.cli.ensure_project_python", return_value=self.project_python),
             patch("winapp_cli.cli.install_codegen") as install,
@@ -258,10 +260,11 @@ class CliTests(ProjectTest):
         ):
             for _ in range(2):
                 self.assertEqual(
-                    _prepare_codegen(self.project), (Path("codegen.exe"), self.project_python, selected),
+                    _prepare_codegen(self.project, selected), (Path("codegen.exe"), self.project_python, selected),
                 )
         self.assertEqual(install.call_count, 2)
-        install.assert_called_with(self.project, self.project_python, verbose=False)
+        install.assert_called_with(self.project, self.project_python, selected, verbose=False)
+        self.assertEqual(source.read_bytes(), before)
 
     def test_missing_latest_codegen_metadata_is_not_replaced_with_a_default_version(self):
         with (
@@ -271,11 +274,11 @@ class CliTests(ProjectTest):
             patch("winapp_cli.cli.find_codegen") as find,
             self.assertRaisesRegex(WinappError, "installer did not provide"),
         ):
-            _prepare_codegen(self.project)
+            _prepare_codegen(self.project, None)
         find.assert_not_called()
 
-    def test_generated_version_comes_from_installed_codegen_not_project_declarations(self):
-        selected = Version("0.1.0rc23")
+    def test_generated_version_uses_the_resolved_project_pin(self):
+        selected = self.codegen_version
         source = self.project / "pyproject.toml"
         before = source.read_bytes()
         with (
@@ -286,6 +289,86 @@ class CliTests(ProjectTest):
             self.assertEqual(self.invoke("generate"), 0)
         self.assertEqual(generate.call_args.args[2], selected)
         self.assertEqual(source.read_bytes(), before)
+
+    def test_first_setup_records_the_resolved_version_without_changing_selections(self):
+        source = self.project / "pyproject.toml"
+        source.write_text(source.read_text().replace(f'codegen-version = "{self.codegen_version}"\n', ""), encoding="utf-8")
+        expected = self.config()
+        selected = Version("0.1.0rc23")
+        with (
+            patch("winapp_cli.cli.ensure_project_python", return_value=self.project_python),
+            patch("winapp_cli.cli.install_codegen") as install,
+            patch("winapp_cli.cli.installed_codegen_version", return_value=selected),
+            patch("winapp_cli.cli.find_codegen", return_value=Path("codegen.exe")),
+        ):
+            _prepare_codegen(self.project, None)
+        install.assert_called_once_with(self.project, self.project_python, None, verbose=False)
+        self.assertEqual(self.config().codegen_version, selected)
+        self.assertEqual(self.config().types, expected.types)
+        self.assertEqual(self.config().scope, expected.scope)
+
+    def test_installer_version_mismatch_does_not_change_project_or_generate(self):
+        source = self.project / "pyproject.toml"
+        before = source.read_bytes()
+        with (
+            patch("winapp_cli.cli.ensure_project_python", return_value=self.project_python),
+            patch("winapp_cli.cli.install_codegen"),
+            patch("winapp_cli.cli.installed_codegen_version", return_value=Version("0.1.0rc23")),
+            patch("winapp_cli.cli.find_codegen") as find,
+            self.assertRaisesRegex(WinappError, "project requires"),
+        ):
+            _prepare_codegen(self.project, self.codegen_version)
+        find.assert_not_called()
+        self.assertEqual(source.read_bytes(), before)
+
+    def test_restore_and_generate_do_not_resolve_a_missing_pin(self):
+        source = self.project / "pyproject.toml"
+        source.write_text(source.read_text().replace(f'codegen-version = "{self.codegen_version}"\n', ""), encoding="utf-8")
+        for command in ("restore", "generate"):
+            with self.subTest(command=command):
+                with (
+                    patch("winapp_cli.cli.find_native_cli", return_value=Path("winapp.exe")),
+                    patch("winapp_cli.cli.run_tool"),
+                    patch("winapp_cli.cli._prepare_codegen") as prepare,
+                    patch("winapp_cli.cli.generate") as generate,
+                ):
+                    self.assertEqual(self.invoke(command), 1)
+                prepare.assert_not_called()
+                generate.assert_not_called()
+                self.assertIn("no codegen-version recorded", self.stderr.getvalue())
+
+    def test_explicit_update_advances_the_project_version_and_uses_it_for_generation(self):
+        selected = Version("0.1.0rc23")
+        with (
+            patch("winapp_cli.cli.find_native_cli", return_value=Path("winapp.exe")),
+            patch("winapp_cli.cli.run_tool"),
+            patch("winapp_cli.cli.ensure_project_python", return_value=self.project_python),
+            patch("winapp_cli.cli.install_codegen") as install,
+            patch("winapp_cli.cli.installed_codegen_version", return_value=selected),
+            patch("winapp_cli.cli.find_codegen", return_value=Path("codegen.exe")),
+            patch("winapp_cli.cli.generate", return_value=self.config().output) as generate,
+            patch("winapp_cli.cli.synchronize_project"),
+        ):
+            self.assertEqual(self.invoke("update"), 0)
+        install.assert_called_once_with(self.project, self.project_python, None, verbose=False)
+        self.assertEqual(self.config().codegen_version, selected)
+        self.assertEqual(generate.call_args.args[0].codegen_version, selected)
+        self.assertEqual(generate.call_args.args[2], selected)
+
+    def test_failed_update_resolution_preserves_the_project_version(self):
+        source = self.project / "pyproject.toml"
+        before = source.read_bytes()
+        with (
+            patch("winapp_cli.cli.find_native_cli", return_value=Path("winapp.exe")),
+            patch("winapp_cli.cli.run_tool"),
+            patch("winapp_cli.cli.ensure_project_python", return_value=self.project_python),
+            patch("winapp_cli.cli.install_codegen", side_effect=WinappError("package source unavailable")),
+            patch("winapp_cli.cli.generate") as generate,
+        ):
+            self.assertEqual(self.invoke("update"), 1)
+        generate.assert_not_called()
+        self.assertEqual(source.read_bytes(), before)
+        self.assertIn("package source unavailable", self.stderr.getvalue())
 
     def test_missing_config_is_an_error_not_a_noop(self):
         (self.project / "pyproject.toml").unlink()
@@ -458,11 +541,29 @@ class CliTests(ProjectTest):
         launch.assert_called_once_with(
             [str(self.project_python), str(script)], cwd=self.project, check=False,
         )
-        self.assertIn(f"Using project .venv: {self.project_python}", self.stdout.getvalue())
+        self.assertEqual(self.stdout.getvalue(), "")
+        self.assertIn(f"Using project .venv: {self.project_python}", self.stderr.getvalue())
         native.assert_not_called()
         identity.assert_not_called()
         environment.assert_not_called()
         install.assert_not_called()
+
+    def test_ordinary_python_json_stdout_is_not_prefixed_by_wrapper_status(self):
+        script = self.project / "app.py"
+        script.write_text("", encoding="utf-8")
+        payload = '{"result": 42}\n'
+
+        def run_script(*arguments, **kwargs):
+            print(payload, end="")
+            return subprocess.CompletedProcess([], 37)
+
+        with (
+            patch("winapp_cli.cli.subprocess.run", side_effect=run_script),
+            redirect_stdout(self.stdout), redirect_stderr(self.stderr),
+        ):
+            self.assertEqual(main(["run", "--project", str(self.project), "app.py"]), 37)
+        self.assertEqual(self.stdout.getvalue(), payload)
+        self.assertIn("Using project .venv:", self.stderr.getvalue())
 
     def test_build_output_directory_named_py_is_still_a_native_input(self):
         directory = self.project / "build.py"

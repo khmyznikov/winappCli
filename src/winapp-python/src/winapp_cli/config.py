@@ -9,6 +9,7 @@ import sys
 from typing import Literal
 
 import tomlkit
+from packaging.version import InvalidVersion, Version
 
 from .dependencies import edit_pyproject, read_pyproject
 from .errors import WinappError
@@ -34,6 +35,7 @@ class BindingsConfig:
     additional_winmds: tuple[AdditionalWinmd, ...] = ()
     additional_refs: tuple[Path, ...] = ()
     scope: BindingScope = "default"
+    codegen_version: Version | None = None
 
     @property
     def output(self) -> Path:
@@ -131,12 +133,20 @@ def try_load_config(project: Path) -> BindingsConfig | None:
         return None
     if not isinstance(config, dict):
         raise WinappError(f"[{CONFIG_TABLE}] must be a TOML table.")
-    unknown = config.keys() - {"package", "types", "additional-winmds", "additional-refs", "scope"}
+    unknown = config.keys() - {"package", "types", "additional-winmds", "additional-refs", "scope", "codegen-version"}
     if unknown:
         raise WinappError(
-            f"Unknown [{CONFIG_TABLE}] setting(s): {', '.join(sorted(unknown))}. "
-            "winapp-py manages the latest codegen and matching runtime automatically."
+            f"Unknown [{CONFIG_TABLE}] setting(s): {', '.join(sorted(unknown))}."
         )
+    codegen_version = None
+    if "codegen-version" in config:
+        value = config["codegen-version"]
+        if not isinstance(value, str) or not value or value != value.strip():
+            raise WinappError(f"[{CONFIG_TABLE}].codegen-version must be an exact Python package version.")
+        try:
+            codegen_version = Version(value)
+        except InvalidVersion as error:
+            raise WinappError(f"[{CONFIG_TABLE}].codegen-version must be an exact Python package version: {value}") from error
     package = _validate_package(config.get("package"))
     scope = config.get("scope", "default")
     if scope not in ("types", "default"):
@@ -149,7 +159,7 @@ def try_load_config(project: Path) -> BindingsConfig | None:
         _metadata_path(project, name, "additional-refs")
         for name in _strings(config.get("additional-refs", []), "additional-refs")
     )
-    return BindingsConfig(project, package, types, additional, unique_paths(refs), scope)
+    return BindingsConfig(project, package, types, additional, unique_paths(refs), scope, codegen_version)
 
 
 def load_config(project: Path) -> BindingsConfig:
@@ -157,6 +167,16 @@ def load_config(project: Path) -> BindingsConfig:
     if config is None:
         raise WinappError(f"Missing [{CONFIG_TABLE}] in {local_path(project) / 'pyproject.toml'}.")
     return config
+
+
+def set_codegen_version(project: Path, version: Version) -> BindingsConfig:
+    load_config(project)
+
+    def update(document) -> None:
+        document["tool"]["winapp"]["python-bindings"]["codegen-version"] = str(version)
+
+    edit_pyproject(project, update)
+    return load_config(project)
 
 
 def add_config(project: Path, package: str, *, reset: bool = False) -> BindingsConfig:
@@ -174,6 +194,8 @@ def add_config(project: Path, package: str, *, reset: bool = False) -> BindingsC
         table["types"] = []
         table["additional-winmds"] = []
         table["additional-refs"] = []
+        if existing is not None and existing.codegen_version is not None:
+            table["codegen-version"] = str(existing.codegen_version)
         settings["python-bindings"] = table
 
     edit_pyproject(project, update)

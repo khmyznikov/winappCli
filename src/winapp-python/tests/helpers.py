@@ -46,7 +46,7 @@ class ProjectTest(unittest.TestCase):
         scope_line = f'scope = "{scope or "types"}"\n'
         (self.project / "pyproject.toml").write_text(
             f'[tool.winapp.python-bindings]\npackage = "{package}"\n'
-            f'{scope_line}types = {json.dumps(types)}\n{extra}',
+            f'{scope_line}codegen-version = "{self.codegen_version}"\ntypes = {json.dumps(types)}\n{extra}',
             encoding="utf-8",
         )
         (self.project / "requirements.txt").write_text("", encoding="utf-8")

@@ -9,6 +9,7 @@ dev = ["pyinstaller>=6,<7"]
 
 [tool.winapp.python-bindings]
 package = "winapp_bindings"
+codegen-version = "0.1.0rc23"
 scope = "types"
 types = [
     "Microsoft.UI.Xaml.Application",

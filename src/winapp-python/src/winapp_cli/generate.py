@@ -159,6 +159,8 @@ def require_current_package(config: BindingsConfig) -> Path:
         selected = Version(owner["codegen_version"])
     except InvalidVersion as error:
         raise WinappError("Invalid generated codegen version; run 'winapp-py generate --force'.") from error
+    if config.codegen_version is None or selected != config.codegen_version:
+        raise WinappError("Generated bindings do not match the project's codegen-version. Run 'winapp-py restore'.")
     roots, refs = select_metadata(config)
     if (
         owner.get("inputs_digest") != _inputs_digest(config, roots, refs, selected)
@@ -173,6 +175,8 @@ def generate(
     config: BindingsConfig, executable: Path, codegen_version: Version, *, verbose: bool = False, force: bool = False,
     report: Callable[[str], None] | None = None,
 ) -> Path:
+    if config.codegen_version is None or codegen_version != config.codegen_version:
+        raise WinappError("Codegen does not match the project's codegen-version; bindings were not changed.")
     emit_winmds, refs = select_metadata(config)
     inputs_digest = _inputs_digest(config, emit_winmds, refs, codegen_version)
     output = local_path(config.output, boundary=config.project)

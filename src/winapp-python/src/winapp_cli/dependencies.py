@@ -15,13 +15,14 @@ from typing import Literal
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.utils import canonicalize_name
+from packaging.version import Version
 import tomlkit
 from tomlkit.toml_document import TOMLDocument
 
 from .errors import WinappError
 from .paths import local_path
 from .python_runtime import Interpreter, clean_python_environment, probe_interpreter, select_project_python
-from .tools import run_tool
+from .tools import installed_codegen_version, run_tool
 
 INSTALLER_TIMEOUT = "60"
 MANAGED_PACKAGES = frozenset({"dynwinrt", "dynwinrt-codegen"})
@@ -305,10 +306,12 @@ def register_dependencies(project: Path, package: str, *, previous_package: str 
     if dependencies.kind == "requirements":
         application = dependencies.source
         development = dependencies.development_file
+        application_files = requirements_files(project, application) if application.exists() else (application,)
+        development_additions = [] if development in application_files else [f"-r {application.name}"]
         candidates: dict[Path, tuple[bytes, bytes]] = {}
         for root, additions in (
             (application, [f"-e '.\\.winapp\\python\\{package}'"]),
-            (development, [f"-r {application.name}"]),
+            (development, development_additions),
         ):
             if root == development and not root.exists():
                 continue
@@ -451,7 +454,13 @@ def installer_environment(project: Path, executable: Path, *, uv: bool = False) 
     return environment
 
 
-def install_codegen(project: Path, executable: Path, *, verbose: bool = False) -> None:
+def install_codegen(project: Path, executable: Path, version: Version | None, *, verbose: bool = False) -> None:
+    if (
+        version is not None
+        and (executable.parent / "dynwinrt-codegen.exe").is_file()
+        and installed_codegen_version(project, executable) == version
+    ):
+        return
     dependencies = detect_dependencies(project)
     prefix = (
         [uv_executable(), "pip", "install", "--python", str(executable)]
@@ -459,13 +468,16 @@ def install_codegen(project: Path, executable: Path, *, verbose: bool = False) -
         else _pip_command(executable, "install", "--disable-pip-version-check", "--no-input")
     )
     if verbose:
-        print(f"Installing the latest dynwinrt-codegen with project Python: {executable}...", flush=True)
+        requested = f"dynwinrt-codegen=={version}" if version is not None else "the latest dynwinrt-codegen"
+        print(f"Installing {requested} with project Python: {executable}...", flush=True)
     resolution = (
         ["--upgrade", "--reinstall", "--prerelease", "allow"]
         if dependencies.kind == "uv" else ["--upgrade", "--force-reinstall", "--pre"]
     )
-    run_tool([*prefix, "--only-binary=dynwinrt-codegen", *resolution,
-              "dynwinrt-codegen"], project, verbose=verbose,
+    if version is not None:
+        resolution = ["--reinstall"] if dependencies.kind == "uv" else ["--force-reinstall"]
+    requirement = f"dynwinrt-codegen=={version}" if version is not None else "dynwinrt-codegen"
+    run_tool([*prefix, "--only-binary=dynwinrt-codegen", *resolution, requirement], project, verbose=verbose,
              environment=installer_environment(project, executable, uv=dependencies.kind == "uv"))
 
 

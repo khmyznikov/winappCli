@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from packaging.version import Version
 
+from winapp_cli.config import set_codegen_version
 from winapp_cli.errors import WinappError
 from winapp_cli.generate import MARKER, generate, require_current_package, validate_output
 
@@ -206,12 +207,12 @@ class GenerationTests(ProjectTest):
         self.assertFalse((output / "Uri.py").exists())
         self.assertTrue((output / "ApplicationData.py").exists())
 
-    def test_latest_codegen_version_regenerates_without_project_dependency_changes(self):
+    def test_project_codegen_version_update_regenerates_matching_runtime(self):
         source = self.project / "pyproject.toml"
-        declarations = source.read_bytes()
         with patch("winapp_cli.generate.run_tool", side_effect=self.fake_codegen) as tool:
             output = generate(self.config(), Path("codegen.exe"), self.codegen_version)
             self.codegen_version = Version("0.1.0rc23")
+            set_codegen_version(self.project, self.codegen_version)
             generate(self.config(), Path("codegen.exe"), self.codegen_version)
             self.assertEqual(tool.call_count, 2)
             generate(self.config(), Path("codegen.exe"), self.codegen_version)
@@ -219,14 +220,31 @@ class GenerationTests(ProjectTest):
         marker = json.loads((output / MARKER).read_text())
         self.assertEqual(marker["codegen_version"], "0.1.0rc23")
         self.assertIn("dynwinrt==0.1.0-preview.23", (output / "pyproject.toml").read_text())
-        self.assertEqual(source.read_bytes(), declarations)
+        self.assertIn('codegen-version = "0.1.0rc23"', source.read_text())
+        self.assertNotIn("dependencies", source.read_text())
         self.assertEqual(require_current_package(self.config()), output)
 
     def test_generated_version_is_not_limited_to_the_winapp_release(self):
         self.codegen_version = Version("0.2.0")
+        set_codegen_version(self.project, self.codegen_version)
         with patch("winapp_cli.generate.run_tool", side_effect=self.fake_codegen):
             output = generate(self.config(), Path("codegen.exe"), self.codegen_version)
         self.assertEqual(require_current_package(self.config()), output)
+
+    def test_project_version_change_requires_regeneration_before_identity_reuse(self):
+        with patch("winapp_cli.generate.run_tool", side_effect=self.fake_codegen):
+            output = generate(self.config(), Path("codegen.exe"), self.codegen_version)
+        before = (output / "pyproject.toml").read_bytes()
+        set_codegen_version(self.project, Version("0.1.0rc23"))
+        with self.assertRaisesRegex(WinappError, "project's codegen-version"):
+            require_current_package(self.config())
+        with (
+            patch("winapp_cli.generate.run_tool") as tool,
+            self.assertRaisesRegex(WinappError, "Codegen does not match"),
+        ):
+            generate(self.config(), Path("codegen.exe"), self.codegen_version)
+        tool.assert_not_called()
+        self.assertEqual((output / "pyproject.toml").read_bytes(), before)
 
     def test_missing_codegen_marker_version_cannot_reuse_the_cache(self):
         with patch("winapp_cli.generate.run_tool", side_effect=self.fake_codegen) as tool:
