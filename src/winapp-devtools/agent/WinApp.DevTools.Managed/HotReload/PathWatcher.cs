@@ -7,15 +7,16 @@ using System.Reflection;
 namespace WinApp.DevTools.Managed.HotReload;
 
 /// <summary>
-/// Calls back when any property along the given paths changes (INotifyPropertyChanged at each step), the way a
-/// one-way x:Bind function re-evaluates when one of its arguments changes.
+/// Calls back when any property along the given paths changes (INotifyPropertyChanged, or a dependency property of an
+/// element such as an x:Name'd CheckBox's IsChecked), the way a one-way x:Bind function re-evaluates when one of its
+/// arguments changes.
 /// </summary>
 internal sealed class PathWatcher : IDisposable
 {
     private readonly object _root;
     private readonly IReadOnlyList<string> _paths;
     private readonly Action _changed;
-    private readonly List<(INotifyPropertyChanged Source, PropertyChangedEventHandler Handler)> _subscriptions = [];
+    private readonly List<Action> _subscriptions = [];
     private bool _disposed;
 
     public PathWatcher(object root, IReadOnlyList<string> paths, Action changed)
@@ -48,9 +49,19 @@ internal sealed class PathWatcher : IDisposable
                         }
                     };
                     notifier.PropertyChanged += handler;
-                    _subscriptions.Add((notifier, handler));
+                    _subscriptions.Add(() => notifier.PropertyChanged -= handler);
                 }
-                current = current.GetType().GetProperty(segment, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)?.GetValue(current);
+                else if (current is Microsoft.UI.Xaml.DependencyObject element && DependencyPropertyOf(element.GetType(), segment) is { } property)
+                {
+                    var token = element.RegisterPropertyChangedCallback(property, (_, _) => OnChanged());
+                    _subscriptions.Add(() => element.UnregisterPropertyChangedCallback(property, token));
+                }
+                const BindingFlags members = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                // A property, or a field (an x:Name); a nullable's Value is the boxed value itself.
+                current = current.GetType().GetProperty(segment, members) is { } getter ? getter.GetValue(current)
+                    : current.GetType().GetField(segment, members) is { } field ? field.GetValue(current)
+                    : segment == "Value" && current.GetType().IsValueType ? current
+                    : null;
             }
         }
     }
@@ -69,11 +80,31 @@ internal sealed class PathWatcher : IDisposable
 
     private void Unsubscribe()
     {
-        foreach (var (source, handler) in _subscriptions)
+        foreach (var unsubscribe in _subscriptions)
         {
-            source.PropertyChanged -= handler;
+            unsubscribe();
         }
         _subscriptions.Clear();
+    }
+
+    /// <summary>A type's dependency property by name (TextBox.Text: TextBox.TextProperty, declared here or on a base).</summary>
+    private static Microsoft.UI.Xaml.DependencyProperty? DependencyPropertyOf(Type type, string name)
+    {
+        for (var t = type; t is not null; t = t.BaseType)
+        {
+            try
+            {
+                if (t.GetProperty(name + "Property", BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly)?.GetValue(null) is Microsoft.UI.Xaml.DependencyProperty property)
+                {
+                    return property;
+                }
+            }
+            catch (TargetInvocationException)
+            {
+                return null;
+            }
+        }
+        return null;
     }
 
     public void Dispose()

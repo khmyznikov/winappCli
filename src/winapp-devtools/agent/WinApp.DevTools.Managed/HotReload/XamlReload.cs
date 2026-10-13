@@ -1095,10 +1095,77 @@ internal static class XamlReload
         };
     }
 
+    /// <summary>The component's own dependency properties (declared by the app's types) that hold a collection.</summary>
+    private static List<(DependencyProperty Property, object Value)> OwnCollections(object component)
+    {
+        var result = new List<(DependencyProperty, object)>();
+        if (component is not DependencyObject element)
+        {
+            return result;
+        }
+        for (var type = component.GetType(); type is not null && type.Assembly == component.GetType().Assembly; type = type.BaseType)
+        {
+            foreach (var member in type.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly).Select(f => f.GetValue(null))
+                .Concat(type.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly).Where(p => p.PropertyType == typeof(DependencyProperty)).Select(p => p.GetValue(null))))
+            {
+                if (member is DependencyProperty property && element.ReadLocalValue(property) is System.Collections.IEnumerable value and not string &&
+                    value != DependencyProperty.UnsetValue)
+                {
+                    result.Add((property, value));
+                }
+            }
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Elements a component shows that come from elsewhere (a page's sample handed to a ContentPresenter through
+    /// Content="{x:Bind Example}") are freed from the old tree, so the rebuilt one can show them; the returned action
+    /// puts them back when the reload is undone.
+    /// </summary>
+    private static Action ReleaseHostedContent(object component)
+    {
+        var released = new List<(DependencyObject Host, DependencyProperty Property, object Content)>();
+        // The component's named presenters and content controls (its x:Name fields): template parts and kept Frames are
+        // never among them.
+        for (var type = component.GetType(); type is not null && type.Assembly == component.GetType().Assembly; type = type.BaseType)
+        {
+            foreach (var field in type.GetFields(InstanceMembers | BindingFlags.DeclaredOnly))
+            {
+                switch (field.GetValue(component))
+                {
+                    case ContentPresenter { Content: UIElement content } presenter:
+                        released.Add((presenter, ContentPresenter.ContentProperty, content));
+                        presenter.Content = null;
+                        break;
+                    case ContentControl { Content: UIElement content } control and not Frame:
+                        released.Add((control, ContentControl.ContentProperty, content));
+                        control.Content = null;
+                        break;
+                }
+            }
+        }
+        return () =>
+        {
+            foreach (var (host, property, content) in released)
+            {
+                try
+                {
+                    host.SetValue(property, content);
+                }
+                catch (Exception ex) when (ex is COMException or ArgumentException)
+                {
+                    HotReloadAgent.Log($"restoring hosted content failed: {ex.Message}");
+                }
+            }
+        };
+    }
+
     private static void ReloadMarkup(object component)
     {
         var restore = Snapshot(component);
         var keepAdded = CodeAddedItems.Detach(component);
+        var hosted = ReleaseHostedContent(component);
         try
         {
             ClearErrorInfo();
@@ -1108,6 +1175,7 @@ internal static class XamlReload
         catch (Exception ex)
         {
             restore();
+            hosted();
             ReportError(Describe(ex, ClassUris.GetValueOrDefault(component.GetType().FullName!), component.GetType().Name));
         }
         finally
@@ -1122,6 +1190,7 @@ internal static class XamlReload
         HotReloadAgent.Log($"reinitialize {type.FullName}");
         var restore = Snapshot(component);
         var keepAdded = CodeAddedItems.Detach(component);
+        var hosted = ReleaseHostedContent(component);
         try
         {
             ClearErrorInfo();
@@ -1129,12 +1198,23 @@ internal static class XamlReload
             var replay = type.GetMethod(ReplayMethod, InstanceMembers, Type.EmptyTypes);
             // The constructor body runs again; subscriptions it makes to objects that outlive it would otherwise double.
             var events = replay is null ? null : new LiveObjects.EventSnapshot(component);
+            var collections = replay is null ? [] : OwnCollections(component);
             (replay ?? type.GetMethod("InitializeComponent", InstanceMembers, Type.EmptyTypes))?.Invoke(component, null);
             events?.RemoveDuplicates();
+            foreach (var (property, value) in collections)
+            {
+                // The constructor creates it empty; whoever hosts the component filled it (ControlExample.Substitutions
+                // from the page's markup). The replay would replace it with a new empty one.
+                if (component is DependencyObject element && !ReferenceEquals(element.GetValue(property), value))
+                {
+                    element.SetValue(property, value);
+                }
+            }
         }
         catch (Exception ex)
         {
             restore();
+            hosted();
             ReportError(Describe(ex, ClassUris.GetValueOrDefault(type.FullName!), type.Name));
         }
         finally
@@ -1447,6 +1527,20 @@ internal static class XamlReload
                 BindFunction(source, functions, target, property, owner!.GetProperty(spec.Property)?.PropertyType, spec, function, watchOwner);
                 return;
             }
+            // One-time and one-way x:Bind are values set on the target (again whenever something along the path changes),
+            // as compiled x:Bind does. That passes any object (a .NET list into an IList<T> property, an element into
+            // Content), which a Binding can't.
+            var mode = Enum.TryParse<BindingMode>(spec.Mode, out var parsed) ? parsed : BindingMode.OneTime;
+            var propertyType = owner?.GetProperty(spec.Property)?.PropertyType;
+            if (mode != BindingMode.TwoWay && TrySetOnce(source, spec.Path, target, property, propertyType, spec))
+            {
+                if (mode == BindingMode.OneWay && source is not null && spec.Path.Length > 0)
+                {
+                    var root = source;
+                    Watchers.GetOrCreateValue(watchOwner).Add(new PathWatcher(root, [spec.Path], () => TrySetOnce(root, spec.Path, target, property, propertyType, spec)));
+                }
+                return;
+            }
             // Binding only walks public properties; x:Bind also reaches fields (x:Name elements) and non-public members.
             // Those leading steps are resolved here and the binding starts at the object they lead to.
             var path = spec.Path;
@@ -1462,11 +1556,12 @@ internal static class XamlReload
                     ?? source.GetType().GetProperty(head, InstanceMembers)?.GetValue(source);
                 path = dot < 0 ? "" : path[(dot + 1)..];
             }
+            path = WithoutNullableValue(source?.GetType(), path);
             var binding = new Binding
             {
                 Path = new PropertyPath(path),
                 Source = source,
-                Mode = Enum.TryParse<BindingMode>(spec.Mode, out var mode) ? mode : BindingMode.OneTime,
+                Mode = mode,
             };
             if (Enum.TryParse<UpdateSourceTrigger>(spec.UpdateSourceTrigger, out var trigger))
             {
@@ -1490,6 +1585,123 @@ internal static class XamlReload
         {
             Report($"x:Bind {spec.Path}: {ex.GetBaseException().Message}");
         }
+    }
+
+    /// <summary>Reads a property path by reflection and sets it on the target; false when it can't (a Binding is used instead).</summary>
+    private static bool TrySetOnce(object? source, string path, DependencyObject target, DependencyProperty property, Type? propertyType, RootBinding spec)
+    {
+        var value = source;
+        foreach (var segment in path.Length == 0 ? [] : path.Split('.'))
+        {
+            if (value is null || segment.Contains('[') || segment.Contains('('))
+            {
+                return false;
+            }
+            var type = value.GetType();
+            if (segment == "Value" && type.IsValueType && type.GetProperty("Value") is null)
+            {
+                // A nullable's Value: the boxed value itself.
+                continue;
+            }
+            if (type.GetProperty(segment, InstanceMembers) is { } getter && getter.GetIndexParameters().Length == 0)
+            {
+                value = getter.GetValue(value);
+            }
+            else if (type.GetField(segment, InstanceMembers) is { } field)
+            {
+                value = field.GetValue(value);
+            }
+            else
+            {
+                return false;
+            }
+        }
+        if (spec.Converter is { } converter)
+        {
+            if (Resource(target, converter) is not IValueConverter valueConverter)
+            {
+                return false;
+            }
+            value = valueConverter.Convert(value, propertyType ?? typeof(object), spec.ConverterParameter, "");
+        }
+        else if (propertyType == typeof(string) && value is not null and not string)
+        {
+            value = TextConverter.Instance.Convert(value, typeof(string), null, "");
+        }
+        if (value is null && spec.TargetNullValue is { } nullValue)
+        {
+            value = nullValue;
+        }
+        if (!TryCoerce(value, propertyType, out value))
+        {
+            return false;
+        }
+        try
+        {
+            target.SetValue(property, value);
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidCastException or COMException)
+        {
+            HotReloadAgent.Log($"x:Bind {spec.Path}: setting it directly failed ({ex.Message}); binding instead");
+            return false;
+        }
+    }
+
+    /// <summary>The conversions compiled x:Bind makes implicitly (bool to Visibility and back, text to an enum, numbers).</summary>
+    private static bool TryCoerce(object? value, Type? type, out object? result)
+    {
+        result = value;
+        if (value is null || type is null || type.IsInstanceOfType(value))
+        {
+            return true;
+        }
+        type = Nullable.GetUnderlyingType(type) ?? type;
+        switch (value)
+        {
+            case bool flag when type == typeof(Visibility):
+                result = flag ? Visibility.Visible : Visibility.Collapsed;
+                return true;
+            case Visibility visibility when type == typeof(bool):
+                result = visibility == Visibility.Visible;
+                return true;
+            case string text when type.IsEnum && Enum.TryParse(type, text, ignoreCase: true, out var parsed):
+                result = parsed;
+                return true;
+            case IConvertible when (type.IsPrimitive || type == typeof(decimal)) && (value.GetType().IsPrimitive || value is decimal):
+                try
+                {
+                    result = Convert.ChangeType(value, type, System.Globalization.CultureInfo.InvariantCulture);
+                    return true;
+                }
+                catch (Exception ex) when (ex is InvalidCastException or OverflowException)
+                {
+                    return false;
+                }
+            default:
+                return type.IsInstanceOfType(value);
+        }
+    }
+
+    /// <summary>
+    /// A binding reads a nullable property (CheckBox.IsChecked) as its boxed value, which has no Value property: x:Bind's
+    /// "IsChecked.Value" becomes "IsChecked". Followed by property type from <paramref name="type"/>.
+    /// </summary>
+    private static string WithoutNullableValue(Type? type, string path)
+    {
+        var segments = path.Split('.');
+        var kept = new List<string>();
+        foreach (var segment in segments)
+        {
+            if (segment == "Value" && type is not null && Nullable.GetUnderlyingType(type) is { } underlying)
+            {
+                type = underlying;
+                continue;
+            }
+            kept.Add(segment);
+            type = segment.Contains('[') ? null : type?.GetProperty(segment, BindingFlags.Public | BindingFlags.Instance)?.PropertyType;
+        }
+        return string.Join('.', kept);
     }
 
     /// <summary>Content files replaced while the app runs (app-relative, "/"-separated).</summary>
