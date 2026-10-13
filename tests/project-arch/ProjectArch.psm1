@@ -24,9 +24,10 @@ function New-AppSpec([hashtable]$Overrides = @{}) {
 .SYNOPSIS
     Returns the fixture catalog. Each fixture is a hashtable:
     Id, Sdk ('1.6'|'1.8'|'2.5'), Why (what it guards), App (kind/packaging/Platforms/RIDs/refs/extra
-    properties), Libs (referenced projects), and optional PlatformsInProps, Sln, PubXml, TargetsXml, Arch
-    (overrides the suite's -Architecture, for cross-architecture builds), and UserCustomAfter (the fixture
-    sets its own CustomAfterMicrosoftCommonTargets, which winapp must keep).
+    properties), Libs (referenced projects, optionally with raw Xml), and optional PlatformsInProps, Sln, PubXml,
+    TargetsXml, Files (extra files by relative path), Arch (overrides the suite's -Architecture, for
+    cross-architecture builds), and UserCustomAfter (the app sets its own CustomAfterMicrosoftCommonTargets
+    through an imported file, which must still run).
 #>
 function Get-ProjectArchFixtures {
     $msixLib = @{ EnableMsixTooling = 'true' }
@@ -104,7 +105,19 @@ function Get-ProjectArchFixtures {
         @{ Id = 'R24-multitarget-tfm-rid'; Sdk = '1.8'; App = (New-AppSpec @{ Kind = 'console'; Packaged = $false; Platforms = $null; Rids = $null; Refs = @('LibM') }); Libs = @(@{ Name = 'LibM'; Kind = 'multi'; Xml = '  <PropertyGroup Condition="''$(TargetFramework)'' != '''' and ''$(TargetFramework)'' != ''netstandard2.0''"><RuntimeIdentifier>win-x86</RuntimeIdentifier></PropertyGroup>' }); Why = 'Multi-targeted reference that sets a RuntimeIdentifier for only one target framework' }
         @{ Id = 'R25-helper-cross-arch'; Sdk = '1.6'; Arch = 'x86'; App = (New-AppSpec @{ Refs = @('LibW', @{ Name = 'Helper'; Meta = @{ ReferenceOutputAssembly = 'false' } }) }); Libs = @(@{ Name = 'LibW'; Kind = 'winui' }, @{ Name = 'Helper'; Kind = 'exe' }); Why = 'Packaged app with a WinUI library and a build-order-only helper, built for another architecture' }
         @{ Id = 'R26-ref-setplatform-rid'; Sdk = '1.8'; App = (New-AppSpec @{ Kind = 'console'; Packaged = $false; Platforms = $null; Rids = $null; Refs = @(@{ Name = 'LibP'; Meta = @{ SetPlatform = 'Platform=AnyCPU' } }) }); Libs = @(@{ Name = 'LibP'; Kind = 'exe'; Xml = '  <PropertyGroup Condition="''$(Platform)'' == ''AnyCPU''"><RuntimeIdentifier>win-x86</RuntimeIdentifier></PropertyGroup>' }); Why = 'Reference whose SetPlatform metadata selects a RuntimeIdentifier' }
-        @{ Id = 'R27-user-customafter'; Sdk = '1.8'; UserCustomAfter = $true; App = (New-AppSpec @{ Refs = @('LibW') }); Libs = @(@{ Name = 'LibW'; Kind = 'winui' }); Why = 'Project that sets its own CustomAfterMicrosoftCommonTargets (winapp must keep it)' }
+        @{ Id = 'R27-user-customafter'; Sdk = '1.8'; UserCustomAfter = $true; App = (New-AppSpec @{ Refs = @('LibW') }); Libs = @(@{ Name = 'LibW'; Kind = 'winui' }); Why = 'App that sets its own CustomAfterMicrosoftCommonTargets through an imported file (winapp must keep it)' }
+        @{ Id = 'R28-lib-customafter-generator'; Sdk = '1.8'; App = (New-AppSpec @{ Refs = @('LibP') }); Libs = @(@{ Name = 'LibP'; Kind = 'plain'; Xml = '  <Import Project="..\eng\hooks.props" />' }); Files = @{
+                'eng\hooks.props' = '<Project><PropertyGroup><CustomAfterMicrosoftCommonTargets>$(MSBuildThisFileDirectory)gen.targets</CustomAfterMicrosoftCommonTargets></PropertyGroup></Project>'
+                'eng\gen.targets' = @'
+<Project>
+  <Target Name="FixtureGenerate" BeforeTargets="CoreCompile">
+    <WriteLinesToFile File="$(IntermediateOutputPath)Gen.g.cs" Lines="namespace LibP { internal static class Gen { public const string Value = &quot;generated&quot;%3B } }" Overwrite="true" />
+    <ItemGroup><Compile Include="$(IntermediateOutputPath)Gen.g.cs" /></ItemGroup>
+  </Target>
+</Project>
+'@
+                'LibP\UsesGen.cs' = 'namespace LibP { public static class UsesGen { public static string Value() { return Gen.Value; } } }'
+            }; Why = 'Referenced library whose own imported file sets CustomAfterMicrosoftCommonTargets to generate code (winapp must keep it)' }
     )
 
     # The same shapes built cross-architecture: --arch x86 runs on both x64 and arm64 hosts.
@@ -400,6 +413,10 @@ $publishSettings  </PropertyGroup>
         & dotnet new sln -n Fixture --format sln -o $Root 2>&1 | Out-Null
         & dotnet sln "$Root\Fixture.sln" add @($projects | ForEach-Object { Join-Path $Root $_ }) 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "Could not create the solution for fixture $($Fixture.Id)." }
+    }
+
+    if ($Fixture.ContainsKey('Files')) {
+        foreach ($relative in $Fixture.Files.Keys) { Write-FixtureFile (Join-Path $Root $relative) $Fixture.Files[$relative] }
     }
 }
 

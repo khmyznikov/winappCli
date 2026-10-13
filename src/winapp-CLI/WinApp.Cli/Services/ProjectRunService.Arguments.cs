@@ -171,11 +171,6 @@ internal sealed partial class ProjectRunService
 
         AppendSolutionProperties(tokens, options);
 
-        if (!publish && !string.IsNullOrEmpty(options.PackagingReferenceTargets))
-        {
-            tokens.Add($"-p:{CustomAfterCommonTargetsProperty}={EscapeMsBuildPropertyValue(options.PackagingReferenceTargets)}");
-        }
-
         // SHIM (temporary): inject the resolved ref-pack winmd folder so cswinrt.exe finds contract winmds
         // without a registered Windows SDK. See CsWinRTMetadataShimService.
         if (!string.IsNullOrEmpty(csWinRTMetadataFolder))

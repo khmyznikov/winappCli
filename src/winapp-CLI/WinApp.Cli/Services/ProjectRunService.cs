@@ -73,10 +73,8 @@ internal sealed partial class ProjectRunService(
         "WebPublishProfileFile",
         "PublishProfileImported",
         "_PublishProfileRootFolder",
-        // Whether the build already sets CustomAfterMicrosoftCommonTargets (see ResolvePackagingReferenceTargetsAsync).
-        "CustomAfterMicrosoftCommonTargets",
-        "MSBuildExtensionsPath",
-        "MSBuildToolsVersion",
+        // Where `winapp run` writes its packaging-reference targets (see EnsurePackagingReferenceTargetsAsync).
+        "MSBuildProjectExtensionsPath",
         "TargetFramework",
         "Platform",
         "RuntimeIdentifier",
@@ -244,10 +242,7 @@ internal sealed partial class ProjectRunService(
 
         if (!publish && !aotPublish && !options.NoBuild)
         {
-            options = options with
-            {
-                PackagingReferenceTargets = await ResolvePackagingReferenceTargetsAsync(csproj, options, evaluated, workingDir, csWinRTMetadata, cancellationToken),
-            };
+            await EnsurePackagingReferenceTargetsAsync(csproj, options, evaluated, workingDir, csWinRTMetadata, cancellationToken);
         }
 
         var buildOptions = options;

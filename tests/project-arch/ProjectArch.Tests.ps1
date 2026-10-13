@@ -95,12 +95,10 @@ Describe 'winapp run architecture matrix' {
             $run.TimedOut | Should -BeFalse -Because "winapp run must finish within $TimeoutMinutes minutes:`n$tail"
             $run.ExitCode | Should -Be 0 -Because "winapp run must succeed:`n$tail"
 
+            $run.Output | Should -Not -Match 'CustomAfterMicrosoftCommonTargets=' -Because "winapp must not replace a project's own CustomAfterMicrosoftCommonTargets"
+            Join-Path $root 'App\obj\App.csproj.winapp.g.targets' | Should -Exist -Because "winapp run writes its packaging-reference targets next to the app's NuGet files"
             if ($fixture.ContainsKey('UserCustomAfter') -and $fixture.UserCustomAfter) {
-                $run.Output | Should -Not -Match 'CustomAfterMicrosoftCommonTargets=' -Because "winapp must not replace the project's own CustomAfterMicrosoftCommonTargets"
-                Join-Path $root 'App\custom-after.marker' | Should -Exist -Because "the project's own CustomAfterMicrosoftCommonTargets must still be imported"
-            }
-            else {
-                $run.Output | Should -Match 'CustomAfterMicrosoftCommonTargets=' -Because 'winapp run imports its packaging-reference targets'
+                Join-Path $root 'App\custom-after.marker' | Should -Exist -Because "the app's own CustomAfterMicrosoftCommonTargets must still be imported"
             }
 
             $exe = $null

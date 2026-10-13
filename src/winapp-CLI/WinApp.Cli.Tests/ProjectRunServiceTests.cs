@@ -435,100 +435,89 @@ public class ProjectRunServiceTests
         Assert.IsFalse(buildArgs.Contains("IncludePublishItemsOutputGroup"), "build pass must not set the publish-items flag");
     }
 
-    [TestMethod]
-    public void BuildBuildPassArguments_PackagingReferenceTargets_ImportedOnlyByTheBuildPass()
+    private FakeDotNetService ProjectExtensionsDotnet(string? extensionsPath, bool evaluateFails = false) => new()
     {
-        var csproj = new FileInfo(Path.Join(_tempDir.FullName, "App.csproj"));
-        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: [],
-            PackagingReferenceTargets: @"C:\cache\winapp-run.targets");
+        RunDotnetCommandHandler = args =>
+        {
+            if (evaluateFails && args.Contains("--getProperty:MSBuildProjectExtensionsPath", StringComparison.Ordinal))
+            {
+                return (1, string.Empty, "error");
+            }
 
-        var buildArgs = ProjectRunService.BuildBuildPassArguments(csproj, options, "minimal");
-        var publishArgs = ProjectRunService.BuildBuildPassArguments(csproj, options, "minimal", publish: true);
-
-        StringAssert.Contains(buildArgs, @"-p:CustomAfterMicrosoftCommonTargets=C:\cache\winapp-run.targets");
-        StringAssert.Contains(buildArgs, "-r win-x64", "the RID is still conveyed as before");
-        Assert.IsFalse(publishArgs.Contains("CustomAfterMicrosoftCommonTargets", StringComparison.Ordinal), "pack's publish pass is unchanged");
-    }
+            var json = PackagedPropertiesJson();
+            return (0, extensionsPath is null
+                ? json
+                : json.Replace("\"Properties\": {", $"\"Properties\": {{ \"MSBuildProjectExtensionsPath\": \"{extensionsPath.Replace("\\", "\\\\")}\",", StringComparison.Ordinal), string.Empty);
+        },
+    };
 
     [TestMethod]
-    public async Task BuildAndResolveAsync_RunBuild_ImportsPackagingReferenceTargets()
+    public async Task BuildAndResolveAsync_RunBuild_WritesPackagingReferenceTargetsForTheAppOnly()
     {
+        // MSBuild imports obj\<project file>.*.targets for that project only, so referenced projects and the
+        // build's own CustomAfterMicrosoftCommonTargets are untouched.
         var csproj = WriteFile("App.csproj", ExecutableCsproj);
-        var dotnet = new FakeDotNetService { RunDotnetCommandHandler = _ => (0, PackagedPropertiesJson(), string.Empty) };
+        var dotnet = ProjectExtensionsDotnet(Path.Join(_tempDir.FullName, "obj") + "\\");
         var service = NewServiceWith(dotnet, LogLevel.Information, out _);
 
         await service.BuildAndResolveAsync(csproj, new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: []), CancellationToken.None);
 
+        var targets = Path.Join(_tempDir.FullName, "obj", "App.csproj.winapp.g.targets");
+        Assert.AreEqual(ProjectRunService.PackagingReferenceTargets, File.ReadAllText(targets));
         var build = dotnet.StreamingCalls.Single(a => a.StartsWith("build ", StringComparison.Ordinal));
-        var match = System.Text.RegularExpressions.Regex.Match(build, "-p:CustomAfterMicrosoftCommonTargets=(\"[^\"]+\"|\\S+)");
-        Assert.IsTrue(match.Success, build);
-        Assert.AreEqual(ProjectRunService.PackagingReferenceTargets, File.ReadAllText(match.Groups[1].Value.Trim('"')));
+        StringAssert.Contains(build, "-r win-x64", "the build arguments are unchanged");
+        Assert.IsFalse(build.Contains("CustomAfterMicrosoftCommonTargets", StringComparison.Ordinal), build);
     }
 
     [TestMethod]
-    [DataRow("user-property", DisplayName = "-p CustomAfterMicrosoftCommonTargets on the command line")]
-    [DataRow("evaluated", DisplayName = "Set by the app's evaluation (project, import, environment)")]
-    [DataRow("reference", DisplayName = "Set in a referenced project")]
-    [DataRow("directory-build", DisplayName = "Set in a Directory.Build.props above a referenced project")]
+    [DataRow("no-build", DisplayName = "--no-build builds nothing")]
     [DataRow("evaluation-fails", DisplayName = "The app can't be evaluated")]
-    public async Task BuildAndResolveAsync_BuildSetsCustomAfterTargets_KeepsItsOwn(string where)
+    public async Task BuildAndResolveAsync_NoPackagingReferenceTargets_WhenNotBuildingOrUnknownPath(string scenario)
     {
-        // A command-line value would replace the build's own, so winapp builds exactly as before.
-        const string setsIt = "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><CustomAfterMicrosoftCommonTargets>custom.targets</CustomAfterMicrosoftCommonTargets></PropertyGroup></Project>";
-        var csproj = WriteFileAt(@"App\App.csproj", where is "reference" or "directory-build"
-            ? "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><OutputType>WinExe</OutputType></PropertyGroup><ItemGroup><ProjectReference Include=\"..\\Lib\\Lib.csproj\" /></ItemGroup></Project>"
-            : ExecutableCsproj);
-        WriteFileAt(@"Lib\Lib.csproj", where == "reference" ? setsIt : "<Project Sdk=\"Microsoft.NET.Sdk\" />");
-        if (where == "directory-build")
-        {
-            WriteFileAt(@"Lib\Directory.Build.props", "<Project><PropertyGroup><CustomAfterMicrosoftCommonTargets>custom.targets</CustomAfterMicrosoftCommonTargets></PropertyGroup></Project>");
-        }
-
-        var dotnet = new FakeDotNetService
-        {
-            RunDotnetCommandHandler = args => args.Contains("--getProperty:CustomAfterMicrosoftCommonTargets", StringComparison.Ordinal)
-                ? where switch
-                {
-                    "evaluated" => (0, PackagedPropertiesJson().Replace("\"Properties\": {", "\"Properties\": { \"CustomAfterMicrosoftCommonTargets\": \"C:\\\\repo\\\\eng\\\\after.targets\", \"MSBuildExtensionsPath\": \"C:\\\\sdk\", \"MSBuildToolsVersion\": \"Current\",", StringComparison.Ordinal), string.Empty),
-                    "evaluation-fails" => (1, string.Empty, "error"),
-                    _ => (0, PackagedPropertiesJson(), string.Empty),
-                }
-                : (0, PackagedPropertiesJson(), string.Empty),
-        };
+        var csproj = WriteFile("App.csproj", ExecutableCsproj);
+        var dotnet = ProjectExtensionsDotnet(
+            scenario == "evaluation-fails" ? null : Path.Join(_tempDir.FullName, "obj") + "\\",
+            evaluateFails: scenario == "evaluation-fails");
         var service = NewServiceWith(dotnet, LogLevel.Information, out _);
-        string[] properties = where == "user-property" ? ["CustomAfterMicrosoftCommonTargets=custom.targets"] : [];
 
-        await service.BuildAndResolveAsync(csproj, new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: properties), CancellationToken.None);
+        await service.BuildAndResolveAsync(
+            csproj,
+            new ProjectRunOptions("Debug", "x64", null, NoBuild: scenario == "no-build", NoRestore: false, Properties: []),
+            CancellationToken.None);
 
-        var build = dotnet.StreamingCalls.Single(a => a.StartsWith("build ", StringComparison.Ordinal));
-        Assert.IsFalse(build.Contains("winapp-run-", StringComparison.Ordinal), build);
+        Assert.IsFalse(File.Exists(Path.Join(_tempDir.FullName, "obj", "App.csproj.winapp.g.targets")));
     }
 
     [TestMethod]
-    [DataRow("", true, DisplayName = "Not set")]
-    [DataRow(@"C:\sdk\vCurrent\Custom.After.Microsoft.Common.targets", true, DisplayName = "MSBuild's default path")]
-    [DataRow(@"C:\sdk\\vCurrent\Custom.After.Microsoft.Common.targets", true, DisplayName = "MSBuild's default path as evaluated (doubled separator)")]
-    [DataRow(@"C:\repo\eng\after.targets", false, DisplayName = "A project's own file")]
-    public void IsDefaultCustomAfterCommonTargets_RecognizesMSBuildsDefault(string value, bool expected)
+    [DataRow(@"obj\", DisplayName = "Relative to the project")]
+    [DataRow(@"artifacts\obj\App\", DisplayName = "Artifacts layout")]
+    public void GetPackagingReferenceTargetsPath_ResolvesAgainstTheProject(string extensionsPath)
     {
-        var evaluated = new Dictionary<string, string>
-        {
-            ["CustomAfterMicrosoftCommonTargets"] = value,
-            ["MSBuildExtensionsPath"] = @"C:\sdk\",
-            ["MSBuildToolsVersion"] = "Current",
-        };
+        var csproj = new FileInfo(Path.Join(_tempDir.FullName, "App.csproj"));
 
-        Assert.AreEqual(expected, ProjectRunService.IsDefaultCustomAfterCommonTargets(evaluated));
+        var path = ProjectRunService.GetPackagingReferenceTargetsPath(csproj, extensionsPath);
+
+        Assert.AreEqual(Path.Join(_tempDir.FullName, extensionsPath, "App.csproj.winapp.g.targets"), path);
     }
 
     [TestMethod]
-    public void WritePackagingReferenceTargets_WritesTheTargetsFile()
+    public void TryWritePackagingReferenceTargets_UnchangedContent_KeepsTheTimestamp()
     {
-        var path = ProjectRunService.WritePackagingReferenceTargets();
+        // Rewriting an identical file would change its timestamp and invalidate incremental builds.
+        var path = Path.Join(_tempDir.FullName, "obj", "App.csproj.winapp.g.targets");
+        Assert.IsTrue(ProjectRunService.TryWritePackagingReferenceTargets(path));
+        var stamp = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(path, stamp);
 
-        Assert.IsNotNull(path);
-        Assert.AreEqual(ProjectRunService.PackagingReferenceTargets, File.ReadAllText(path));
+        Assert.IsTrue(ProjectRunService.TryWritePackagingReferenceTargets(path));
+        Assert.AreEqual(stamp, File.GetLastWriteTimeUtc(path));
+
+        File.WriteAllText(path, "<Project />");
+        Assert.IsTrue(ProjectRunService.TryWritePackagingReferenceTargets(path));
+        Assert.AreEqual(ProjectRunService.PackagingReferenceTargets, File.ReadAllText(path), "an older version is replaced");
     }
+
+
 
     [TestMethod]
     public void BuildNativeMsixPublishArguments_TriggersSdkPackagingAndCapturesOutput()

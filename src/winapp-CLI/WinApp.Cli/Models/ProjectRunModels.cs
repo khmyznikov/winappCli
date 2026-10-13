@@ -121,7 +121,6 @@ internal sealed record ProjectRunResolution(
 /// <param name="OmitRuntimeIdentifier">Suppresses the injected <c>-r win-&lt;arch&gt;</c> because an effective <c>Platform</c> already conveys the architecture AND the <c>ProjectReference</c> closure splits on <c>RuntimeIdentifier</c> — a combination that otherwise builds the same project twice and fails a packaged build with APPX1101. A RESOLVED input (see <c>ResolvePlatformInjection</c>).</param>
 /// <param name="PublishProfile">The architecture-matching publish profile used when MSIX tooling requires a trimmed build to be self-contained, the profile preserves the project's trimming, target framework, and architecture, and forcing a global <c>Platform</c> would break an AnyCPU project reference. Inferred profiles are scoped to the selected app through the .NET SDK's <c>ProjectToOverrideProjectExtensionsPath</c> property. A RESOLVED input (see <c>ResolveRequiredPublishProfileAsync</c>), never user-supplied.</param>
 /// <param name="ExactRuntimeIdentifier">An exact Windows RID (e.g. <c>win-x64</c>, <c>win10-x64</c>) that a lone <c>-p RuntimeIdentifier</c> supplied with no <c>--arch</c>. When set, it is forwarded to dotnet unchanged instead of the canonical <c>win-&lt;arch&gt;</c> derived from <see cref="Architecture"/>, so an exact/non-canonical RID is preserved (spec §4). <see cref="Architecture"/> is still derived from this RID for runtime provisioning. Null for every other caller, which conveys arch via the canonical RID.</param>
-/// <param name="PackagingReferenceTargets">The winapp MSBuild file the <c>winapp run</c> build pass imports through <c>CustomAfterMicrosoftCommonTargets</c>, so Windows App SDK packaging builds each referenced library once. A RESOLVED input (see <c>ResolvePackagingReferenceTargetsAsync</c>); null when the build already sets that property, and for publish passes.</param>
 internal sealed record ProjectRunOptions(
     string Configuration,
     string Architecture,
@@ -134,8 +133,7 @@ internal sealed record ProjectRunOptions(
     string? Platform = null,
     bool OmitRuntimeIdentifier = false,
     string? PublishProfile = null,
-    string? ExactRuntimeIdentifier = null,
-    string? PackagingReferenceTargets = null)
+    string? ExactRuntimeIdentifier = null)
 {
     /// <summary>
     /// The RID passed to dotnet: an explicit exact-RID override (<see cref="ExactRuntimeIdentifier"/>)

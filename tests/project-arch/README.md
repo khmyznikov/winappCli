@@ -3,7 +3,7 @@
 This suite runs `winapp run` against generated .NET projects that cover how the target architecture and project references reach MSBuild, then checks that each app:
 
 1. builds and registers (or launches unpackaged) without errors,
-2. imports winapp's packaging-reference targets (`-p:CustomAfterMicrosoftCommonTargets=…`), unless the project sets that property itself, in which case winapp must keep the project's own value,
+2. has winapp's packaging-reference targets in the app's `obj` folder (`App.csproj.winapp.g.targets`), and no `CustomAfterMicrosoftCommonTargets` on the command line, so an app's or library's own value of that property keeps working,
 3. starts and shows its own window, not an error dialog (windowed apps, when this machine can run the architecture), and
 4. is a PE image for the requested `--arch`.
 
@@ -45,7 +45,7 @@ Requirements: Windows with Developer Mode, the .NET 10 SDK plus the .NET 8 runti
 
 - **App:** packaged WinUI, Windows App SDK self-contained, unpackaged, WPF, console; `<Platforms>` in the project, in `Directory.Build.props`, absent, or missing the target architecture.
 - **References:** `netstandard2.0`, WinUI libraries with and without `<Platforms>`/`<RuntimeIdentifiers>`, libraries that enable MSIX tooling, multi-targeted (including a framework-conditional `RuntimeIdentifier`), diamond, `GlobalPropertiesToRemove="RuntimeIdentifier"`, `SetPlatform` metadata, `AnyCPU`-only, a referenced or build-order-only helper executable, and a solution.
-- **Project settings:** .NET `SelfContained`, `PublishAot` built without `--aot`, a hard-coded or `win-$(Platform)` `RuntimeIdentifier`, Visual Studio publish profiles, a trimmed build whose `$(Platform)` profile makes it self-contained, `EnableDynamicPlatformResolution`, and a project-set `CustomAfterMicrosoftCommonTargets`.
+- **Project settings:** .NET `SelfContained`, `PublishAot` built without `--aot`, a hard-coded or `win-$(Platform)` `RuntimeIdentifier`, Visual Studio publish profiles, a trimmed build whose `$(Platform)` profile makes it self-contained, `EnableDynamicPlatformResolution`, and `CustomAfterMicrosoftCommonTargets` set by the app or a referenced library through an imported file.
 - **Where a setting is declared:** on the app, on a referenced project, or through an import (`Directory.Build.props`/`.targets`, a `$(…)` path). A setting that matters on the app usually matters on a referenced project too, so cover both.
 - **Architecture:** the host's, and `x86` (fixtures with an `-x86` suffix, plus `X01`–`X04` and `R25`), which is cross-architecture on both x64 and arm64 hosts. Project-referenced analyzers and source generators only break cross-architecture builds.
 - **Windows App SDK:** 1.6, 1.8 and 2.x.
