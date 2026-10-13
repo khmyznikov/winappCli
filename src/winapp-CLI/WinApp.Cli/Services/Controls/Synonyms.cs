@@ -183,13 +183,10 @@ internal static class Synonyms
         void Add(string term, IEnumerable<string> targets)
         {
             if (!map.TryGetValue(term, out var list)) map[term] = list = [];
-            foreach (var t in targets)
+            foreach (var t in targets.Where(t => !string.Equals(t, term, StringComparison.OrdinalIgnoreCase)
+                && !list.Contains(t, StringComparer.OrdinalIgnoreCase)))
             {
-                if (!string.Equals(t, term, StringComparison.OrdinalIgnoreCase)
-                    && !list.Contains(t, StringComparer.OrdinalIgnoreCase))
-                {
-                    list.Add(t);
-                }
+                list.Add(t);
             }
         }
 
