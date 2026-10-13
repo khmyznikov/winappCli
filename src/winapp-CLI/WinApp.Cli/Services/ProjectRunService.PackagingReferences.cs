@@ -216,14 +216,13 @@ internal sealed partial class ProjectRunService
                 }
             }
 
-            foreach (var include in ReadAllProjectReferenceIncludes(project))
+            var unvisitedReferences = ReadAllProjectReferenceIncludes(project)
+                .Select(include => TryResolveReferencePath(project, include, out var resolved) ? resolved : null)
+                .OfType<FileInfo>()
+                .Where(reference => visitedProjects.Count < MaxProjectReferenceClosure && visitedProjects.Add(reference.FullName));
+            foreach (var referenced in unvisitedReferences)
             {
-                if (TryResolveReferencePath(project, include, out var referenced)
-                    && visitedProjects.Add(referenced.FullName)
-                    && visitedProjects.Count <= MaxProjectReferenceClosure)
-                {
-                    queue.Enqueue(referenced);
-                }
+                queue.Enqueue(referenced);
             }
         }
 
@@ -250,7 +249,7 @@ internal sealed partial class ProjectRunService
         {
             doc = XDocument.Load(project.FullName);
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
         {
             return [];
         }

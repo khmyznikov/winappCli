@@ -415,7 +415,7 @@ public class ProjectRunServiceTests
     [TestMethod]
     public void BuildBuildPassArguments_PackagingReferenceTargets_ImportedOnlyByTheBuildPass()
     {
-        var csproj = new FileInfo(Path.Combine(_tempDir.FullName, "App.csproj"));
+        var csproj = new FileInfo(Path.Join(_tempDir.FullName, "App.csproj"));
         var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: [],
             PackagingReferenceTargets: @"C:\cache\winapp-run.targets");
 
