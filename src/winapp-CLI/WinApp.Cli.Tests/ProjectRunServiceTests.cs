@@ -2538,6 +2538,101 @@ public class ProjectRunServiceTests
     }
 
     [TestMethod]
+    public async Task BuildAndResolveAsync_PropertyTfm_ShimChecksEvaluatedTfmWithOneEvaluate()
+    {
+        // A single TargetFramework set through a property (e.g. $(SamplesTargetFrameworkMoniker)) is invisible
+        // to the static read. The shim must still check the targeted SDK against the evaluated TFM, reusing
+        // the effective-framework evaluate rather than running a second one.
+        var csproj = WriteFile("App.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <OutputType>WinExe</OutputType>
+                <TargetFramework>$(SamplesTargetFrameworkMoniker)</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """);
+        var discoveryCalls = 0;
+        var dotnet = new FakeDotNetService
+        {
+            RunDotnetCommandHandler = args =>
+            {
+                if (args.Contains("--getProperty:TargetFrameworks", StringComparison.Ordinal))
+                {
+                    discoveryCalls++;
+                    return (0, """{ "Properties": { "TargetFramework": "net9.0-windows10.0.22621.0", "TargetFrameworks": "" } }""", string.Empty);
+                }
+
+                return (0, PackagedPropertiesJson(), string.Empty);
+            },
+        };
+        var folder = @"C:\cache\microsoft.windows.sdk.net.ref\10.0.22621.57\winmd";
+        var shim = new FakeCsWinRTMetadataShimService { WindowsSdkAbsent = true, FolderToReturn = folder };
+        var service = NewServiceWith(dotnet, shim, out _);
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: []);
+
+        var outcome = await service.BuildAndResolveAsync(csproj, options, CancellationToken.None);
+
+        Assert.IsNotNull(outcome.Resolution);
+        Assert.AreEqual(1, discoveryCalls, "the TFM discovery evaluate must run once and be reused by the shim");
+        Assert.AreEqual("net9.0-windows10.0.22621.0", shim.ResolvedMonikers[0]);
+        var buildCall = dotnet.StreamingCalls.Single(a => a.StartsWith("build ", StringComparison.Ordinal));
+        StringAssert.Contains(buildCall, $"-p:CsWinRTWindowsMetadata={folder}");
+        Assert.IsFalse(buildCall.Contains(" -f ", StringComparison.Ordinal),
+            "a single-targeted project's evaluated TFM must not be pinned into the build");
+    }
+
+    [TestMethod]
+    public async Task BuildAndResolveAsync_RegisteredSdkLacksVersion_PassesProjectMetadataToShim()
+    {
+        // Only when the registered SDK lacks the targeted version does winapp read the project's own
+        // CsWinRTWindowsMetadata, so a project-set value (e.g. sdk+) can stop the shim from overriding it.
+        var csproj = WriteFile("App.csproj", ExecutableCsproj);
+        var probes = 0;
+        var dotnet = new FakeDotNetService
+        {
+            RunDotnetCommandHandler = args =>
+            {
+                if (args.Contains("--getProperty:CsWinRTWindowsMetadata", StringComparison.Ordinal))
+                {
+                    probes++;
+                    StringAssert.Contains(args, "-p:Configuration=Debug");
+                    return (0, """{ "Properties": { "CsWinRTWindowsMetadata": "sdk+", "TargetFramework": "net10.0-windows10.0.26100.0" } }""", string.Empty);
+                }
+
+                return (0, PackagedPropertiesJson(), string.Empty);
+            },
+        };
+        var shim = new FakeCsWinRTMetadataShimService { ProjectWindowsMetadataNeeded = true };
+        var service = NewServiceWith(dotnet, shim, out _);
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: []);
+
+        await service.BuildAndResolveAsync(csproj, options, CancellationToken.None);
+
+        Assert.AreEqual(1, probes, "the project's CsWinRTWindowsMetadata should be read once");
+        Assert.AreEqual("sdk+", shim.ResolvedProjectMetadata[0]);
+    }
+
+    [TestMethod]
+    public async Task BuildAndResolveAsync_TargetedSdkInstalled_DoesNotReadProjectMetadata()
+    {
+        var csproj = WriteFile("App.csproj", ExecutableCsproj);
+        var commandArgs = new List<string>();
+        var dotnet = new FakeDotNetService
+        {
+            RunDotnetCommandHandler = args => { commandArgs.Add(args); return (0, PackagedPropertiesJson(), string.Empty); },
+        };
+        var shim = new FakeCsWinRTMetadataShimService { ProjectWindowsMetadataNeeded = false };
+        var service = NewServiceWith(dotnet, shim, out _);
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: []);
+
+        await service.BuildAndResolveAsync(csproj, options, CancellationToken.None);
+
+        Assert.IsFalse(commandArgs.Any(a => a.Contains("--getProperty:CsWinRTWindowsMetadata", StringComparison.Ordinal)),
+            "a host with the targeted SDK must not pay for the extra evaluate");
+        Assert.IsNull(shim.ResolvedProjectMetadata.Single());
+    }
+
+    [TestMethod]
     public async Task BuildAndResolveAsync_SdkPresent_NoPreShimRestore()
     {
         // C1: when a Windows SDK is registered the shim no-ops; there is nothing to restore-and-retry.

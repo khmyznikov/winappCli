@@ -221,7 +221,7 @@ winapp unregister .\dotnet-app.csproj
 See [unique identity for parallel checkouts](../usage.md#unique-identity-for-parallel-checkouts).
 Don't pass `--unique-identity` to `dotnet run`; it would go to your app, not to winapp.
 
-> **No Windows SDK installed?** C#/WinRT authoring projects normally need a registered Windows SDK to build. When project mode detects none (clean CI, containers, SDK-less dev boxes), it points cswinrt at the winmds from the auto-restored `Microsoft.Windows.SDK.NET.Ref` package so the build still succeeds — no action needed. It does nothing when an SDK is installed or when you set `-p CsWinRTWindowsMetadata=…` yourself.
+> **Targeted Windows SDK not installed?** C#/WinRT projects normally need the Windows SDK version they target (for example, 10.0.22621 for `net9.0-windows10.0.22621.0`, or the version in `WindowsSDKVersion` in a Visual Studio developer prompt) to build. When project mode finds that version missing, including when no Windows SDK is installed at all, it builds against the Windows metadata from the auto-restored `Microsoft.Windows.SDK.NET.Ref` package instead. No action is needed. It does nothing when that SDK version is installed or when you set `CsWinRTWindowsMetadata` yourself, either with `-p CsWinRTWindowsMetadata=…` or in your project.
 
 To add the NuGet package back: `dotnet add package Microsoft.Windows.SDK.BuildTools.WinApp --prerelease`
 
