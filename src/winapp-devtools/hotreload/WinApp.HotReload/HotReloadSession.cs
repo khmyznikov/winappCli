@@ -20,7 +20,8 @@ internal sealed record SessionOptions(string ProjectFile, string CscArgsFile, st
 
 internal enum Outcome { Applied, Waiting, Error, Restart, Unchanged }
 
-internal sealed record SaveResult(Outcome Outcome, string Detail);
+/// <param name="StillFailing">Files of an otherwise applied save whose errors remain: they are sent again with the next save.</param>
+internal sealed record SaveResult(Outcome Outcome, string Detail, IReadOnlyList<string>? StillFailing = null);
 
 /// <summary>
 /// Owns the Roslyn view of the running app and turns each batch of saved files into one live update:
@@ -838,8 +839,28 @@ internal sealed class HotReloadSession
         _pendingInitializers.Clear();
         if (response.Errors.Count > 0)
         {
-            // Code changes are in; the markup that failed is sent again with the next save.
-            return new SaveResult(Outcome.Error, string.Join(Environment.NewLine + "  ", response.Errors.Select(SourcePaths)));
+            // Code changes are in; the markup that failed is sent again with the next save. Files of this save that
+            // applied are reported as such, with a line for each that still has an error (App.xaml broken by an
+            // earlier save while a page is edited).
+            var errors = response.Errors.Select(SourcePaths).ToList();
+            bool Mentions(string error, string file) => error.StartsWith(file, StringComparison.OrdinalIgnoreCase) &&
+                error.Length > file.Length && error[file.Length] is '(' or ':' or ' ';
+            var failing = applied.Where(file => errors.Any(e => Mentions(e, file))).ToList();
+            var fine = applied.Except(failing, StringComparer.OrdinalIgnoreCase).ToList();
+            if (failing.Count == 0 || fine.Count == 0 || errors.Any(e => !failing.Any(file => Mentions(e, file))))
+            {
+                return new SaveResult(Outcome.Error, string.Join(Environment.NewLine + "  ", errors));
+            }
+            foreach (var component in _components.Values.Where(c => !failing.Contains(Relative(c.XamlPath), StringComparer.OrdinalIgnoreCase)))
+            {
+                component.Pending = false;
+            }
+            waiting.AddRange(response.Messages.Select(SourcePaths));
+            var partial = Describe(fine, notes) + string.Concat(failing.Select(file =>
+                Environment.NewLine + $"  {file} still has an error: " + string.Join(" ", errors.Where(e => Mentions(e, file)))));
+            return new SaveResult(waiting.Count > 0 ? Outcome.Waiting : Outcome.Applied,
+                partial + string.Concat(waiting.Distinct().Select(w => Environment.NewLine + "  " + w)),
+                failing.Select(file => Path.GetFullPath(Path.Combine(_projectDirectory, file))).ToList());
         }
         foreach (var component in _components.Values)
         {

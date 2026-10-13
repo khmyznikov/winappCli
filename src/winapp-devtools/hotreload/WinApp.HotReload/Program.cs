@@ -252,7 +252,7 @@ internal static class Program
                     }
                     result = new SaveResult(Outcome.Error, $"internal error: {ex.Message}");
                 }
-                retry = new HashSet<string>(result.Outcome == Outcome.Error ? changed : [], StringComparer.OrdinalIgnoreCase);
+                retry = new HashSet<string>(result.Outcome == Outcome.Error ? changed : result.StillFailing ?? [], StringComparer.OrdinalIgnoreCase);
                 WatchRoots();
                 var outcome = result.Outcome.ToString().ToLowerInvariant();
                 Console.WriteLine($"[watch] {outcome} {result.Detail} ({stopwatch.ElapsedMilliseconds} ms)");

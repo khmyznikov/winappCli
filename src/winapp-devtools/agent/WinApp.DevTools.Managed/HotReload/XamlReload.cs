@@ -188,6 +188,7 @@ internal static class XamlReload
     {
         s_messages = messages;
         s_errors = errors;
+        s_deferredBinds = [];
         CodeAddedItems.LaunchItems(request.LaunchItems);
         try
         {
@@ -280,6 +281,14 @@ internal static class XamlReload
                 // The code is in; the UI didn't rebuild. The markup is sent again with the next save.
                 ReportError("the UI could not be rebuilt: " + ex.Message);
             }
+            // x:Bind of components reloaded in place, once every constructor replay has finished: what they report
+            // belongs to this save.
+            while (s_deferredBinds is { Count: > 0 } deferred)
+            {
+                var next = deferred[0];
+                deferred.RemoveAt(0);
+                next();
+            }
             NotifyChangedProperties(request.ChangedProperties, request.RefreshBindings);
             if (request.Deltas.Count > 0)
             {
@@ -298,8 +307,12 @@ internal static class XamlReload
         {
             s_messages = null;
             s_errors = null;
+            s_deferredBinds = null;
         }
     }
+
+    /// <summary>During an update: x:Bind evaluations of components reloaded in place, run before the update reports back.</summary>
+    private static List<Action>? s_deferredBinds;
 
     /// <summary>
     /// A library deployed while the app runs has its compiled markup embedded in its .pri, which only a build merges
@@ -1695,8 +1708,16 @@ internal static class XamlReload
             }
             if (component is FrameworkElement { IsLoaded: true } or Window { Visible: true })
             {
-                // Re-initialized in place: it won't load again, so evaluate once the constructor replay has finished.
-                s_dispatcher?.TryEnqueue(ApplyAll);
+                // Re-initialized in place: it won't load again, so evaluate once the constructor replay has finished
+                // (within the update when there is one, so problems are reported with it).
+                if (s_deferredBinds is { } deferred)
+                {
+                    deferred.Add(ApplyAll);
+                }
+                else
+                {
+                    s_dispatcher?.TryEnqueue(ApplyAll);
+                }
             }
             else
             {
@@ -1790,6 +1811,12 @@ internal static class XamlReload
         {
             var owner = spec.OwnerType is null ? target?.GetType() : FindType(spec.OwnerType);
             var property = FindProperty(owner, spec.Property);
+            if (target is not null && property is null && spec.OwnerType is null &&
+                target.GetType().GetProperty(spec.Property, BindingFlags.Public | BindingFlags.Instance) is { CanWrite: true } clr)
+            {
+                ApplyToClrProperty(source, functions, target, clr, spec, watchOwner);
+                return;
+            }
             if (target is null || property is null)
             {
                 Report($"x:Bind {spec.Path}: {spec.Element ?? "root"}.{spec.Property} was not found");
@@ -1863,7 +1890,26 @@ internal static class XamlReload
     /// <summary>Reads a property path by reflection and sets it on the target; false when it can't (a Binding is used instead).</summary>
     private static bool TrySetOnce(object? source, string path, DependencyObject target, DependencyProperty property, Type? propertyType, RootBinding spec)
     {
-        var value = source;
+        if (!TryReadPath(source, path, out var value) || !TryConvertForTarget(value, target, propertyType, spec, out value))
+        {
+            return false;
+        }
+        try
+        {
+            target.SetValue(property, value);
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidCastException or COMException)
+        {
+            HotReloadAgent.Log($"x:Bind {spec.Path}: setting it directly failed ({ex.Message}); binding instead");
+            return false;
+        }
+    }
+
+    /// <summary>The value at a property path (fields and non-public members included, as x:Bind reaches them); false for shapes it can't read.</summary>
+    private static bool TryReadPath(object? source, string path, out object? value)
+    {
+        value = source;
         foreach (var segment in path.Length == 0 ? [] : path.Split('.'))
         {
             if (value is null || segment.Contains('[') || segment.Contains('('))
@@ -1889,6 +1935,13 @@ internal static class XamlReload
                 return false;
             }
         }
+        return true;
+    }
+
+    /// <summary>What x:Bind would assign: through the converter, as text for a string property, TargetNullValue for null, coerced.</summary>
+    private static bool TryConvertForTarget(object? value, DependencyObject target, Type? propertyType, RootBinding spec, out object? result)
+    {
+        result = value;
         if (spec.Converter is { } converter)
         {
             if (Resource(target, converter) is not IValueConverter valueConverter)
@@ -1905,19 +1958,59 @@ internal static class XamlReload
         {
             value = nullValue;
         }
-        if (!TryCoerce(value, propertyType, out value))
+        return TryCoerce(value, propertyType, out result);
+    }
+
+    /// <summary>
+    /// x:Bind into a plain .NET property (a non-visual helper's Value, which no Binding can target): its setter is called
+    /// with the value, and again whenever something along the path changes, as compiled x:Bind does.
+    /// </summary>
+    private static void ApplyToClrProperty(object? source, Type functions, DependencyObject target, PropertyInfo clr, RootBinding spec, object watchOwner)
+    {
+        System.Reflection.MethodInfo? method = null;
+        if (spec.Function is { } function &&
+            (method = functions.GetMethod(function, BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, [typeof(object)])) is null)
         {
-            return false;
+            return;
         }
-        try
+        bool Evaluate()
         {
-            target.SetValue(property, value);
+            object? value;
+            if (method is not null)
+            {
+                try
+                {
+                    value = method.Invoke(null, [source]);
+                }
+                catch (TargetInvocationException)
+                {
+                    value = spec.FallbackValue;
+                }
+            }
+            else if (!TryReadPath(source, spec.Path, out value))
+            {
+                return false;
+            }
+            if (value == DependencyProperty.UnsetValue || !TryConvertForTarget(value, target, clr.PropertyType, spec, out value))
+            {
+                return false;
+            }
+            clr.SetValue(target, value);
             return true;
         }
-        catch (Exception ex) when (ex is ArgumentException or InvalidCastException or COMException)
+        if (!Evaluate())
         {
-            HotReloadAgent.Log($"x:Bind {spec.Path}: setting it directly failed ({ex.Message}); binding instead");
-            return false;
+            ReportError($"{spec.Element ?? "root"}.{spec.Property}: x:Bind {spec.Path} can't be evaluated live into this property; it takes effect when the app restarts");
+            return;
+        }
+        var watch = method is not null ? spec.Watch : spec.Path.Length > 0 ? [spec.Path] : [];
+        if (!string.Equals(spec.Mode, "OneTime", StringComparison.OrdinalIgnoreCase) && source is not null && watch.Count > 0)
+        {
+            Watchers.GetOrCreateValue(watchOwner).Add(new PathWatcher(source, watch, () =>
+            {
+                if (s_dispatcher is null || s_dispatcher.HasThreadAccess) Evaluate();
+                else s_dispatcher.TryEnqueue(() => Evaluate());
+            }));
         }
     }
 

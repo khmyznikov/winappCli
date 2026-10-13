@@ -175,6 +175,11 @@
           "            <ComboBoxItem x:Name=\"SizeLarge\" Content=\"Large\" />",
           "        </ComboBox>",
           "        <TextBlock AutomationProperties.AutomationId=\"PickedSize\" Text=\"{x:Bind ((ComboBoxItem)Sizes.SelectedItem).Name, Mode=OneWay}\" />",
+          "        <local:Echo>",
+          "            <local:Echo.Values>",
+          "                <local:EchoValue Value=\"{x:Bind Disable.IsChecked, Mode=OneWay}\" />",
+          "            </local:Echo.Values>",
+          "        </local:Echo>",
           "        <Frame x:Name=\"Inner\" />",
           "    </StackPanel>",
           "</Page>"
@@ -210,6 +215,66 @@
           "public sealed partial class Choice",
           "{",
           "    public string Name { get; set; } = \"\";",
+          "}"
+        ]
+      }
+    },
+    {
+      "id": "setup-echo",
+      "title": "A panel showing values of non-visual objects with a plain .NET property (like ControlExampleSubstitution)",
+      "file": "Echo.cs",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "using Microsoft.UI.Xaml.Controls;",
+          "",
+          "namespace TodoBench;",
+          "",
+          "// Like WinUI Gallery's ControlExampleSubstitution: a non-visual object with a plain .NET property set by x:Bind.",
+          "public sealed partial class EchoValue : Microsoft.UI.Xaml.DependencyObject",
+          "{",
+          "    private object? _value;",
+          "    public event System.EventHandler? ValueChanged;",
+          "",
+          "    public object? Value",
+          "    {",
+          "        get => _value;",
+          "        set { _value = value; ValueChanged?.Invoke(this, System.EventArgs.Empty); }",
+          "    }",
+          "}",
+          "",
+          "// Shows its values, like the gallery's code sample showing its substitutions.",
+          "public sealed partial class Echo : StackPanel",
+          "{",
+          "    public static readonly Microsoft.UI.Xaml.DependencyProperty ValuesProperty = Microsoft.UI.Xaml.DependencyProperty.Register(",
+          "        nameof(Values), typeof(System.Collections.Generic.IList<EchoValue>), typeof(Echo), new Microsoft.UI.Xaml.PropertyMetadata(null));",
+          "",
+          "    private readonly TextBlock _text = new();",
+          "",
+          "    public Echo()",
+          "    {",
+          "        Values = new System.Collections.Generic.List<EchoValue>();",
+          "        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(_text, \"EchoText\");",
+          "        Children.Add(_text);",
+          "        Loaded += (_, _) =>",
+          "        {",
+          "            foreach (var value in Values)",
+          "            {",
+          "                value.ValueChanged -= Render;",
+          "                value.ValueChanged += Render;",
+          "            }",
+          "            Render(this, System.EventArgs.Empty);",
+          "        };",
+          "    }",
+          "",
+          "    public System.Collections.Generic.IList<EchoValue> Values",
+          "    {",
+          "        get => (System.Collections.Generic.IList<EchoValue>)GetValue(ValuesProperty);",
+          "        set => SetValue(ValuesProperty, value);",
+          "    }",
+          "",
+          "    private void Render(object? sender, System.EventArgs e) =>",
+          "        _text.Text = \"echo:\" + string.Join(\",\", System.Linq.Enumerable.Select(Values, v => v.Value?.ToString() ?? \"\"));",
           "}"
         ]
       }
@@ -542,7 +607,7 @@
         },
         {
           "id": "s03-page-markup",
-          "title": "After an unrelated edit of the page, x:Bind through IsChecked.Value and through casts ((local:Choice)..., (ComboBoxItem)...) still works",
+          "title": "After an unrelated edit of the page, x:Bind through IsChecked.Value, through casts ((local:Choice)..., (ComboBoxItem)...) and into a plain .NET property of a non-visual object still works",
           "file": "OptionsPage.xaml",
           "edit": {
             "op": "replace",
@@ -573,6 +638,11 @@
                 "value": "SizeSmall"
               },
               {
+                "target": "EchoText",
+                "assert": "text-equals",
+                "value": "echo:False"
+              },
+              {
                 "target": "Target",
                 "assert": "enabled-equals",
                 "value": "True"
@@ -590,6 +660,11 @@
                 "target": "Mirror",
                 "assert": "toggle-state-equals",
                 "value": "On"
+              },
+              {
+                "target": "EchoText",
+                "assert": "text-equals",
+                "value": "echo:True"
               }
             ]
           },
@@ -632,6 +707,35 @@
           "expect": {
             "outcome": "error",
             "detail": "App\\.xaml\\(14,\\d+\\): This dictionary's resources are split by another element"
+          }
+        },
+        {
+          "id": "s05b-page-while-app-broken",
+          "title": "While App.xaml still has an error, a page edit applies and says App.xaml still has one",
+          "file": "OptionsPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "Text=\"options v2\""
+            ],
+            "text": [
+              "Text=\"options v3\""
+            ]
+          },
+          "checkpoint": {
+            "id": "c-s05b-page-while-app-broken",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "Heading",
+                "assert": "text-equals",
+                "value": "options v3"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied",
+            "detail": "OptionsPage\\.xaml\\s+App\\.xaml still has an error: App\\.xaml\\(14,\\d+\\)"
           }
         },
         {
