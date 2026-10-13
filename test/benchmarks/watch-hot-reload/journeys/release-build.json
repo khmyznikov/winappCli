@@ -137,7 +137,7 @@
           },
           "expect": {
             "outcome": "restart",
-            "detail": "XAML hot reload is not enabled for this app \\(a Debug build, or EnableXamlHotReload set to true, enables it\\)"
+            "detail": "MainWindow\\.xaml: changes to an optimized build take effect when the app restarts"
           }
         },
         {

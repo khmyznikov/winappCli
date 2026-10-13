@@ -62,7 +62,30 @@ internal static class Program
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
         var stopwatch = Stopwatch.StartNew();
-        var session = await HotReloadSession.CreateAsync(options, cts.Token).ConfigureAwait(false);
+        // Builds the runtime can't update while they run: say why once, and restart the app on each save.
+        if (HotReloadSession.IsOptimizedBuild(options.CscArgsFile))
+        {
+            return await RestartOnSaveAsync(options, pid, stopwatch,
+                "this is an optimized build (for example -c Release), which the runtime can't update while it runs: saving a file rebuilds and restarts the app. Use the Debug configuration for live edits.",
+                path => $"{(path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) ? "code changes" : "changes")} to an optimized build take effect when the app restarts", cts.Token).ConfigureAwait(false);
+        }
+        if (StartupHooksDisabled(app))
+        {
+            return await RestartOnSaveAsync(options, pid, stopwatch,
+                "this build turns off .NET startup hooks (System.StartupHookProvider.IsSupported is false, for example because PublishTrimmed is set for this configuration), so winapp's hot reload agent can't load: saving a file rebuilds and restarts the app.",
+                _ => "changes take effect when the app restarts", cts.Token).ConfigureAwait(false);
+        }
+        HotReloadSession session;
+        try
+        {
+            session = await HotReloadSession.CreateAsync(options, cts.Token).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            return await RestartOnSaveAsync(options, pid, stopwatch,
+                "the app didn't load winapp's hot reload agent, so saving a file rebuilds and restarts the app.",
+                _ => "changes take effect when the app restarts", cts.Token).ConfigureAwait(false);
+        }
         var hashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var changes = Channel.CreateUnbounded<string>();
         // The app's folder, and those of the projects it references outside it (added as they are referenced).
@@ -260,6 +283,65 @@ internal static class Program
             catch (UnauthorizedAccessException)
             {
             }
+        }
+    }
+
+    /// <summary>True when the running app's runtimeconfig.json turns startup hooks off (no agent can load).</summary>
+    private static bool StartupHooksDisabled(Process app)
+    {
+        try
+        {
+            if (app.MainModule?.FileName is not { } exe)
+            {
+                return false;
+            }
+            var config = Path.ChangeExtension(exe, ".runtimeconfig.json");
+            return File.Exists(config) && System.Text.RegularExpressions.Regex.IsMatch(File.ReadAllText(config), @"""System\.StartupHookProvider\.IsSupported""\s*:\s*false");
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// For a build that can't be updated live: ready, one note saying why, then the first save restarts the app (with
+    /// <paramref name="reason"/> for the file saved).
+    /// </summary>
+    private static async Task<int> RestartOnSaveAsync(SessionOptions options, int pid, Stopwatch stopwatch, string note, Func<string, string> reason, CancellationToken cancellationToken)
+    {
+        var directory = Path.GetDirectoryName(Path.GetFullPath(options.ProjectFile))!;
+        var saved = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var watcher = new FileSystemWatcher(directory) { IncludeSubdirectories = true, NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size };
+        void Changed(string path)
+        {
+            var relative = Path.GetRelativePath(directory, path);
+            var excluded = relative.Split(Path.DirectorySeparatorChar).SkipLast(1).Any(part => part is "bin" or "obj" or ".git" or ".vs");
+            if (!excluded && (path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase) ||
+                path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".resw", StringComparison.OrdinalIgnoreCase) ||
+                path.EndsWith(".appxmanifest", StringComparison.OrdinalIgnoreCase) || HotReloadSession.IsAsset(path)))
+            {
+                saved.TrySetResult(relative);
+            }
+        }
+        watcher.Changed += (_, e) => Changed(e.FullPath);
+        watcher.Created += (_, e) => Changed(e.FullPath);
+        watcher.Deleted += (_, e) => Changed(e.FullPath);
+        watcher.Renamed += (_, e) => Changed(e.FullPath);
+        watcher.EnableRaisingEvents = true;
+        Console.WriteLine($"[watch] ready ({stopwatch.ElapsedMilliseconds} ms): saved files rebuild and restart the app (PID {pid})");
+        Console.WriteLine($"[watch] note: {note}");
+        try
+        {
+            var file = await saved.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            // Let the editor finish writing (and any files saved with it).
+            await Task.Delay(150, cancellationToken).ConfigureAwait(false);
+            Console.WriteLine($"[watch] restart {file}: {reason(file)} (0 ms)");
+            return RestartExitCode;
+        }
+        catch (OperationCanceledException)
+        {
+            return 0;
         }
     }
 

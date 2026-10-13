@@ -350,8 +350,25 @@ internal sealed class WatchSession
                     await app.WaitForExitAsync(CancellationToken.None);
                     return -1;
                 }
-                // The helper stopped (its last line says why); keep the app running without hot reload.
-                return await WaitAsync(app, cancellationToken);
+                // The helper stopped (its last line says why): the app keeps running, and the next save rebuilds and
+                // restarts it rather than going unnoticed.
+                console.MarkupLine("[yellow][[watch]] live edits stopped; the next save rebuilds and restarts the app[/]");
+                using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                var saved = WaitForSourceChangeAsync(DateTime.UtcNow, stop.Token);
+                var exited = app.WaitForExitAsync(stop.Token);
+                await Task.WhenAny(saved, exited);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (saved.IsCompletedSuccessfully && !app.HasExited)
+                {
+                    stop.Cancel();
+                    RestartRequested = true;
+                    console.MarkupLine("[yellow][[watch]] rebuilding and restarting the app...[/]");
+                    app.Kill();
+                    await app.WaitForExitAsync(CancellationToken.None);
+                    return -1;
+                }
+                stop.Cancel();
+                return app.ExitCode;
             }
             return app.ExitCode;
         }

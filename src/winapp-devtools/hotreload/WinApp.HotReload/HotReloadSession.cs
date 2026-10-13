@@ -81,12 +81,11 @@ internal sealed class HotReloadSession
     public string? XamlReloadUnavailable { get; private init; }
 
     /// <summary>An optimized build (-c Release): the runtime refuses code updates to it, so every save restarts the app.</summary>
-    public bool Optimized => _cscArgs.Any(a => a is "/optimize+" or "-optimize+" or "/optimize" or "-optimize" or "/o+" or "-o+");
+    public static bool IsOptimizedBuild(string cscArgsFile) =>
+        File.Exists(cscArgsFile) && ReadCompilerArguments(cscArgsFile).Any(a => a is "/optimize+" or "-optimize+" or "/optimize" or "-optimize" or "/o+" or "-o+");
 
     /// <summary>What to say once when the app is up, when not every save can apply live.</summary>
-    public string? LaunchNote => Optimized
-        ? "this is an optimized build (for example -c Release), which the runtime can't update while it runs: saving a file rebuilds and restarts the app. Use the Debug configuration for live edits."
-        : XamlReloadUnavailable is { } reason ? $"{reason} Saving a .xaml file restarts the app; C# edits still apply live." : null;
+    public string? LaunchNote => XamlReloadUnavailable is { } reason ? $"{reason} Saving a .xaml file restarts the app; C# edits still apply live." : null;
 
     /// <summary>The folders whose files are watched: the app's, and those of referenced projects outside it.</summary>
     public IReadOnlyList<string> WatchRoots
@@ -449,10 +448,6 @@ internal sealed class HotReloadSession
         await _warmUp.ConfigureAwait(false);
         _phase.Restart();
         var batch = paths.Select(Relative).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        if (Optimized && paths.FirstOrDefault(p => p.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)) is { } code)
-        {
-            return new SaveResult(Outcome.Restart, $"{Relative(code)}: code changes to an optimized build take effect when the app restarts");
-        }
         if (paths.FirstOrDefault(p => p.EndsWith(".appxmanifest", StringComparison.OrdinalIgnoreCase)) is { } manifest)
         {
             // Identity, capabilities and extensions take effect when the package is registered again.
