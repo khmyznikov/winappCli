@@ -71,6 +71,8 @@ winapp-py manifest --help
 winapp-py tool --help
 ```
 
+Help examples use the `winapp-py` command name. `restore --help` and `update --help` show Python workflow options; `run --help` separates Python scripts from native inputs such as executables and .NET projects.
+
 See the [CLI reference](https://github.com/microsoft/WinAppCli/blob/main/docs/usage.md) for the complete native command list. The Python preview does not automatically bundle a Python application for production MSIX distribution.
 
 ## Feedback

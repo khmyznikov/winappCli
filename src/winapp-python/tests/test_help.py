@@ -66,21 +66,29 @@ class HelpTests(ProjectTest):
         self.assertIn("native help:", self.stdout.getvalue())
         self.assertIn("Python extensions:", self.stdout.getvalue())
 
-    def test_shared_command_help_appends_the_effective_python_syntax(self):
+    def test_workflow_help_uses_only_the_effective_python_syntax(self):
         for command, option in (("restore", "--python"), ("update", "--channel"), ("run", "--identity")):
             with self.subTest(command=command):
                 with patch("winapp_cli.cli.forward_native", side_effect=self.forward_help) as forward:
                     text = self.invoke_help([command, "--help"])
-                forward.assert_called_once_with(self.native, [command, "--help"], self.project)
-                self.assertLess(text.index("native help:"), text.index(f"Python {command} workflow:"))
+                if command == "run":
+                    forward.assert_called_once_with(self.native, [command, "--help"], self.project)
+                    self.assertLess(text.index("Native run modes"), text.index("native help:"))
+                    self.assertLess(text.index("native help:"), text.index("Python run workflow:"))
+                else:
+                    forward.assert_not_called()
+                    self.assertNotIn("native help:", text)
+                    self.assertNotIn("<base-directory>", text)
+                    self.assertNotIn("--setup-sdks", text)
                 self.assertIn(f"winapp-py {command}", text)
                 self.assertIn(option, text)
+                self.assertIn("--project", text)
 
     def test_native_selection_prefix_is_respected_by_help(self):
         for arguments in (
             ["--winapp", "chosen.exe", "--help"],
-            ["--winapp=chosen.exe", "restore", "--help"],
-            ["update", "--winapp", "chosen.exe", "--help"],
+            ["--winapp=chosen.exe", "run", "--help"],
+            ["run", "--winapp", "chosen.exe", "--help"],
         ):
             with self.subTest(arguments=arguments):
                 with (
@@ -100,7 +108,7 @@ class HelpTests(ProjectTest):
         self.assertNotIn("[--help] --identity", text)
 
     def test_native_help_failure_is_not_hidden_by_python_help(self):
-        for command in ([], ["restore"], ["run"]):
+        for command in ([], ["run"]):
             with self.subTest(command=command):
                 with patch("winapp_cli.cli.forward_native", return_value=37):
                     text = self.invoke_help([*command, "--help"], expected_code=37)
@@ -118,7 +126,10 @@ class HelpTests(ProjectTest):
         self.assertNotIn("Python extensions:", self.stdout.getvalue())
 
     def test_python_only_help_does_not_need_native_cli_or_project_configuration(self):
-        for arguments in (["generate", "--help"], ["identity", "--help"], ["identity", "clear", "--help"]):
+        for arguments in (
+            ["restore", "--help"], ["update", "--help"], ["generate", "--help"],
+            ["identity", "--help"], ["identity", "clear", "--help"],
+        ):
             with self.subTest(arguments=arguments):
                 with patch("winapp_cli.cli.find_native_cli") as locate:
                     text = self.invoke_help(arguments)

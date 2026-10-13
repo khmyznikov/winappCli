@@ -46,15 +46,18 @@ NATIVE_CLI_HELP = "Native winapp.exe path (otherwise WINAPP_CLI_PATH, bundled CL
 def _show_forwarded_help(
     parser: argparse.ArgumentParser, command: str | None, override: str | None,
 ) -> int:
+    if command in {"restore", "update"}:
+        parser.print_help()
+        return 0
     directory = Path.cwd()
     native = find_native_cli(override)
+    if command == "run":
+        print("Native run modes (non-Python inputs):", flush=True)
     result = forward_native(native, [command, "--help"] if command else ["--help"], directory)
     if result:
         return result
     print(f"\nPython {command} workflow:" if command else "\nPython extensions:", flush=True)
-    if command in {"restore", "update"}:
-        print("For this Python workflow, use the syntax and options below.", flush=True)
-    elif command == "run":
+    if command == "run":
         print(
             "Python .py scripts use the project .venv; --identity uses a private development environment. "
             "Other inputs use the native syntax above.",
