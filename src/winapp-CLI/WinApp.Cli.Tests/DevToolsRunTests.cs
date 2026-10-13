@@ -748,6 +748,34 @@ public sealed class DevToolsRunTests() : BaseCommandTests(logLevel: Microsoft.Ex
         AssertTelemetry(DevToolsMode.Off, DevToolsModeSource.IncompatibleOption, null);
     }
 
+    // A performance trace measures the app, so DevTools stays out of it. Elevated mode with no registered package fails
+    // before anything is recorded, which keeps these tests from starting a real capture.
+    [TestMethod]
+    public async Task Profile_TurnsTheDefaultOff()
+    {
+        var app = WinUIProject(true);
+        await Run(app.Input, "--profile", Path.Join(app.Output, "trace"), "--profile-mode", "elevated", "--detach", "--json");
+        Assert.IsEmpty(_attach.Calls);
+        Assert.IsEmpty(_environments);
+        Assert.AreEqual("option", DevToolsJson(TestAnsiConsole.Output)!.Value.GetProperty("source").GetString());
+        AssertTelemetry(DevToolsMode.Off, DevToolsModeSource.IncompatibleOption, null);
+    }
+
+    [TestMethod]
+    [DataRow("on", false)]
+    [DataRow("headless", true)]
+    public async Task ExplicitDevToolsWithProfile_FailsBeforeBuilding(string mode, bool json)
+    {
+        var app = WinUIProject(true);
+        string[] options = ["--devtools", mode, "--profile", Path.Join(app.Output, "trace"), "--detach"];
+        Assert.AreEqual(1, await Run(app.Input, json ? [.. options, "--json"] : options));
+        Assert.AreEqual(0, _projects.BuildAndResolveCalls.Count);
+        var message = json
+            ? JsonDocument.Parse(TestAnsiConsole.Output).RootElement.GetProperty("Error").GetString()!
+            : ConsoleStdErr.ToString() + TestAnsiConsole.Output;
+        StringAssert.Contains(message, "--profile measures the app without DevTools; remove --devtools or --profile.");
+    }
+
     [TestMethod]
     [DataRow("project")]
     [DataRow("folder")]

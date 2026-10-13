@@ -474,6 +474,12 @@ internal partial class RunCommand : Command, IShortDescription, ITargetAwareComm
                 return Fail("--devtools requires a private launch environment and cannot use --without-alias. " +
                     "Launch normally and use 'winapp devtools attach --pid <pid>' for limited late inspection.", isJson);
             }
+            // A performance trace measures the app, and DevTools' own UI-thread work would show up in it.
+            var profiling = parseResult.GetValue(ProfileOption) is not null;
+            if (explicitDevTools && profiling)
+            {
+                return Fail("--profile measures the app without DevTools; remove --devtools or --profile.", isJson);
+            }
 
             // Validate mutually exclusive options. Route through Fail so that under --json these
             // emit the structured error envelope instead of a plain-text banner (Change 2 / L5).
@@ -619,7 +625,7 @@ internal partial class RunCommand : Command, IShortDescription, ITargetAwareComm
                 return Fail("Sandbox DevTools requires a project with evaluated XAML sources for persistent host comments. Output-only and single-file inputs cannot establish that source owner.", isJson);
             }
 
-            // A run DevTools could not start for (CI, --no-launch, --without-alias, a Sandbox run, a guest registration)
+            // A run DevTools could not start for (CI, --no-launch, --without-alias, --profile, a Sandbox run, a guest registration)
             // stays plain unless DevTools was asked for, and only a WinUI project gets it by default. 'dotnet run'
             // through the NuGet package hands winapp the build output and the project's framework.
             dotnetRun = string.Equals(parseResult.GetValue(WinAppRootCommand.CallerOption), "nuget-package", StringComparison.Ordinal);
@@ -629,7 +635,7 @@ internal partial class RunCommand : Command, IShortDescription, ITargetAwareComm
                     string.Equals(parseResult.GetValue(WinAppRootCommand.ProjectFrameworkOption), "winui", StringComparison.OrdinalIgnoreCase);
             devToolsRun = DevToolsResolution.Resolve(requestedDevTools,
                 DevToolsResolution.IsCi(ReadCiVariable()),
-                noLaunch || withoutAlias || !executionTarget.IsLocal || guestInspectorApplication is not null,
+                noLaunch || withoutAlias || profiling || !executionTarget.IsLocal || guestInspectorApplication is not null,
                 winUIProject, requestedDevTools is null ? ReadDefaultMode() : null);
             devToolsReported = requestedDevTools is not null || winUIProject;
             DevToolsRunTelemetryScope.Set(devToolsRun);

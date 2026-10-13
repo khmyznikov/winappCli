@@ -42,7 +42,7 @@ and troubleshooting, see [Advanced DevTools](devtools-advanced.md). Every comman
 `winapp run` starts DevTools for a WinUI project: a `.csproj` with `UseWinUI`, or a
 C++ `.vcxproj` that uses the Windows App SDK and has XAML pages. It prints one line
 saying so and how to turn it off. It doesn't start DevTools in CI (when `CI` is set),
-with `--no-launch`, `--without-alias` or `--on sandbox`, or for a build-output folder,
+with `--no-launch`, `--without-alias`, `--profile` or `--on sandbox`, or for a build-output folder,
 a .NET file-based app or a project that isn't WinUI.
 
 For one run, pass `--devtools on`, `--devtools headless` or `--devtools off`.
