@@ -71,6 +71,8 @@
           "            <TextBlock x:Name=\"CountText\" AutomationProperties.AutomationId=\"CountText\" Text=\"not counted\" />",
           "            <Button AutomationProperties.AutomationId=\"ReadData\" Content=\"Read data\" Click=\"ReadData_Click\" />",
           "            <TextBlock x:Name=\"DataText\" AutomationProperties.AutomationId=\"DataText\" Text=\"not read\" />",
+          "            <Button AutomationProperties.AutomationId=\"Go\" Content=\"Go\" Click=\"Go_Click\" />",
+          "            <Button AutomationProperties.AutomationId=\"Back\" Content=\"Back\" IsEnabled=\"{x:Bind Body.CanGoBack, Mode=OneWay}\" />",
           "            <Frame x:Name=\"Body\" />",
           "        </StackPanel>",
           "    </NavigationView>",
@@ -103,6 +105,8 @@
           "        AutomationProperties.SetAutomationId(feedback, \"NavFeedback\");",
           "        Nav.FooterMenuItems.Add(feedback);",
           "        Body.Navigate(typeof(OptionsPage));",
+          "        // Evaluates x:Bind now (a common pattern), so a reload evaluates it before the kept frame is back in Body.",
+          "        Bindings.Update();",
           "    }",
           "",
           "    private void Count_Click(object sender, RoutedEventArgs e)",
@@ -113,6 +117,12 @@
           "    private void ReadData_Click(object sender, RoutedEventArgs e)",
           "    {",
           "        DataText.Text = System.IO.File.ReadAllText(System.IO.Path.Combine(System.AppContext.BaseDirectory, \"data.json\")).Trim();",
+          "    }",
+          "",
+          "    // Another instance of the same page, so the frame can go back.",
+          "    private void Go_Click(object sender, RoutedEventArgs e)",
+          "    {",
+          "        Body.Navigate(typeof(OptionsPage));",
           "    }",
           "",
           "    public void AddNavigationItems(string[] names)",
@@ -147,6 +157,7 @@
           "<?xml version=\"1.0\" encoding=\"utf-8\" ?>",
           "<Page",
           "    x:Class=\"TodoBench.OptionsPage\"",
+          "    xmlns:local=\"using:TodoBench\"",
           "    xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"",
           "    xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">",
           "    <StackPanel Spacing=\"8\">",
@@ -154,6 +165,16 @@
           "        <CheckBox x:Name=\"Disable\" Content=\"Disable\" />",
           "        <Button x:Name=\"Target\" Content=\"Target\" IsEnabled=\"{x:Bind Disable.IsChecked.Value.Equals(x:False), Mode=OneWay}\" />",
           "        <CheckBox x:Name=\"Mirror\" Content=\"Mirror\" IsChecked=\"{x:Bind Disable.IsChecked.Value, Mode=OneWay}\" />",
+          "        <ComboBox x:Name=\"Picker\" DisplayMemberPath=\"Name\" SelectedIndex=\"0\">",
+          "            <local:Choice Name=\"First\" />",
+          "            <local:Choice Name=\"Second\" />",
+          "        </ComboBox>",
+          "        <TextBlock AutomationProperties.AutomationId=\"PickedName\" Text=\"{x:Bind ((local:Choice)Picker.SelectedItem).Name, Mode=OneWay}\" />",
+          "        <ComboBox x:Name=\"Sizes\" SelectedIndex=\"0\">",
+          "            <ComboBoxItem x:Name=\"SizeSmall\" Content=\"Small\" />",
+          "            <ComboBoxItem x:Name=\"SizeLarge\" Content=\"Large\" />",
+          "        </ComboBox>",
+          "        <TextBlock AutomationProperties.AutomationId=\"PickedSize\" Text=\"{x:Bind ((ComboBoxItem)Sizes.SelectedItem).Name, Mode=OneWay}\" />",
           "        <Frame x:Name=\"Inner\" />",
           "    </StackPanel>",
           "</Page>"
@@ -183,6 +204,12 @@
           "    {",
           "        Inner.Navigate(typeof(InnerPage));",
           "    }",
+          "}",
+          "",
+          "// An item type the page's x:Bind casts to.",
+          "public sealed partial class Choice",
+          "{",
+          "    public string Name { get; set; } = \"\";",
           "}"
         ]
       }
@@ -275,6 +302,69 @@
       "phase": "shell",
       "title": "shell",
       "actions": [
+        {
+          "id": "s00a-app-resource",
+          "title": "An App.xaml resource added before any window edit; then the frame navigates, so it can go back",
+          "file": "App.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "        <ResourceDictionary>",
+              "            <ResourceDictionary.MergedDictionaries>"
+            ],
+            "text": [
+              "        <ResourceDictionary>",
+              "            <x:String x:Key=\"Early\">a</x:String>",
+              "            <ResourceDictionary.MergedDictionaries>"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-s00a-app-resource",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "Go",
+                "assert": "invoke"
+              },
+              {
+                "target": "Back",
+                "assert": "enabled-equals",
+                "value": "True"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "s00b-app-resource-after-navigation",
+          "title": "After navigating, an App.xaml save keeps {x:Bind Body.CanGoBack} following the kept frame",
+          "file": "App.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "<x:String x:Key=\"Early\">a</x:String>"
+            ],
+            "text": [
+              "<x:String x:Key=\"Early\">b</x:String>"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-s00b-app-resource-after-navigation",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "Back",
+                "assert": "enabled-equals",
+                "value": "True"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
         {
           "id": "s01-window-markup",
           "title": "A window whose constructor takes an argument reloads its markup, keeping the menu items startup code added",
@@ -396,13 +486,11 @@
           "edit": {
             "op": "replace",
             "find": [
-              "        <ResourceDictionary>",
-              "            <ResourceDictionary.MergedDictionaries>"
+              "            <x:String x:Key=\"Early\">b</x:String>"
             ],
             "text": [
-              "        <ResourceDictionary>",
-              "            <x:String x:Key=\"Greeting\">hello</x:String>",
-              "            <ResourceDictionary.MergedDictionaries>"
+              "            <x:String x:Key=\"Early\">b</x:String>",
+              "            <x:String x:Key=\"Greeting\">hello</x:String>"
             ]
           },
           "checkpoint": {
@@ -454,7 +542,7 @@
         },
         {
           "id": "s03-page-markup",
-          "title": "After a page reload, x:Bind through IsChecked.Value still follows the CheckBox",
+          "title": "After an unrelated edit of the page, x:Bind through IsChecked.Value and through casts ((local:Choice)..., (ComboBoxItem)...) still works",
           "file": "OptionsPage.xaml",
           "edit": {
             "op": "replace",
@@ -473,6 +561,16 @@
                 "target": "Heading",
                 "assert": "text-equals",
                 "value": "options v2"
+              },
+              {
+                "target": "PickedName",
+                "assert": "text-equals",
+                "value": "First"
+              },
+              {
+                "target": "PickedSize",
+                "assert": "text-equals",
+                "value": "SizeSmall"
               },
               {
                 "target": "Target",
@@ -533,7 +631,7 @@
           },
           "expect": {
             "outcome": "error",
-            "detail": "App\\.xaml\\(13,\\d+\\): This dictionary's resources are split by another element"
+            "detail": "App\\.xaml\\(14,\\d+\\): This dictionary's resources are split by another element"
           }
         },
         {

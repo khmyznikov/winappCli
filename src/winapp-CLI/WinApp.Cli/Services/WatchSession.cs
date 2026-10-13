@@ -245,10 +245,7 @@ internal sealed class WatchSession
         using var watcher = new FileSystemWatcher(_project.DirectoryName!) { IncludeSubdirectories = true };
         void OnChange(object sender, FileSystemEventArgs e)
         {
-            var relative = Path.GetRelativePath(_project.DirectoryName!, e.FullPath);
-            var segments = relative.Split(Path.DirectorySeparatorChar);
-            if (Path.GetExtension(e.FullPath).ToLowerInvariant() is ".cs" or ".xaml" or ".csproj" or ".appxmanifest" or ".resw" &&
-                !segments.SkipLast(1).Any(s => s.Equals("bin", StringComparison.OrdinalIgnoreCase) || s.Equals("obj", StringComparison.OrdinalIgnoreCase)))
+            if (IsSource(e.FullPath))
             {
                 changed.TrySetResult();
             }
@@ -269,6 +266,23 @@ internal sealed class WatchSession
         await changed.Task.WaitAsync(cancellationToken);
         await Task.Delay(300, cancellationToken);
     }
+
+    private bool IsSource(string path)
+    {
+        var segments = Path.GetRelativePath(_project.DirectoryName!, path).Split(Path.DirectorySeparatorChar);
+        return Path.GetExtension(path).ToLowerInvariant() is ".cs" or ".xaml" or ".csproj" or ".appxmanifest" or ".resw" &&
+            !segments.SkipLast(1).Any(s => s.Equals("bin", StringComparison.OrdinalIgnoreCase) || s.Equals("obj", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>Helper lines that end handling a save (or say it is ready): files saved after the last of them haven't reached the app.</summary>
+    private static readonly string[] SettledPrefixes = ["[watch] ready", "[watch] applied", "[watch] unchanged", "[watch] error", "[watch] waiting"];
+
+    /// <summary>When the helper last finished handling a save, or null before it is ready.</summary>
+    public DateTime? LastSettled { get; private set; }
+
+    /// <summary>Whether a source file was saved after the helper last finished a save: a change the app never got.</summary>
+    public bool HasUnappliedSave() => LastSettled is { } settled &&
+        Directory.EnumerateFiles(_project.DirectoryName!, "*", SearchOption.AllDirectories).Any(file => IsSource(file) && File.GetLastWriteTimeUtc(file) > settled);
 
     public IReadOnlyList<string> BuildProperties =>
     [
@@ -328,6 +342,10 @@ internal sealed class WatchSession
         }
         helper.OutputDataReceived += (_, e) =>
         {
+            if (e.Data is { } settled && SettledPrefixes.Any(p => settled.StartsWith(p, StringComparison.Ordinal)))
+            {
+                LastSettled = DateTime.UtcNow;
+            }
             // A session-wide note (XAML hot reload not enabled for this build) is said once, not after every restart.
             if (e.Data is { } line && (!line.StartsWith("[watch] note:", StringComparison.Ordinal) || _notes.Add(line)))
             {

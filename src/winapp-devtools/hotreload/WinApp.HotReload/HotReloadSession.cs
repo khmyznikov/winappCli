@@ -770,6 +770,12 @@ internal sealed class HotReloadSession
             var reason = result.RudeEdits.FirstOrDefault() is { } rude ? Format(rude) : "the change can't be applied to the running app";
             return new SaveResult(Outcome.Restart, reason);
         }
+        if (_components.Values.FirstOrDefault(c => c.Pending && c.Latest is { Warnings.Count: > 0 }) is { } unsupported)
+        {
+            // Markup live reload can't express (no later save changes that): the rebuilt app compiles it.
+            Discard();
+            return new SaveResult(Outcome.Restart, $"{Relative(unsupported.XamlPath)} {unsupported.Latest!.Warnings[0]}");
+        }
 
         var request = new HotReloadRequest { Op = "apply", Initializers = [.. _pendingInitializers], Assemblies = [.. _newAssemblies], Assets = [.. _changedAssets], LaunchItems = _launchItems };
         request.RefreshTypes.AddRange(libraryTypes);
@@ -790,7 +796,6 @@ internal sealed class HotReloadSession
             request.Markup.Add(new MarkupPayload { Uri = component.Uri, Xaml = component.Latest!.RuntimeXaml, Manifest = component.Latest.Manifest, LineMap = component.Latest.LineMap });
             _sources[component.Uri] = component.XamlPath;
             request.RefreshTypes.Add(component.ClassName!);
-            waiting.AddRange(component.Latest.Warnings.Select(w => $"{Relative(component.XamlPath)} {w}"));
             waiting.AddRange(component.Latest.Functions.Where(f => component.InvalidFunctions.ContainsKey(f.Method))
                 .Select(f => $"{Path.GetFileName(component.XamlPath)}: waiting for {f.Markup} to compile: {component.InvalidFunctions[f.Method]}"));
             var missing = (await MissingHandlersAsync(component, cancellationToken).ConfigureAwait(false)).ToList();

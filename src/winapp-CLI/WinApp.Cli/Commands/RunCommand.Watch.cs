@@ -82,19 +82,26 @@ internal partial class RunCommand
                     }
                     if (!activeWatch.RestartRequested && activeWatch.Launched && exitCode != 0 && !cancellationToken.IsCancellationRequested)
                     {
-                        // The app crashed (closing it normally ends the session): restart it with the next save.
-                        ansiConsole.MarkupLine($"[red][[watch]] the app exited with code {exitCode}; save a file to restart it[/]");
+                        // The app crashed (closing it normally ends the session): restart it with the next save, or now
+                        // when a save it was being sent never reached it.
+                        var unapplied = activeWatch.HasUnappliedSave();
+                        ansiConsole.MarkupLine(unapplied
+                            ? $"[red][[watch]] the app exited with code {exitCode}; restarting it with the change it didn't get[/]"
+                            : $"[red][[watch]] the app exited with code {exitCode}; save a file to restart it[/]");
                         if (activeWatch.CrashReport(exitCode) is { } crash)
                         {
                             ansiConsole.WriteLine("  " + crash.Replace("\n", "\n  ", StringComparison.Ordinal));
                         }
-                        try
+                        if (!unapplied)
                         {
-                            await activeWatch.WaitForSourceChangeAsync(DateTime.UtcNow, cancellationToken);
-                        }
-                        catch (OperationCanceledException)
-                        {
-                            return exitCode;
+                            try
+                            {
+                                await activeWatch.WaitForSourceChangeAsync(DateTime.UtcNow, cancellationToken);
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                return exitCode;
+                            }
                         }
                         activeWatch.RestartRequested = true;
                         continue;

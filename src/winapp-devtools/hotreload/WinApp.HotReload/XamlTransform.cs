@@ -424,7 +424,7 @@ internal static class XamlTransform
                     var dot = path.LastIndexOf('.');
                     if (path.Length == 0 || path.Contains('(') || path.Contains(':'))
                     {
-                        Warnings.Add($"line {line}: '{value}' isn't an event binding live reload can wire; the event stays unhandled until restart.");
+                        Warnings.Add($"line {line}: '{value}' isn't an event binding live reload can wire, so this page takes effect when the app restarts");
                         continue;
                     }
                     var wiring = new EventWiring { Event = attribute.Name.LocalName, Handler = dot < 0 ? path : path[(dot + 1)..], Path = dot < 0 ? "" : path[..dot], Label = LabelOf(element, isRoot, elementName) };
@@ -445,7 +445,7 @@ internal static class XamlTransform
                     var bind = ParseBind(value, defaultMode);
                     if (bind is null)
                     {
-                        Warnings.Add($"line {line}: '{value}' isn't x:Bind syntax live reload understands; the property stays unset until restart.");
+                        Warnings.Add($"line {line}: '{value}' isn't x:Bind syntax live reload understands, so this page takes effect when the app restarts");
                         continue;
                     }
                     var (owner, property) = SplitAttached(attribute.Name.LocalName, element.Name.NamespaceName);
@@ -456,10 +456,10 @@ internal static class XamlTransform
                         // Functions, casts and static members ({x:Bind local:AppFacts.StaticBanner}) are compiled.
                         var source = inTemplate ? template : className;
                         var expression = string.IsNullOrEmpty(source) ? null
-                            : XBindExpression.Translate(bind.Path, "__s", prefix => ResolveNamespace(element, prefix));
+                            : XBindExpression.Translate(bind.Path, "__s", prefix => ResolveNamespace(element, prefix), name => ResolveTypeName(element, name));
                         if (expression is null)
                         {
-                            Warnings.Add($"line {line}: '{value}' can't be evaluated live (unsupported function syntax{(inTemplate && string.IsNullOrEmpty(template) ? " or a template without x:DataType" : "")}); the property stays unset until restart.");
+                            Warnings.Add($"line {line}: '{value}' can't be evaluated live (unsupported function syntax{(inTemplate && string.IsNullOrEmpty(template) ? " or a template without x:DataType" : "")}), so this page takes effect when the app restarts");
                             continue;
                         }
                         bind.Function = FunctionPrefix + Functions.Count;
@@ -470,7 +470,7 @@ internal static class XamlTransform
                             var valueType = typeName is null ? null : resolver.PropertyType(typeName, property);
                             var argument = valueType is null ? "__value" : $"({valueType})__value";
                             back = backPath.Contains(':')
-                                ? XBindExpression.Translate(backPath, "__s", prefix => ResolveNamespace(element, prefix))?.CSharp + $"({argument});"
+                                ? XBindExpression.Translate(backPath, "__s", prefix => ResolveNamespace(element, prefix), name => ResolveTypeName(element, name))?.CSharp + $"({argument});"
                                 : $"__s.{backPath}({argument});";
                             bind.BindBack = bind.Function + "_Back";
                         }

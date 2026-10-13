@@ -655,16 +655,7 @@ internal static class XamlReload
         }
         foreach (var component in components)
         {
-            try
-            {
-                // The compiled x:Bind object, or the stand-in live reload installed.
-                var bindings = component.GetType().GetField("Bindings", InstanceMembers)?.GetValue(component);
-                bindings?.GetType().GetMethod("Update")?.Invoke(bindings, null);
-            }
-            catch (Exception ex)
-            {
-                Report($"{component.GetType().Name}: re-evaluating x:Bind failed: {ex.GetBaseException().Message}");
-            }
+            UpdateCompiledBindings(component);
         }
         foreach (var element in elements)
         {
@@ -745,6 +736,20 @@ internal static class XamlReload
         }
     }
 
+    /// <summary>Runs the component's x:Bind again: the compiled Bindings object, or the stand-in live reload installed.</summary>
+    private static void UpdateCompiledBindings(object component)
+    {
+        try
+        {
+            var bindings = component.GetType().GetField("Bindings", InstanceMembers)?.GetValue(component);
+            bindings?.GetType().GetMethod("Update")?.Invoke(bindings, null);
+        }
+        catch (Exception ex)
+        {
+            Report($"{component.GetType().Name}: re-evaluating x:Bind failed: {ex.GetBaseException().Message}");
+        }
+    }
+
     /// <summary>Frames by x:Name with the page they show, so a re-initialized window keeps its pages (and their view models).</summary>
     private static Dictionary<string, Frame> NamedFrames(DependencyObject? root) =>
         NameIndex(root as FrameworkElement).Values.OfType<Frame>().Where(f => f.Content is Page).ToDictionary(f => f.Name, StringComparer.Ordinal);
@@ -754,6 +759,12 @@ internal static class XamlReload
         var kept = new List<(Frame, Page)>();
         HotReloadAgent.Log($"frames to keep: {string.Join(", ", oldFrames.Keys)}");
         Dictionary<string, FrameworkElement>? index = null;
+        // Compiled x:Bind reads x:Name fields when it evaluates, which can be before a kept frame is back in its field
+        // ({x:Bind rootFrame.CanGoBack} then tracks the frame the reload created): it reads them again once settled.
+        if (oldFrames.Count > 0 && s_dispatcher is { } dispatcher)
+        {
+            dispatcher.TryEnqueue(DispatcherQueuePriority.Low, () => UpdateCompiledBindings(component));
+        }
         foreach (var (name, oldFrame) in oldFrames)
         {
             var found = root?.FindName(name) ?? (index ??= NameIndex(root)).GetValueOrDefault(name);

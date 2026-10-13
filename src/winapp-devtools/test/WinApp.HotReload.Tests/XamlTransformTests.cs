@@ -174,6 +174,15 @@ public sealed class XamlTransformTests
         Assert.AreEqual("((string)__s.Tag)", cast.CSharp);
         CollectionAssert.AreEqual(new[] { "Tag" }, cast.Watch.ToArray());
 
+        // A cast whose result has a member read (WinUI Gallery's ComboBox and ScrollViewer pages), with and without a prefix.
+        var castMember = XBindExpression.Translate("((local:FontItem)Combo2.SelectedItem).Font", "__s", Resolve)!;
+        Assert.AreEqual("(((global::App.FontItem)__s.Combo2.SelectedItem)).Font", castMember.CSharp);
+        CollectionAssert.AreEqual(new[] { "Combo2.SelectedItem" }, castMember.Watch.ToArray());
+        var defaultCast = XBindExpression.Translate("((ComboBoxItem)zoomCombo.SelectedItem).Content", "__s", Resolve,
+            name => name == "ComboBoxItem" ? "Microsoft.UI.Xaml.Controls.ComboBoxItem" : null)!;
+        Assert.AreEqual("(((global::Microsoft.UI.Xaml.Controls.ComboBoxItem)__s.zoomCombo.SelectedItem)).Content", defaultCast.CSharp);
+        Assert.IsNull(XBindExpression.Translate("((Unknown)zoomCombo.SelectedItem).Content", "__s", Resolve));
+
         var instance = XBindExpression.Translate("ViewModel.Format(Title)", "__s", Resolve)!;
         Assert.AreEqual("__s.ViewModel.Format(__s.Title)", instance.CSharp);
         CollectionAssert.AreEquivalent(new[] { "ViewModel", "Title" }, instance.Watch.ToArray());
