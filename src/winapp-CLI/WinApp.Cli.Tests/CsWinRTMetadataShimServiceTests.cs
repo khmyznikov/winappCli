@@ -45,9 +45,8 @@ public class CsWinRTMetadataShimServiceTests
     {
         var root = Path.Join(_tempDir.FullName, "Windows Kits", "10");
         Directory.CreateDirectory(root);
-        foreach (var version in installedVersions)
+        foreach (var platform in installedVersions.Select(version => Path.Join(root, "Platforms", "UAP", version)))
         {
-            var platform = Path.Join(root, "Platforms", "UAP", version);
             Directory.CreateDirectory(platform);
             File.WriteAllText(Path.Join(platform, "Platform.xml"), "<ApplicationPlatform />");
         }
@@ -124,15 +123,37 @@ public class CsWinRTMetadataShimServiceTests
     [DataRow("sdk+")]
     [DataRow("local")]
     [DataRow(@"C:\winmds")]
-    public void ResolveMetadataFolder_ProjectChoseOwnMetadata_ReturnsNull(string projectMetadata)
+    public void ResolveMetadataFolder_RegisteredSdk_ProjectChoseOwnMetadata_ReturnsNull(string projectMetadata)
     {
-        // On a host with a registered SDK, a project-set CsWinRTWindowsMetadata that isn't a bare version
-        // is the project's choice; the shim's global -p: must not override it.
+        // A project-set CsWinRTWindowsMetadata that isn't a missing SDK version is the project's choice; the
+        // shim's global -p: must not override it.
         CreateRefPackVersion("10.0.22621.57");
         var service = NewService(CreateSdkRoot("10.0.26100.0"));
 
-        Assert.IsTrue(service.NeedsProjectWindowsMetadata("net9.0-windows10.0.22621.0"));
+        Assert.IsTrue(service.IsWindowsSdkAbsent("net9.0-windows10.0.22621.0"), "the default would read a missing SDK");
         Assert.IsNull(service.ResolveMetadataFolder("net9.0-windows10.0.22621.0", projectMetadata));
+    }
+
+    [TestMethod]
+    [DataRow("local")]
+    [DataRow(@"C:\winmds")]
+    public void ResolveMetadataFolder_NoSdk_ProjectMetadataWithoutSdk_ReturnsNull(string projectMetadata)
+    {
+        // 'local' and winmd folders don't need a Windows SDK, so they're respected even on an SDK-less host.
+        CreateRefPackVersion("10.0.22621.57");
+        var service = NewService(sdkRoot: null);
+
+        Assert.IsNull(service.ResolveMetadataFolder("net9.0-windows10.0.22621.0", projectMetadata));
+    }
+
+    [TestMethod]
+    public void ResolveMetadataFolder_NoSdk_ProjectAsksForSdk_Injects()
+    {
+        // 'sdk' needs a registered SDK, which this host lacks, so the shim still rescues the build.
+        var expected = CreateRefPackVersion("10.0.22621.57");
+        var service = NewService(sdkRoot: null);
+
+        Assert.AreEqual(expected.FullName, service.ResolveMetadataFolder("net9.0-windows10.0.22621.0", "sdk"));
     }
 
     [TestMethod]
@@ -146,29 +167,37 @@ public class CsWinRTMetadataShimServiceTests
     }
 
     [TestMethod]
-    public void NeedsProjectWindowsMetadata_OnlyWhenRegisteredSdkLacksVersion()
+    public void ResolveMetadataFolder_RequestedVersionDiffersFromTfm_PrefersRequestedRefPack()
     {
-        Assert.IsFalse(NewService(sdkRoot: null).NeedsProjectWindowsMetadata("net9.0-windows10.0.22621.0"),
-            "an SDK-less host injects regardless, so the project value isn't needed.");
-        Assert.IsFalse(NewService(CreateSdkRoot("10.0.22621.0")).NeedsProjectWindowsMetadata("net9.0-windows10.0.22621.0"));
-        Assert.IsTrue(NewService(CreateSdkRoot("10.0.22621.0")).NeedsProjectWindowsMetadata("net10.0-windows10.0.26100.0"));
+        // WindowsSDKVersion asks for 22621, which is missing, while the TFM says 26100.
+        var expected = CreateRefPackVersion("10.0.22621.57");
+        CreateRefPackVersion("10.0.26100.57");
+        var service = NewService(CreateSdkRoot("10.0.26100.0"), @"10.0.22621.0\");
+
+        Assert.AreEqual(expected.FullName, service.ResolveMetadataFolder("net10.0-windows10.0.26100.0"),
+            "the ref pack for the version cswinrt was asked for wins over the TFM's.");
     }
 
     [TestMethod]
-    [DataRow(null, null, "net9.0-windows10.0.22621.0", "10.0.22621.0")]
-    [DataRow(null, null, "net10.0-windows10.0.22621", "10.0.22621.0")]
-    [DataRow(null, null, "net8.0-windows10.0.19041.1", "10.0.19041.1")]
-    [DataRow(null, @"10.0.26100.0\", "net9.0-windows10.0.22621.0", "10.0.26100.0")]
-    [DataRow(null, "not-a-version", "net9.0-windows10.0.22621.0", null)]
-    [DataRow(null, null, "net10.0", null)]
-    [DataRow(null, null, null, null)]
-    [DataRow("10.0.19041.0", @"10.0.26100.0\", "net9.0-windows10.0.22621.0", "10.0.19041.0")]
-    [DataRow("10.0.19041.0+", null, "net9.0-windows10.0.22621.0", "10.0.19041.0")]
-    [DataRow("sdk+", null, "net9.0-windows10.0.22621.0", null)]
-    [DataRow(@"C:\winmds", null, "net9.0-windows10.0.22621.0", null)]
-    public void ResolveCsWinRTSdkVersion_MatchesWhatCsWinRTReads(string? projectMetadata, string? variable, string? tfm, string? expected)
+    [DataRow(null, null, "net9.0-windows10.0.22621.0", true, "10.0.22621.0")]
+    [DataRow(null, null, "net10.0-windows10.0.22621", true, "10.0.22621.0")]
+    [DataRow(null, null, "net8.0-windows10.0.19041.1", true, "10.0.19041.1")]
+    [DataRow(null, @"10.0.26100.0\", "net9.0-windows10.0.22621.0", true, "10.0.26100.0")]
+    [DataRow(null, "not-a-version", "net9.0-windows10.0.22621.0", true, null)]
+    [DataRow(null, null, "net10.0", true, null)]
+    [DataRow(null, null, null, true, null)]
+    [DataRow("10.0.19041.0", @"10.0.26100.0\", "net9.0-windows10.0.22621.0", true, "10.0.19041.0")]
+    [DataRow("10.0.19041.0+", null, "net9.0-windows10.0.22621.0", true, "10.0.19041.0")]
+    [DataRow("sdk+", null, "net9.0-windows10.0.22621.0", true, null)]
+    [DataRow("local", null, "net9.0-windows10.0.22621.0", false, null)]
+    [DataRow(@"C:\winmds", null, "net9.0-windows10.0.22621.0", false, null)]
+    public void ResolveCsWinRTMetadataRequest_MatchesWhatCsWinRTReads(
+        string? projectMetadata, string? variable, string? tfm, bool readsSdk, string? version)
     {
-        Assert.AreEqual(expected, CsWinRTMetadataShimService.ResolveCsWinRTSdkVersion(projectMetadata, variable, tfm));
+        var request = CsWinRTMetadataShimService.ResolveCsWinRTMetadataRequest(projectMetadata, variable, tfm);
+
+        Assert.AreEqual(readsSdk, request.ReadsWindowsSdk);
+        Assert.AreEqual(version, request.SdkVersion);
     }
 
     [TestMethod]

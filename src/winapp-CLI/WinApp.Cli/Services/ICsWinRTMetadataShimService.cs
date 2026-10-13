@@ -25,27 +25,20 @@ internal interface ICsWinRTMetadataShimService
     /// in which case any registered SDK counts as installed and the highest ref-pack version is used.
     /// </param>
     /// <param name="projectWindowsMetadata">
-    /// The project's evaluated <c>CsWinRTWindowsMetadata</c>, when read (see
-    /// <see cref="NeedsProjectWindowsMetadata"/>). A value other than a bare SDK version is the project's own
-    /// choice, so nothing is injected over it on a host with a registered SDK.
+    /// The project's evaluated <c>CsWinRTWindowsMetadata</c>, when read. A bare SDK version is checked like
+    /// the default; <c>local</c> or a winmd folder is the project's own choice and is never overridden.
     /// </param>
     string? ResolveMetadataFolder(string? targetFrameworkMoniker, string? projectWindowsMetadata = null);
 
     /// <summary>
-    /// True when cswinrt can't read the Windows SDK this build targets: no SDK is registered, or the
+    /// True when cswinrt can't read the Windows SDK this build asks for: no SDK is registered, or the
     /// version it would read isn't installed. This is when the shim WOULD inject the ref-pack winmd folder
-    /// if it were restored. Callers use this to decide whether an explicit <c>dotnet restore</c> (to populate
+    /// if it were restored. Callers use this to decide whether to read the project's own
+    /// <c>CsWinRTWindowsMetadata</c>, and whether an explicit <c>dotnet restore</c> (to populate
     /// <c>Microsoft.Windows.SDK.NET.Ref</c>) is worth doing before resolving the folder, so the FIRST build
     /// on such a host isn't handed a missing folder.
     /// </summary>
     /// <param name="targetFrameworkMoniker">See <see cref="ResolveMetadataFolder"/>.</param>
     /// <param name="projectWindowsMetadata">See <see cref="ResolveMetadataFolder"/>.</param>
     bool IsWindowsSdkAbsent(string? targetFrameworkMoniker, string? projectWindowsMetadata = null);
-
-    /// <summary>
-    /// True when a Windows SDK is registered but not the version CsWinRT's default would read for
-    /// <paramref name="targetFrameworkMoniker"/>. Only then can a project-set <c>CsWinRTWindowsMetadata</c>
-    /// change the decision, so callers read that property from the project only in this case.
-    /// </summary>
-    bool NeedsProjectWindowsMetadata(string? targetFrameworkMoniker);
 }

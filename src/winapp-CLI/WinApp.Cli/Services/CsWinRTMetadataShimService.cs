@@ -54,10 +54,12 @@ internal sealed partial class CsWinRTMetadataShimService(
     /// <inheritdoc />
     public string? ResolveMetadataFolder(string? targetFrameworkMoniker, string? projectWindowsMetadata = null)
     {
+        var request = ResolveCsWinRTMetadataRequest(projectWindowsMetadata, GetWindowsSdkVersionVariable(), targetFrameworkMoniker);
+
         // An installed SDK that has the version cswinrt will read means its default resolution works.
-        if (!IsWindowsSdkAbsent(targetFrameworkMoniker, projectWindowsMetadata))
+        if (!IsWindowsSdkAbsent(request))
         {
-            logger.LogDebug("The Windows SDK this build targets is installed; not injecting CsWinRTWindowsMetadata.");
+            logger.LogDebug("cswinrt can read the Windows metadata this build asks for; not injecting CsWinRTWindowsMetadata.");
             return null;
         }
 
@@ -81,12 +83,16 @@ internal sealed partial class CsWinRTMetadataShimService(
             return null;
         }
 
-        var tpvPrefix = ExtractPlatformVersionPrefix(targetFrameworkMoniker);
+        // Prefer the ref pack for the SDK version cswinrt was asked for, which a WindowsSDKVersion or a
+        // project value can set apart from the TFM.
+        var preferredPrefix = request.SdkVersion is { } requestedVersion
+            ? requestedVersion[..requestedVersion.LastIndexOf('.')]
+            : ExtractPlatformVersionPrefix(targetFrameworkMoniker);
 
         var versionNames = refPackRoot.GetDirectories().Select(d => d.Name).ToList();
         var chosen = SelectBestRefPackVersionDir(
             versionNames,
-            tpvPrefix,
+            preferredPrefix,
             versionName => File.Exists(Path.Combine(refPackRoot.FullName, versionName, "winmd", SentinelWinmd)));
 
         if (chosen is null)
@@ -115,79 +121,89 @@ internal sealed partial class CsWinRTMetadataShimService(
     }
 
     /// <inheritdoc />
-    public bool IsWindowsSdkAbsent(string? targetFrameworkMoniker, string? projectWindowsMetadata = null)
-    {
-        var sdkRoot = GetWindowsSdkRoot();
-        return string.IsNullOrWhiteSpace(sdkRoot)
-            || IsRequestedSdkVersionMissing(sdkRoot, targetFrameworkMoniker, projectWindowsMetadata);
-    }
+    public bool IsWindowsSdkAbsent(string? targetFrameworkMoniker, string? projectWindowsMetadata = null) =>
+        IsWindowsSdkAbsent(ResolveCsWinRTMetadataRequest(projectWindowsMetadata, GetWindowsSdkVersionVariable(), targetFrameworkMoniker));
 
-    /// <inheritdoc />
-    public bool NeedsProjectWindowsMetadata(string? targetFrameworkMoniker)
+    private bool IsWindowsSdkAbsent(CsWinRTMetadataRequest request)
     {
-        var sdkRoot = GetWindowsSdkRoot();
-        return !string.IsNullOrWhiteSpace(sdkRoot)
-            && IsRequestedSdkVersionMissing(sdkRoot, targetFrameworkMoniker, projectWindowsMetadata: null);
-    }
-
-    private bool IsRequestedSdkVersionMissing(string sdkRoot, string? targetFrameworkMoniker, string? projectWindowsMetadata)
-    {
-        // No bare version requested: the registered SDK serves cswinrt's default, or the project chose its own.
-        var version = ResolveCsWinRTSdkVersion(projectWindowsMetadata, GetWindowsSdkVersionVariable(), targetFrameworkMoniker);
-        if (version is null)
+        // 'local' and winmd paths don't touch the Windows SDK: the project's own choice works without one.
+        if (!request.ReadsWindowsSdk)
         {
             return false;
         }
 
-        var platformXml = Path.Join(sdkRoot, "Platforms", "UAP", version, "Platform.xml");
+        var sdkRoot = GetWindowsSdkRoot();
+        if (string.IsNullOrWhiteSpace(sdkRoot))
+        {
+            return true;
+        }
+
+        // No specific version ('sdk' or an unresolvable default): cswinrt uses a registered SDK.
+        if (request.SdkVersion is null)
+        {
+            return false;
+        }
+
+        var platformXml = Path.Join(sdkRoot, "Platforms", "UAP", request.SdkVersion, "Platform.xml");
         if (File.Exists(platformXml))
         {
             return false;
         }
 
-        logger.LogDebug("Windows SDK {Version} is not installed ({Path} is missing).", version, platformXml);
+        logger.LogDebug("Windows SDK {Version} is not installed ({Path} is missing).", request.SdkVersion, platformXml);
         return true;
     }
 
     /// <summary>
-    /// The four-part SDK version cswinrt will look up under the Windows SDK, or <c>null</c> when it won't
-    /// look one up. The project's evaluated <c>CsWinRTWindowsMetadata</c>, when known, is exactly what
-    /// cswinrt receives: only a bare version (optionally <c>+</c>-suffixed) is looked up, and anything else
-    /// (<c>sdk</c>, <c>local</c>, a winmd folder) is the project's own choice. Otherwise this mirrors CsWinRT's
-    /// default: <c>WindowsSDKVersion</c> when set, else the TFM's platform version (MSBuild's four-part
-    /// <c>TargetPlatformVersion</c>).
+    /// What cswinrt will read for <c>CsWinRTWindowsMetadata</c>: whether it reads the Windows SDK at all and,
+    /// if so, which four-part version (<c>null</c> = any registered SDK).
     /// </summary>
-    internal static string? ResolveCsWinRTSdkVersion(
+    internal readonly record struct CsWinRTMetadataRequest(bool ReadsWindowsSdk, string? SdkVersion);
+
+    /// <summary>
+    /// Mirrors cswinrt's handling of <c>CsWinRTWindowsMetadata</c>. The project's evaluated value, when known,
+    /// is exactly what cswinrt receives: a bare version (optionally <c>+</c>-suffixed) is read from that SDK
+    /// version, <c>sdk</c>/<c>sdk+</c> from any registered SDK, and anything else (<c>local</c>, a winmd folder)
+    /// doesn't read the SDK. Otherwise this follows CsWinRT's default: <c>WindowsSDKVersion</c> when set, else
+    /// the TFM's platform version (MSBuild's four-part <c>TargetPlatformVersion</c>).
+    /// </summary>
+    internal static CsWinRTMetadataRequest ResolveCsWinRTMetadataRequest(
         string? projectWindowsMetadata,
         string? windowsSdkVersionVariable,
         string? targetFrameworkMoniker)
     {
         if (!string.IsNullOrWhiteSpace(projectWindowsMetadata))
         {
-            var requested = projectWindowsMetadata.Trim().TrimEnd('\\').TrimEnd('+');
-            return FourPartVersionRegex().IsMatch(requested) ? requested : null;
+            var requested = projectWindowsMetadata.Trim().TrimEnd('\\');
+            var version = requested.TrimEnd('+');
+            if (FourPartVersionRegex().IsMatch(version))
+            {
+                return new(ReadsWindowsSdk: true, version);
+            }
+
+            return new(ReadsWindowsSdk: requested is "sdk" or "sdk+", SdkVersion: null);
         }
 
         if (!string.IsNullOrWhiteSpace(windowsSdkVersionVariable))
         {
             var fromVariable = windowsSdkVersionVariable.Trim().TrimEnd('\\');
-            return FourPartVersionRegex().IsMatch(fromVariable) ? fromVariable : null;
+            return new(ReadsWindowsSdk: true, FourPartVersionRegex().IsMatch(fromVariable) ? fromVariable : null);
         }
 
         if (string.IsNullOrWhiteSpace(targetFrameworkMoniker))
         {
-            return null;
+            return new(ReadsWindowsSdk: true, SdkVersion: null);
         }
 
         var match = TfmPlatformVersionRegex().Match(targetFrameworkMoniker);
         if (!match.Success)
         {
-            return null;
+            return new(ReadsWindowsSdk: true, SdkVersion: null);
         }
 
-        return match.Groups["revision"].Success
-            ? match.Groups["version"].Value
-            : match.Groups["version"].Value + ".0";
+        return new(
+            ReadsWindowsSdk: true,
+            match.Groups["revision"].Success ? match.Groups["version"].Value : match.Groups["version"].Value + ".0");
     }
 
     [GeneratedRegex(@"^\d+\.\d+\.\d+\.\d+$")]

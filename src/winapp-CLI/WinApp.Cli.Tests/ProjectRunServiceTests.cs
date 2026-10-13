@@ -2582,10 +2582,10 @@ public class ProjectRunServiceTests
     }
 
     [TestMethod]
-    public async Task BuildAndResolveAsync_RegisteredSdkLacksVersion_PassesProjectMetadataToShim()
+    public async Task BuildAndResolveAsync_TargetedSdkMissing_PassesProjectMetadataToShim()
     {
-        // Only when the registered SDK lacks the targeted version does winapp read the project's own
-        // CsWinRTWindowsMetadata, so a project-set value (e.g. sdk+) can stop the shim from overriding it.
+        // Only when the shim would inject does winapp read the project's own CsWinRTWindowsMetadata, so a
+        // project-set value (e.g. a winmd folder) can stop the shim from overriding it.
         var csproj = WriteFile("App.csproj", ExecutableCsproj);
         var probes = 0;
         var dotnet = new FakeDotNetService
@@ -2602,7 +2602,7 @@ public class ProjectRunServiceTests
                 return (0, PackagedPropertiesJson(), string.Empty);
             },
         };
-        var shim = new FakeCsWinRTMetadataShimService { ProjectWindowsMetadataNeeded = true };
+        var shim = new FakeCsWinRTMetadataShimService { WindowsSdkAbsent = true };
         var service = NewServiceWith(dotnet, shim, out _);
         var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: []);
 
@@ -2621,7 +2621,7 @@ public class ProjectRunServiceTests
         {
             RunDotnetCommandHandler = args => { commandArgs.Add(args); return (0, PackagedPropertiesJson(), string.Empty); },
         };
-        var shim = new FakeCsWinRTMetadataShimService { ProjectWindowsMetadataNeeded = false };
+        var shim = new FakeCsWinRTMetadataShimService { WindowsSdkAbsent = false };
         var service = NewServiceWith(dotnet, shim, out _);
         var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: []);
 

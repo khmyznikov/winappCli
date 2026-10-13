@@ -188,10 +188,10 @@ internal sealed partial class ProjectRunService(
 
     /// <summary>
     /// Pins the effective framework (see <see cref="ResolveFrameworksAsync"/>) and gathers the CsWinRT shim's
-    /// inputs. The project's <c>CsWinRTWindowsMetadata</c> is read with an extra evaluate only when a Windows
-    /// SDK is registered but lacks the version CsWinRT's default would read: there, a project that chose its
-    /// own metadata (<c>sdk+</c>, a winmd folder) must keep it rather than have the shim's global
-    /// <c>-p:</c> override it.
+    /// inputs. The project's <c>CsWinRTWindowsMetadata</c> is read with an extra evaluate only when the shim
+    /// would otherwise inject (the Windows SDK CsWinRT's default reads is missing): there, a project that chose
+    /// its own metadata (<c>local</c>, a winmd folder, a different SDK version) must keep it rather than have
+    /// the shim's global <c>-p:</c> override it. Hosts with that SDK installed pay nothing.
     /// </summary>
     private async Task<(ProjectRunOptions Options, CsWinRTShimInput Shim)> ResolveFrameworksAndShimInputAsync(
         FileInfo csproj,
@@ -200,7 +200,7 @@ internal sealed partial class ProjectRunService(
         CancellationToken cancellationToken)
     {
         (options, var framework) = await ResolveFrameworksAsync(csproj, options, workingDir, cancellationToken);
-        if (UserSetCsWinRTMetadata(options) || !csWinRTMetadataShimService.NeedsProjectWindowsMetadata(framework))
+        if (UserSetCsWinRTMetadata(options) || !csWinRTMetadataShimService.IsWindowsSdkAbsent(framework))
         {
             return (options, new CsWinRTShimInput(framework, null));
         }
@@ -216,11 +216,7 @@ internal sealed partial class ProjectRunService(
                 projectMetadata = GetProp(MsBuildPropertyReader.Parse(stdout, CsWinRTMetadataProbeProperties), "CsWinRTWindowsMetadata");
             }
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is Win32Exception or FileNotFoundException or InvalidOperationException)
         {
             // Indeterminate: fall back to CsWinRT's default, which is what the build uses when the project sets nothing.
             logger.LogDebug(ex, "Could not read CsWinRTWindowsMetadata for {Project}.", csproj.Name);

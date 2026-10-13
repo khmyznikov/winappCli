@@ -36,12 +36,6 @@ internal sealed class FakeCsWinRTMetadataShimService : ICsWinRTMetadataShimServi
     /// <summary>Monikers <see cref="IsWindowsSdkAbsent"/> was consulted with, in call order.</summary>
     public List<string?> SdkAbsentMonikers { get; } = [];
 
-    /// <summary>
-    /// What <see cref="NeedsProjectWindowsMetadata"/> reports. Default <c>false</c> so tests don't see the
-    /// extra project-metadata evaluate unless they opt in.
-    /// </summary>
-    public bool ProjectWindowsMetadataNeeded { get; set; }
-
     public string? ResolveMetadataFolder(string? targetFrameworkMoniker, string? projectWindowsMetadata = null)
     {
         ResolvedMonikers.Add(targetFrameworkMoniker);
@@ -54,6 +48,4 @@ internal sealed class FakeCsWinRTMetadataShimService : ICsWinRTMetadataShimServi
         SdkAbsentMonikers.Add(targetFrameworkMoniker);
         return WindowsSdkAbsent;
     }
-
-    public bool NeedsProjectWindowsMetadata(string? targetFrameworkMoniker) => ProjectWindowsMetadataNeeded;
 }
