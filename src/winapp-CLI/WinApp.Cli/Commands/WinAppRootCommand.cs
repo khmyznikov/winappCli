@@ -105,7 +105,8 @@ internal class WinAppRootCommand : RootCommand, IShortDescription
         GuestDevToolsLaunchCommand guestDevToolsLaunchCommand,
         GuestDevToolsHostCommand guestDevToolsHostCommand,
         TargetCommand targetCommand,
-        FindApiCommand findApiCommand) : base("Create, run, debug, test, and package Windows apps from the command line. Works with WinUI and any other (cross-platform) app framework targeting Windows, and manages Windows SDKs, package identity, manifests, and certificates.")
+        FindApiCommand findApiCommand,
+        PerfCommand? perfCommand = null) : base("Create, run, debug, test, and package Windows apps from the command line. Works with WinUI and any other (cross-platform) app framework targeting Windows, and manages Windows SDKs, package identity, manifests, and certificates.")
     {
         Subcommands.Add(initCommand);
         Subcommands.Add(newCommand);
@@ -129,6 +130,10 @@ internal class WinAppRootCommand : RootCommand, IShortDescription
         Subcommands.Add(findUiCommand);
         Subcommands.Add(uiCommand);
         Subcommands.Add(findApiCommand);
+        if (perfCommand is not null)
+        {
+            Subcommands.Add(perfCommand);
+        }
         Subcommands.Add(completeCommand);
         Subcommands.Add(guestAgentCommand);
         Subcommands.Add(guestDesktopCaptureCommand);
@@ -164,6 +169,7 @@ internal class WinAppRootCommand : RootCommand, IShortDescription
             ("Run & Debug", [typeof(RunCommand), typeof(CreateDebugIdentityCommand), typeof(UnregisterCommand), typeof(TargetCommand), typeof(DevToolsCommand)]),
             ("Discovery", [typeof(FindUiCommand), typeof(FindApiCommand)]),
             ("UI Automation", [typeof(UiCommand)]),
+            ("Performance", [typeof(PerfCommand)]),
             ("Package, Sign & Publish", [typeof(PackageCommand), typeof(ManifestCommand), typeof(CertCommand), typeof(SignCommand), typeof(AzSignCommand), typeof(MSStoreCommand)]),
             ("Advanced", [typeof(EmbedIdentityCommand), typeof(CreateExternalCatalogCommand), typeof(ToolCommand), typeof(GetWinappPathCommand), typeof(ConfigCommand)])
         );

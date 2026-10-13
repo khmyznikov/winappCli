@@ -102,6 +102,37 @@ public class AppLauncherServiceTests
     }
 
     [TestMethod]
+    public void LaunchByAumid_ActivationNeverReturns_ThrowsTimeoutException()
+    {
+        using var release = new ManualResetEventSlim();
+        _service.ActivationTimeout = TimeSpan.FromMilliseconds(100);
+        _service.ActivateApplicationImpl = (_, _) =>
+        {
+            release.Wait();
+            return 1;
+        };
+
+        try
+        {
+            var ex = Assert.ThrowsExactly<TimeoutException>(() => _service.LaunchByAumid("Contoso.App_abc!App"));
+            StringAssert.Contains(ex.Message, "Contoso.App_abc!App");
+        }
+        finally
+        {
+            release.Set();
+        }
+    }
+
+    [TestMethod]
+    public void LaunchByAumid_ActivatorThrows_PropagatesOriginalException()
+    {
+        _service.ActivateApplicationImpl = (_, _) => throw new System.Runtime.InteropServices.COMException("activation refused", unchecked((int)0x80270254));
+
+        var ex = Assert.ThrowsExactly<System.Runtime.InteropServices.COMException>(() => _service.LaunchByAumid("Contoso.App_abc!App"));
+        Assert.AreEqual("activation refused", ex.Message);
+    }
+
+    [TestMethod]
     public void LaunchByAumid_DefaultActivator_BogusAumid_Throws()
     {
         // Exercises the real DefaultActivateApplication COM path. A non-existent
@@ -424,6 +455,34 @@ public class AppLauncherServiceTests
         }
     }
 
+    [TestMethod]
+    [DoNotParallelize]
+    public async Task LaunchExecutable_SuppressMode_DoesNotShareTheInvokingConsole()
+    {
+        var consoleProcesses = new uint[64];
+        var before = GetConsoleProcessList(consoleProcesses, (uint)consoleProcesses.Length);
+        if (before == 0 || !consoleProcesses.Take((int)Math.Min(before, (uint)consoleProcesses.Length))
+            .Contains((uint)Environment.ProcessId))
+        {
+            Assert.Inconclusive("The test host has no Windows console, so console-lifetime isolation cannot be observed.");
+        }
+
+        using var launched = _service.LaunchExecutable(
+            "cmd.exe", "/c ping 127.0.0.1 -n 60 > nul", null, LaunchStdioMode.Suppress);
+        try
+        {
+            await Task.Delay(100);
+            var count = GetConsoleProcessList(consoleProcesses, (uint)consoleProcesses.Length);
+            Assert.IsFalse(consoleProcesses.Take((int)Math.Min(count, (uint)consoleProcesses.Length))
+                    .Contains(launched.ProcessId),
+                "A background performance worker must not share winapp's console, or Ctrl+C for a later command can terminate it.");
+        }
+        finally
+        {
+            launched.Kill();
+        }
+    }
+
     private const int STD_OUTPUT_HANDLE = -11;
     private const uint HANDLE_FLAG_INHERIT = 0x1;
 
@@ -445,6 +504,9 @@ public class AppLauncherServiceTests
     [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
     [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
     private static extern bool CloseHandle(IntPtr hObject);
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint GetConsoleProcessList([System.Runtime.InteropServices.Out] uint[] processList, uint processCount);
 
     // ---- TerminatePackageProcesses -----------------------------------------
 

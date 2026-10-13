@@ -527,7 +527,11 @@ internal partial class RunCommand
                     if (coordinates.Error is { } coordinateError) { logger.LogWarning("{Message}", coordinateError); }
                     LogSourceExclusions(coordinates.Exclusions);
                 }
+                await PrepareProfileAsync(new(ExecutableName: Path.GetFileName(exePath)), cancellationToken);
+
+                var launchedAfter = DateTime.UtcNow;
                 launched = appLauncherService.LaunchExecutable(exePath, launchArgs, workingDirectory, stdioMode, environment);
+                await BindProfileAsync(launched.ProcessId, launchedAfter, cancellationToken);
             }
             catch (Exception ex)
             {
@@ -572,7 +576,7 @@ internal partial class RunCommand
                     {
                         ansiConsole.WriteLine(processId.ToString());
                     }
-                    return 0;
+                    return profileRun?.Error is null ? 0 : 1;
                 }
 
                 if (isJson)
