@@ -127,6 +127,7 @@ internal sealed class HotReloadSession
 
         session = new HotReloadSession(options, agent, workspace, info.Id, solution, enc, hello.BaseDirectory ?? "", cscArgs) { _xamlReload = hello.XamlReload, XamlReloadUnavailable = hello.XamlReloadUnavailable };
         await session.LoadComponentsAsync(cancellationToken).ConfigureAwait(false);
+        session._warmUp = Task.Run(() => session.WarmUpAsync(cancellationToken), cancellationToken);
         return session;
     }
 
@@ -411,8 +412,42 @@ internal sealed class HotReloadSession
 
     private string UriFor(string xamlPath) => "ms-appx:///" + Path.GetRelativePath(_projectDirectory, xamlPath).Replace('\\', '/');
 
+    /// <summary>With WINAPP_HOT_RELOAD_LOG set: how long each step of a save took (in the log's .helper file).</summary>
+    private void Phase(string name)
+    {
+        if (Environment.GetEnvironmentVariable("WINAPP_HOT_RELOAD_LOG") is { Length: > 0 } log)
+        {
+            File.AppendAllText(log + ".helper", $"{DateTime.Now:HH:mm:ss.fff} {_phase.ElapsedMilliseconds,6} ms {name}{Environment.NewLine}");
+        }
+        _phase.Restart();
+    }
+
+    private readonly Stopwatch _phase = new();
+
+    /// <summary>
+    /// The first save would otherwise generate and check every component's partial and load the edit-and-continue
+    /// baseline (seconds on a large app): done while the user looks at the app, and awaited by the first save.
+    /// </summary>
+    private Task _warmUp = Task.CompletedTask;
+
+    private async Task WarmUpAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await UpdateGeneratedCodeAsync(cancellationToken).ConfigureAwait(false);
+            await UpdatesAsync(cancellationToken).ConfigureAwait(false);
+            Discard();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The first save does it again, and reports what went wrong.
+        }
+    }
+
     public async Task<SaveResult> ProcessAsync(IReadOnlyCollection<string> paths, CancellationToken cancellationToken)
     {
+        await _warmUp.ConfigureAwait(false);
+        _phase.Restart();
         var batch = paths.Select(Relative).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         if (Optimized && paths.FirstOrDefault(p => p.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)) is { } code)
         {
@@ -577,6 +612,7 @@ internal sealed class HotReloadSession
             }
         }
 
+        Phase("files and references");
         var resolver = new CompilationTypeResolver((await Project.GetCompilationAsync(cancellationToken).ConfigureAwait(false))!);
         var resources = new List<MarkupPayload>();
         var libraryTypes = new List<string>();
@@ -628,6 +664,7 @@ internal sealed class HotReloadSession
 
         // Checks that fail the save come before anything below records what this update adds (initializers, generated
         // code), so the save that fixes it still sends them.
+        Phase("compilation and markup");
         if (deleted.Count > 0 && await DeletedTypeUsageAsync(deleted, cancellationToken).ConfigureAwait(false) is { } usage)
         {
             return new SaveResult(Outcome.Error, usage);
@@ -636,12 +673,13 @@ internal sealed class HotReloadSession
         {
             return new SaveResult(Outcome.Error, markupUsage);
         }
-        if ((deleted.Count > 0 || paths.Any(p => p.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))) &&
-            await StaleBindingsAsync(cancellationToken).ConfigureAwait(false) is { } stale)
+        if (await RemovedMemberNamesAsync(cancellationToken).ConfigureAwait(false) is { Count: > 0 } removedNames &&
+            await StaleBindingsAsync(removedNames, cancellationToken).ConfigureAwait(false) is { } stale)
         {
             return new SaveResult(Outcome.Error, stale);
         }
         // Pending until an update that carries them is applied: a save that fails after this still leaves them to send.
+        Phase("usage checks");
         foreach (var initializer in await NewStaticInitializersAsync(cancellationToken).ConfigureAwait(false))
         {
             if (!_pendingInitializers.Contains(initializer))
@@ -649,6 +687,7 @@ internal sealed class HotReloadSession
                 _pendingInitializers.Add(initializer);
             }
         }
+        Phase("static initializers");
         var problems = await UpdateGeneratedCodeAsync(cancellationToken).ConfigureAwait(false);
         if (problems.Count > 0)
         {
@@ -657,8 +696,10 @@ internal sealed class HotReloadSession
 
         // Removed fields and properties stay declared up front: the compiler can't remove them from a loaded type, and
         // fails outright (rather than reporting a rude edit) for a removed partial property.
+        Phase("generated code");
         await KeepRemovedFieldsAsync(cancellationToken).ConfigureAwait(false);
         await EmitNewPartialPropertyInitializersAsync(cancellationToken).ConfigureAwait(false);
+        Phase("kept members");
         var result = await UpdatesAsync(cancellationToken).ConfigureAwait(false);
         if (result.Errors.Count == 0 && (result.RudeEdits.Count > 0 || result.NeedsRestart) && deleted.Count > 0)
         {
@@ -727,6 +768,7 @@ internal sealed class HotReloadSession
         request.Deltas.AddRange(result.Deltas.Select(d => new DeltaPayload { ModuleId = d.ModuleId, Metadata = d.Metadata, IL = d.IL, Pdb = d.Pdb, UpdatedTypes = d.UpdatedTypes }));
         var applied = new List<string>();
         var waiting = new List<string>();
+        Phase("edit and continue");
         var notes = await NotesAsync(cancellationToken).ConfigureAwait(false);
         notes.AddRange(_pendingNotes);
         _pendingNotes.Clear();
@@ -747,7 +789,9 @@ internal sealed class HotReloadSession
             component.MissingHandlers = missing.Count;
             waiting.AddRange(missing);
         }
+        Phase("notes");
         await AddStructuralRefreshAsync(request, cancellationToken).ConfigureAwait(false);
+        Phase("structural refresh");
         request.Markup.AddRange(resources);
         applied.AddRange(paths.Concat(assets).Concat(libraryPaths.Where(p => _libraries.ContainsKey(NestedProjectDirectory(p)!))).Select(Relative).Distinct(StringComparer.OrdinalIgnoreCase));
 
@@ -763,6 +807,7 @@ internal sealed class HotReloadSession
         try
         {
             response = await _agent.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            Phase("app applied");
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException)
         {
@@ -797,6 +842,7 @@ internal sealed class HotReloadSession
     /// <summary>The attributes on each App.xaml's root, as last seen.</summary>
     private readonly Dictionary<string, string> _applicationSettings = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<string> _pendingNotes = [];
+    private readonly HashSet<string> _notedSkips = new(StringComparer.Ordinal);
 
     /// <summary>"RequestedTheme=Light" lines for the root element's attributes, namespace declarations and directives aside.</summary>
     private static string ApplicationSettings(string xaml)
@@ -851,11 +897,18 @@ internal sealed class HotReloadSession
                 {
                     isApp |= t.ToDisplayString() == "Microsoft.UI.Xaml.Application";
                 }
+                var oldType = oldRoot?.DescendantNodes().OfType<ClassDeclarationSyntax>().FirstOrDefault(c => c.Identifier.ValueText == type.Identifier.ValueText);
                 if (!isApp)
                 {
+                    // A component whose constructor takes arguments: a reload only loads its markup again.
+                    if (symbol is not null && _components.Values.Any(c => c.ClassName == symbol.ToDisplayString()) &&
+                        GeneratedPartial.ReplayedConstructor([type]) is { ParameterList.Parameters.Count: > 0 } constructor &&
+                        (oldType is null || GeneratedPartial.ReplayedConstructor([oldType]) is not { } oldConstructor || !oldConstructor.IsEquivalentTo(constructor)))
+                    {
+                        notes.Add($"{type.Identifier.ValueText}'s constructor takes arguments, so a reload only loads its markup again: this constructor change takes effect when the app restarts");
+                    }
                     continue;
                 }
-                var oldType = oldRoot?.DescendantNodes().OfType<ClassDeclarationSyntax>().FirstOrDefault(c => c.Identifier.ValueText == type.Identifier.ValueText);
                 foreach (var member in type.Members.Where(m => m is ConstructorDeclarationSyntax || (m is MethodDeclarationSyntax method && method.Identifier.ValueText == "OnLaunched")))
                 {
                     var name = member is MethodDeclarationSyntax method ? method.Identifier.ValueText : type.Identifier.ValueText;
@@ -885,10 +938,12 @@ internal sealed class HotReloadSession
                     var owner = method.ContainingType?.ToDisplayString() ?? "";
                     var starts = (method.Name == "Start" && (owner.EndsWith("Timer", StringComparison.Ordinal) || owner == "System.Threading.Thread")) ||
                         (method.Name is "Run" or "StartNew" && owner.StartsWith("System.Threading.Tasks.Task", StringComparison.Ordinal));
-                    var text = invocation.ToString();
-                    if (starts && _notedStarts.Add($"{component.ClassName}|{text}"))
+                    // The call as one line (a lambda body can span many), with where it is.
+                    var text = invocation.Expression.ToString() + "(" + (invocation.ArgumentList.Arguments.Count > 0 ? "..." : "") + ")";
+                    var line = invocation.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+                    if (starts && _notedStarts.Add($"{component.ClassName}|{invocation}"))
                     {
-                        notes.Add($"{type.Name}'s constructor runs again on each reload, and {text} starts another each time");
+                        notes.Add($"{Relative(invocation.SyntaxTree.FilePath)}({line}): {type.Name}'s constructor runs again on each reload, so {text} there starts another each time it runs");
                     }
                 }
             }
@@ -1344,17 +1399,32 @@ internal sealed class HotReloadSession
             component.InvalidFunctions.Clear();
             // Likewise the replay: the constructor may only have referred to a type that didn't exist yet.
             component.ReplayDisabled = false;
+            component.SkippedStatements.Clear();
         }
         // Worked out on a copy: trying variants (with and without the constructor replay) must not leave a document that
         // is textually unchanged but a new version, which the compiler then emits as an edit of every method in it.
         var working = _solution;
-        for (var pass = 0; pass < 4; pass++)
+        var classes = IndexClasses(userTrees);
+        // Only partials that can have a new problem are checked (binding every one is seconds on a large app): one whose
+        // text changes, one whose class changed, and, after a code edit, one with x:Bind functions (their code may call
+        // what changed).
+        var changedFiles = Project.GetChanges(_committed.GetProject(_projectId)!).GetChangedDocuments().Concat(Project.GetChanges(_committed.GetProject(_projectId)!).GetAddedDocuments())
+            .Select(id => _solution.GetDocument(id)?.FilePath).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var codeChanged = changedFiles.Any(p => p.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) && IsSource(p));
+        var check = new HashSet<string>(StringComparer.Ordinal);
+        for (var pass = 0; pass < 8; pass++)
         {
             foreach (var component in _components.Values.Where(c => c.ClassName is not null))
             {
-                var parts = UserParts(component.ClassName!, userTrees);
+                var parts = classes.GetValueOrDefault(component.ClassName!) ?? [];
                 var text = GeneratedPartial.Create(component, parts, !component.ReplayDisabled);
                 var source = SourceText.From(text, Encoding.UTF8, SourceHashAlgorithm.Sha256);
+                if ((pass == 0 && (parts.Any(p => changedFiles.Contains(p.SyntaxTree.FilePath)) || (codeChanged && component.Latest?.Functions.Count > 0))) ||
+                    !_generated.TryGetValue(component.ClassName!, out var committedId) ||
+                    _solution.GetDocument(committedId) is not { } committed || (await committed.GetTextAsync(cancellationToken).ConfigureAwait(false)).ToString() != text)
+                {
+                    check.Add(component.ClassName!);
+                }
                 if (_generated.TryGetValue(component.ClassName!, out var id))
                 {
                     if ((await working.GetDocument(id)!.GetTextAsync(cancellationToken).ConfigureAwait(false)).ToString() != text)
@@ -1373,7 +1443,7 @@ internal sealed class HotReloadSession
 
             var compilation = (await working.GetProject(_projectId)!.GetCompilationAsync(cancellationToken).ConfigureAwait(false))!;
             var retry = false;
-            foreach (var component in _components.Values.Where(c => c.ClassName is not null))
+            foreach (var component in _components.Values.Where(c => c.ClassName is not null && check.Contains(c.ClassName)))
             {
                 var tree = (await working.GetDocument(_generated[component.ClassName!])!.GetSyntaxTreeAsync(cancellationToken).ConfigureAwait(false))!;
                 foreach (var error in compilation.GetSemanticModel(tree).GetDiagnostics(cancellationToken: cancellationToken).Where(d => d.Severity == DiagnosticSeverity.Error))
@@ -1386,14 +1456,38 @@ internal sealed class HotReloadSession
                     }
                     else if (!component.ReplayDisabled)
                     {
-                        // The constructor body does something only a constructor may (e.g. assign a readonly field).
-                        component.ReplayDisabled = true;
-                        retry = true;
+                        // The constructor body does something only a constructor may (e.g. assign a get-only property):
+                        // that statement is left out of the replay, or the whole replay when the error is elsewhere.
+                        var replay = tree.GetRoot(cancellationToken).DescendantNodes().OfType<MethodDeclarationSyntax>().FirstOrDefault(m => m.Identifier.ValueText == GeneratedPartial.ReplayMethod);
+                        var index = replay?.Body?.Statements.IndexOf(s => s.Span.Contains(error.Location.SourceSpan)) ?? -1;
+                        if (index >= 0 && component.SkippedStatements.Add(index))
+                        {
+                            retry = true;
+                        }
+                        else if (index < 0)
+                        {
+                            component.ReplayDisabled = true;
+                            retry = true;
+                        }
                     }
                 }
             }
             if (!retry)
             {
+                foreach (var component in _components.Values.Where(c => c.Pending && c.ClassName is not null && c.SkippedStatements.Count > 0 && !c.ReplayDisabled))
+                {
+                    var constructor = GeneratedPartial.ReplayedConstructor(classes.GetValueOrDefault(component.ClassName!) ?? []);
+                    foreach (var index in component.SkippedStatements.Order())
+                    {
+                        if (constructor?.Body?.Statements.ElementAtOrDefault(index) is { } statement &&
+                            _notedSkips.Add($"{component.ClassName}|{statement}"))
+                        {
+                            var first = statement.ToString().Split('\n')[0].Trim();
+                            _pendingNotes.Add($"{Relative(statement.SyntaxTree.FilePath)}({statement.GetLocation().GetLineSpan().StartLinePosition.Line + 1}): " +
+                                $"only a constructor can run `{first}`, so a reload of {component.ClassName![(component.ClassName.LastIndexOf('.') + 1)..]} replays its constructor without it");
+                        }
+                    }
+                }
                 await AdoptGeneratedAsync(working, cancellationToken).ConfigureAwait(false);
                 return StaleNameReferences(compilation, userTrees, cancellationToken);
             }
@@ -1420,15 +1514,21 @@ internal sealed class HotReloadSession
         }
     }
 
-    private static List<ClassDeclarationSyntax> UserParts(string className, IEnumerable<SyntaxTree> trees)
+    /// <summary>Class declarations by full name, found without walking into member bodies.</summary>
+    private static Dictionary<string, List<ClassDeclarationSyntax>> IndexClasses(IEnumerable<SyntaxTree> trees)
     {
-        var dot = className.LastIndexOf('.');
-        var ns = dot < 0 ? null : className[..dot];
-        var name = className[(dot + 1)..];
-        return trees.SelectMany(tree => tree.GetRoot().DescendantNodes().OfType<ClassDeclarationSyntax>())
-            .Where(c => c.Identifier.ValueText == name && GeneratedPartial.NamespaceOf(c) == ns)
-            .ToList();
+        var index = new Dictionary<string, List<ClassDeclarationSyntax>>(StringComparer.Ordinal);
+        foreach (var tree in trees)
+        {
+            foreach (var declaration in tree.GetRoot().DescendantNodes(n => n is CompilationUnitSyntax or BaseNamespaceDeclarationSyntax or TypeDeclarationSyntax).OfType<ClassDeclarationSyntax>())
+            {
+                var name = GeneratedPartial.NamespaceOf(declaration) is { } ns ? ns + "." + declaration.Identifier.ValueText : declaration.Identifier.ValueText;
+                (index.TryGetValue(name, out var parts) ? parts : index[name] = []).Add(declaration);
+            }
+        }
+        return index;
     }
+
 
     /// <summary>Code that still uses an x:Name the XAML no longer declares would not build; report it the same way.</summary>
     private List<string> StaleNameReferences(Compilation compilation, List<SyntaxTree> userTrees, CancellationToken cancellationToken)
@@ -1520,7 +1620,10 @@ internal sealed class HotReloadSession
         // Any other type that was already loaded (a control with a new DependencyProperty): the initializer method goes
         // into the class itself, in the session's copy of its file, since it may not be partial.
         var touched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var tree in after.SyntaxTrees.Where(t => IsSource(t.FilePath)))
+        // A static field can only have been added in a file this save changed (or a generator output that changed).
+        var changes = Project.GetChanges(_committed.GetProject(_projectId)!);
+        var changedPaths = changes.GetChangedDocuments().Concat(changes.GetAddedDocuments()).Select(id => _solution.GetDocument(id)?.FilePath).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var tree in after.SyntaxTrees.Where(t => IsSource(t.FilePath) && changedPaths.Contains(t.FilePath)))
         {
             var model = after.GetSemanticModel(tree);
             foreach (var declaration in tree.GetRoot(cancellationToken).DescendantNodes().OfType<TypeDeclarationSyntax>().Where(d => d.Parent is BaseNamespaceDeclarationSyntax or CompilationUnitSyntax))
@@ -1553,7 +1656,10 @@ internal sealed class HotReloadSession
         // PropertyChangedEventArgs for a new property). Generated code is fully qualified, so a class of the session's
         // own runs the initializer.
         var documentPaths = Project.Documents.Select(d => d.FilePath).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var tree in after.SyntaxTrees.Where(t => !documentPaths.Contains(t.FilePath)))
+        var generatedBefore = before.SyntaxTrees.Where(t => !documentPaths.Contains(t.FilePath)).GroupBy(t => t.FilePath, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        foreach (var tree in after.SyntaxTrees.Where(t => !documentPaths.Contains(t.FilePath) &&
+            !(generatedBefore.TryGetValue(t.FilePath, out var old) && (ReferenceEquals(old, t) || old.GetText(cancellationToken).ContentEquals(t.GetText(cancellationToken))))))
         {
             var model = after.GetSemanticModel(tree);
             foreach (var declarator in tree.GetRoot(cancellationToken).DescendantNodes().OfType<FieldDeclarationSyntax>()
@@ -1719,12 +1825,39 @@ internal sealed class HotReloadSession
         return null;
     }
 
+    /// <summary>Members (properties, fields, methods) the code declared before this save and no longer does.</summary>
+    private async Task<HashSet<string>> RemovedMemberNamesAsync(CancellationToken cancellationToken)
+    {
+        static IEnumerable<string> Names(SyntaxNode? root) => root?.DescendantNodes(n => n is CompilationUnitSyntax or BaseNamespaceDeclarationSyntax or TypeDeclarationSyntax)
+            .OfType<MemberDeclarationSyntax>().SelectMany(m => m switch
+            {
+                PropertyDeclarationSyntax p => [p.Identifier.ValueText],
+                MethodDeclarationSyntax method => [method.Identifier.ValueText],
+                BaseFieldDeclarationSyntax field => field.Declaration.Variables.Select(v => v.Identifier.ValueText),
+                _ => [],
+            }) ?? [];
+        var oldProject = _committed.GetProject(_projectId)!;
+        var changes = Project.GetChanges(oldProject);
+        var removed = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var id in changes.GetChangedDocuments().Concat(changes.GetRemovedDocuments()))
+        {
+            if (oldProject.GetDocument(id) is not { FilePath: { } path } old || !IsSource(path))
+            {
+                continue;
+            }
+            var before = Names(await old.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false));
+            var after = Project.GetDocument(id) is { } current ? Names(await current.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false)).ToHashSet(StringComparer.Ordinal) : [];
+            removed.UnionWith(before.Where(name => !after.Contains(name)));
+        }
+        return removed;
+    }
+
     /// <summary>
     /// x:Bind paths checked against the code as the user wrote it. A property renamed or deleted in C# stays declared
     /// for the running app (see KeepRemovedFieldsAsync), so markup that still binds it would load with an empty value
     /// and fail the next build (WMC1110); it's reported until the markup follows.
     /// </summary>
-    private async Task<string?> StaleBindingsAsync(CancellationToken cancellationToken)
+    private async Task<string?> StaleBindingsAsync(HashSet<string> removedNames, CancellationToken cancellationToken)
     {
         var project = Project;
         // Files the session added kept members to: as on disk.
@@ -1744,10 +1877,16 @@ internal sealed class HotReloadSession
         var errors = new List<string>();
         foreach (var path in _components.Keys.Where(File.Exists))
         {
+            // Only markup that mentions a name the code no longer declares can bind to it.
+            var xaml = await ReadSharedAsync(path, cancellationToken).ConfigureAwait(false);
+            if (!removedNames.Any(name => xaml.Contains(name, StringComparison.Ordinal)))
+            {
+                continue;
+            }
             XamlTransformResult transformed;
             try
             {
-                transformed = XamlTransform.Transform(await ReadSharedAsync(path, cancellationToken).ConfigureAwait(false), resolver);
+                transformed = XamlTransform.Transform(xaml, resolver);
             }
             catch (XmlException)
             {

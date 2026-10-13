@@ -667,7 +667,7 @@
             ]
           },
           "expect": {
-            "detail": "timer\\.Start\\(\\) starts another each time"
+            "detail": "HomePage\\.xaml\\.cs\\(\\d+\\): HomePage's constructor runs again on each reload, so timer\\.Start\\(\\) there starts another each time it runs"
           }
         },
         {

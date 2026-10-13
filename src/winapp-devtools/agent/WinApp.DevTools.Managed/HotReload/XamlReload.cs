@@ -1098,6 +1098,7 @@ internal static class XamlReload
     private static void ReloadMarkup(object component)
     {
         var restore = Snapshot(component);
+        var keepAdded = CodeAddedItems.Detach(component);
         try
         {
             ClearErrorInfo();
@@ -1109,6 +1110,10 @@ internal static class XamlReload
             restore();
             ReportError(Describe(ex, ClassUris.GetValueOrDefault(component.GetType().FullName!), component.GetType().Name));
         }
+        finally
+        {
+            keepAdded(component);
+        }
     }
 
     private static void Reinitialize(object component)
@@ -1116,6 +1121,7 @@ internal static class XamlReload
         var type = component.GetType();
         HotReloadAgent.Log($"reinitialize {type.FullName}");
         var restore = Snapshot(component);
+        var keepAdded = CodeAddedItems.Detach(component);
         try
         {
             ClearErrorInfo();
@@ -1130,6 +1136,11 @@ internal static class XamlReload
         {
             restore();
             ReportError(Describe(ex, ClassUris.GetValueOrDefault(type.FullName!), type.Name));
+        }
+        finally
+        {
+            // Into the rebuilt collections, or back into the old ones when the reload was undone.
+            keepAdded(component);
         }
     }
 
@@ -1169,6 +1180,7 @@ internal static class XamlReload
             {
                 Wire(component, manifest);
             }
+            CodeAddedItems.RecordMarkup(component);
             Stamp(component);
         }
         catch (Exception ex)

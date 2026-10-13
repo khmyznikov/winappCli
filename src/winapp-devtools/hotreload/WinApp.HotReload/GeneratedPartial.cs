@@ -32,6 +32,12 @@ internal sealed class XamlComponent(string xamlPath, string uri)
 
     public bool ReplayDisabled { get; set; }
 
+    /// <summary>
+    /// Top-level statements of the constructor body the replay leaves out (by index): ones only a constructor may run,
+    /// such as assigning a get-only property.
+    /// </summary>
+    public HashSet<int> SkippedStatements { get; } = [];
+
     /// <summary>Once emitted for a new class, 'sealed' stays: unsealing a loaded type is a rude edit.</summary>
     public bool Sealed { get; set; }
 
@@ -164,14 +170,29 @@ internal static class GeneratedPartial
         }
         builder.Append("    internal void ").Append(ReplayMethod).AppendLine("()");
         builder.AppendLine("    {");
-        var constructor = userParts.SelectMany(part => part.Members.OfType<ConstructorDeclarationSyntax>())
-            .FirstOrDefault(ctor => ctor.ParameterList.Parameters.Count == 0 && !ctor.Modifiers.Any(SyntaxKind.StaticKeyword));
+        var constructor = ReplayedConstructor(userParts);
+        // A constructor that takes arguments (MainWindow(object? arg = null), or one a DI container calls) can't run
+        // again without them: only its markup is loaded again.
+        canReplay &= constructor?.ParameterList.Parameters.Count == 0;
         if (constructor is not null)
         {
-            if (canReplay && constructor.Body is { } body)
+            if (canReplay && constructor.Body is { } body && component.SkippedStatements.Count == 0)
             {
                 // Everything between the braces: a closing #endif belongs to the brace, not the last statement.
                 builder.AppendLine(body.SyntaxTree.GetText().ToString(Microsoft.CodeAnalysis.Text.TextSpan.FromBounds(body.OpenBraceToken.Span.End, body.CloseBraceToken.SpanStart)));
+            }
+            else if (canReplay && constructor.Body is { } partial)
+            {
+                // Statement by statement, a left-out one as an empty statement (so the others keep their positions) that
+                // keeps its trivia (#if/#endif).
+                for (var i = 0; i < partial.Statements.Count; i++)
+                {
+                    var statement = partial.Statements[i];
+                    builder.Append(component.SkippedStatements.Contains(i)
+                        ? statement.GetLeadingTrivia().ToFullString() + ";" + statement.GetTrailingTrivia().ToFullString()
+                        : statement.ToFullString());
+                }
+                builder.AppendLine(partial.CloseBraceToken.LeadingTrivia.ToFullString());
             }
             else if (canReplay && constructor.ExpressionBody is { } expression)
             {
@@ -185,6 +206,15 @@ internal static class GeneratedPartial
         builder.AppendLine("    }");
         builder.AppendLine("}");
         return builder.ToString();
+    }
+
+    /// <summary>The constructor a reload replays: the parameterless one, else the one that loads the markup.</summary>
+    public static ConstructorDeclarationSyntax? ReplayedConstructor(IEnumerable<ClassDeclarationSyntax> userParts)
+    {
+        var constructors = userParts.SelectMany(part => part.Members.OfType<ConstructorDeclarationSyntax>()).Where(ctor => !ctor.Modifiers.Any(SyntaxKind.StaticKeyword)).ToList();
+        return constructors.FirstOrDefault(ctor => ctor.ParameterList.Parameters.Count == 0)
+            ?? constructors.FirstOrDefault(ctor => ctor.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(call => call.Expression.ToString() is "InitializeComponent" or "this.InitializeComponent"))
+            ?? constructors.FirstOrDefault();
     }
 
     private static IEnumerable<string> UsingsFor(ClassDeclarationSyntax part)
