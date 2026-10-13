@@ -749,12 +749,16 @@ public sealed class DevToolsRunTests() : BaseCommandTests(logLevel: Microsoft.Ex
     }
 
     // A performance trace measures the app, so DevTools stays out of it. Elevated mode with no registered package fails
-    // before anything is recorded, which keeps these tests from starting a real capture.
+    // before anything is recorded, so this test never starts a capture or asks for elevation.
     [TestMethod]
     public async Task Profile_TurnsTheDefaultOff()
     {
         var app = WinUIProject(true);
-        await Run(app.Input, "--profile", Path.Join(app.Output, "trace"), "--profile-mode", "elevated", "--detach", "--json");
+        _launcher.FakePackageFullName = null;
+        var trace = Path.Join(app.Output, "trace");
+        Assert.AreEqual(1, await Run(app.Input, "--profile", trace, "--profile-mode", "elevated", "--detach", "--json"));
+        StringAssert.Contains(TestAnsiConsole.Output, "--profile-mode attach");
+        Assert.IsFalse(Directory.Exists(trace));
         Assert.IsEmpty(_attach.Calls);
         Assert.IsEmpty(_environments);
         Assert.AreEqual("option", DevToolsJson(TestAnsiConsole.Output)!.Value.GetProperty("source").GetString());
