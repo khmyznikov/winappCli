@@ -102,6 +102,11 @@ internal static class Synonyms
         ["recent files"]           = "recent",
         ["drag and drop"]          = "dragdrop",
         ["drag drop"]              = "dragdrop",
+        ["slide out"]              = "slideout",
+        ["slide-out"]              = "slideout",
+        ["side sheet"]             = "slideout",
+        ["range slider"]           = "rangeselector",
+        ["coach mark"]             = "coachmark",
     };
 
     /// <summary>
@@ -232,6 +237,9 @@ internal static class Synonyms
         ["datagrid"]        = ["listview", "table", "rows", "columns"],
         ["table"]           = ["listview", "datagrid", "rows", "columns"],
         ["spreadsheet"]     = ["listview", "datagrid", "rows"],
+        ["rows"]            = ["listview"],
+        ["reorder"]         = ["listview"],
+        ["chat"]            = ["listview", "itemsrepeater"],
 
         // ─── Dialogs / popups ───
         ["modal"]           = ["contentdialog", "dialog"],
@@ -240,6 +248,10 @@ internal static class Synonyms
         ["actionsheet"]     = ["contentdialog", "menuflyout"],
         ["snackbar"]        = ["infobar", "teachingtip"],
         ["tooltip"]         = ["tooltipservice", "teachingtip"],
+        ["coachmark"]       = ["teachingtip"],
+        ["alert"]           = ["infobar"],
+        ["alerts"]          = ["infobar"],
+        ["badge"]           = ["infobadge"],
 
         // ─── Navigation ───
         ["sidebar"]         = ["navigationview", "splitview", "navigation"],
@@ -247,14 +259,19 @@ internal static class Synonyms
         ["drawer"]          = ["navigationview", "splitview"],
         ["breadcrumbs"]     = ["breadcrumbbar"],
         ["crumbs"]          = ["breadcrumbbar"],
+        ["slideout"]        = ["splitview"],
 
         // ─── Tabs ───
         ["tabbar"]          = ["selectorbar", "segmented"],
+        ["tabs"]            = ["tabview"],
 
         // ─── Inputs ───
         ["select"]          = ["combobox"],
         ["picker"]          = ["combobox", "calendarpicker", "datepicker", "timepicker"],
         ["stepper"]         = ["numberbox"],
+        ["selector"]        = ["combobox", "radiobuttons", "segmented"],
+        ["field"]           = ["textbox"],
+        ["fields"]          = ["textbox"],
         ["radiogroup"]      = ["radiobuttons"],
         ["chip"]            = ["tokenizingtextbox", "token"],
         ["chips"]           = ["tokenizingtextbox", "token"],
@@ -279,6 +296,7 @@ internal static class Synonyms
         ["resizable"]       = ["gridsplitter", "contentsizer"],
         ["wrap"]            = ["wrappanel", "wraplayout"],
         ["masonry"]         = ["staggeredpanel", "staggeredlayout"],
+        ["fit"]             = ["viewbox"],
 
         // ─── Image grids / galleries ───
         // Upstream's own curated keywords already tag ItemsRepeater, GridView and ItemsView
@@ -309,11 +327,14 @@ internal static class Synonyms
         // ─── Progress / loading ───
         ["loading"]         = ["progressring", "progressbar"],
         ["loader"]          = ["progressring", "progressbar"],
+        ["meter"]           = ["progressbar", "radialgauge"],
+        ["gauge"]           = ["radialgauge"],
 
         // ─── Commands / buttons ───
         ["fab"]             = ["button"],
         ["iconbutton"]      = ["button", "appbarbutton"],
         ["ribbon"]          = ["tabbedcommandbar"],
+        ["toolbar"]         = ["commandbar", "appbarbutton"],
         ["contextmenu"]     = ["menuflyout"],
         ["rightclick"]      = ["menuflyout"],
 
@@ -329,7 +350,7 @@ internal static class Synonyms
         // ─── Date / time / color ───
 
         // ─── Settings / forms ───
-        ["form"]            = ["settingscard", "stackpanel"],
+        ["form"]            = ["settingscard", "stackpanel", "textbox"],
         ["preferences"]     = ["settingscard", "settingsexpander"],
         ["options"]         = ["settingscard", "combobox", "radiobuttons"],
 
@@ -339,7 +360,7 @@ internal static class Synonyms
         ["tray"]            = ["systemtray"],
         ["systemtray"]      = ["system", "tray", "icon", "minimize"],
         ["share"]           = ["sharecontract"],
-        ["filepicker"]      = ["file", "picker"],
+        ["filepicker"]      = ["file", "picker", "storage", "pickers"],
         ["openfile"]        = ["filepicker"],
         ["savefile"]        = ["filepicker"],
         ["dragdrop"]        = ["drag", "drop"],

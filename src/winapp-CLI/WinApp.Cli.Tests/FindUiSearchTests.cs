@@ -497,6 +497,33 @@ public class FindUiSearchTests
         }
     }
 
+    /// <summary>Common ways people describe a control without naming it must reach that control.</summary>
+    [TestMethod]
+    [DataRow("toolbar with icons", "commandbar")]
+    [DataRow("speed gauge", "radialgauge")]
+    [DataRow("battery meter", "radialgauge")]
+    [DataRow("editor with tabs", "tabview")]
+    [DataRow("tabbed documents", "tabview")]
+    [DataRow("notification badge", "infobadge")]
+    [DataRow("warning alert", "infobar")]
+    [DataRow("reorder items", "listview")]
+    [DataRow("chat messages", "listview")]
+    [DataRow("signup form", "textbox")]
+    [DataRow("email field", "textbox")]
+    [DataRow("option selector", "combobox")]
+    [DataRow("slide out panel", "splitview")]
+    [DataRow("slide-out panel", "splitview")]
+    [DataRow("side sheet", "splitview")]
+    [DataRow("range slider", "rangeselector")]
+    [DataRow("coach mark", "teachingtip")]
+    [DataRow("scale image to fit", "viewbox")]
+    [DataRow("file picker", "pickers")]
+    public void Expand_DescriptivePhrase_ReachesControl(string query, string control)
+    {
+        var expanded = Synonyms.Expand(BM25.Tokenize(Synonyms.Preprocess(query))).ToList();
+        CollectionAssert.Contains(expanded, control, $"'{query}' must reach {control}");
+    }
+
     /// <summary>
     /// The Toolkit groups helpers, converters and behaviors under an umbrella control and
     /// names the specific type in the scenario header, so the header carries vocabulary that
