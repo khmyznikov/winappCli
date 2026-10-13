@@ -20,9 +20,10 @@ internal sealed partial class ProjectRunService
     /// framework-dependent build run the SDK's publish-time optimization validation. Plain SDK builds retain
     /// their configured deployment mode because they do not hit that validation during <c>dotnet build</c>.
     /// NativeAOT and already-self-contained projects also retain RID-only behavior. The profile sets Platform
-    /// locally in the app, so AnyCPU references keep their own Platform.
+    /// locally in the app, so AnyCPU references keep their own Platform. Also returns the app's evaluated
+    /// properties when this check evaluated it, so later decisions can reuse them.
     /// </summary>
-    private async Task<ProjectRunOptions> ResolveRequiredPublishProfileAsync(
+    private async Task<(ProjectRunOptions Options, IReadOnlyDictionary<string, string>? Evaluated)> ResolveRequiredPublishProfileAsync(
         FileInfo csproj,
         ProjectRunOptions options,
         DirectoryInfo workingDirectory,
@@ -31,7 +32,7 @@ internal sealed partial class ProjectRunService
     {
         if (!CanInferPublishProfile(options))
         {
-            return options;
+            return (options, null);
         }
 
         var currentProperties = await TryEvaluatePublishProfilePropertiesAsync(
@@ -45,7 +46,7 @@ internal sealed partial class ProjectRunService
             || !RequiresSelfContainedProfile(currentProperties)
             || HasAuthoritativeProfileSelector(currentProperties))
         {
-            return options;
+            return (options, currentProperties);
         }
 
         var platform = FindArchPlatformToken(csproj, options.Architecture) ?? options.Architecture;
@@ -59,7 +60,7 @@ internal sealed partial class ProjectRunService
         if (platformProperties is null
             || !TryGetImportedPublishProfileFile(csproj, platformProperties, out var profile))
         {
-            return options;
+            return (options, currentProperties);
         }
 
         var candidateOptions = options with { PublishProfile = Path.GetFileName(profile.FullName) };
@@ -70,14 +71,14 @@ internal sealed partial class ProjectRunService
             csWinRTMetadataFolder,
             cancellationToken);
 
-        return candidateProperties is null
+        return (candidateProperties is null
             ? options
             : ResolvePublishProfileFallback(
                 csproj,
                 options,
                 currentProperties,
                 platformProperties,
-                candidateProperties);
+                candidateProperties), currentProperties);
     }
 
     private async Task<IReadOnlyDictionary<string, string>?> TryEvaluatePublishProfilePropertiesAsync(

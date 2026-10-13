@@ -18,7 +18,8 @@
     Wildcard patterns selecting fixture IDs. Default: all.
 
 .PARAMETER Shard
-    'N/M' runs every M-th fixture starting at N (1-based), for splitting the suite across CI runners.
+    'N/M' runs every M-th fixture starting at N (1-based), for splitting the suite across CI runners. The
+    failed-build recovery test runs only in the first shard.
 
 .PARAMETER DumpDirectory
     When set, a winapp run that times out is dumped here (full memory) before it is stopped.
@@ -94,11 +95,12 @@ Describe 'winapp run architecture matrix' {
             $run.TimedOut | Should -BeFalse -Because "winapp run must finish within $TimeoutMinutes minutes:`n$tail"
             $run.ExitCode | Should -Be 0 -Because "winapp run must succeed:`n$tail"
 
-            if ($fixture.ContainsKey('ExpectRid') -and $fixture.ExpectRid) {
-                $run.Output | Should -Match "(?<!\S)-r\s+win-$arch\b" -Because "this project can't honor a Platform-only build, so winapp must pass the RID"
+            if ($fixture.ContainsKey('UserCustomAfter') -and $fixture.UserCustomAfter) {
+                $run.Output | Should -Not -Match 'CustomAfterMicrosoftCommonTargets=' -Because "winapp must not replace the project's own CustomAfterMicrosoftCommonTargets"
+                Join-Path $root 'App\custom-after.marker' | Should -Exist -Because "the project's own CustomAfterMicrosoftCommonTargets must still be imported"
             }
             else {
-                $run.Output | Should -Not -Match '(?<!\S)-r\s+win-' -Because 'winapp run conveys the architecture with Platform, not a global RID'
+                $run.Output | Should -Match 'CustomAfterMicrosoftCommonTargets=' -Because 'winapp run imports its packaging-reference targets'
             }
 
             $exe = $null
@@ -135,6 +137,27 @@ Describe 'winapp run architecture matrix' {
         }
         finally {
             if ($run) { Remove-ProjectArchRun -Fixture $fixture -Run $run }
+            if (-not $SkipCleanup -and (Test-Path $root)) { Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+    }
+}
+
+# A build that already failed with the duplicate-library error leaves a cached PRI input list naming the
+# missing file. The next `winapp run` must recover without a clean. Runs once (first shard).
+Describe 'winapp run after a failed build' -Skip:($script:skip -or ($Shard -and $Shard -notmatch '^1/')) {
+    It 'recovers from a stale PRI input list' {
+        $fixture = Get-ProjectArchFixtures | Where-Object Id -eq 'R14-msix-lib'
+        $root = Join-Path $WorkRoot 'recovery-R14'
+        try {
+            New-ProjectArchFixture -Fixture $fixture -Root $root
+            $failed = & dotnet build (Join-Path $root 'App\App.csproj') -c Debug -r "win-$Architecture" -v minimal -tl:off 2>&1
+            $LASTEXITCODE | Should -Not -Be 0 -Because "a plain RID build of this graph fails with the duplicate-library error:`n$($failed | Select-Object -Last 20 | Out-String)"
+
+            $run = Invoke-ProjectArchRun -Fixture $fixture -Root $root -Winapp $script:winapp -Architecture $Architecture -TimeoutMinutes $TimeoutMinutes -NoLaunch
+            $run.ExitCode | Should -Be 0 -Because "winapp run must recover without a clean:`n$(Get-OutputTail $run.Output)"
+        }
+        finally {
+            Remove-ProjectArchRun -Fixture $fixture -Run $null
             if (-not $SkipCleanup -and (Test-Path $root)) { Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue }
         }
     }

@@ -382,7 +382,7 @@ jobs:
         Write-Host "Project-mode changes: $(if ($relevant) { $relevant -join ', ' } else { 'none' })"
         "run=$(($relevant.Count -gt 0).ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
 
-  # Generated .NET projects covering how `winapp run` conveys the target architecture to MSBuild.
+  # Generated .NET projects covering how `winapp run` builds apps with project references and packaging.
   # Fixtures run one at a time per shard; see tests/project-arch/README.md.
   project-arch:
     needs: [build-artifacts, project-arch-changes]

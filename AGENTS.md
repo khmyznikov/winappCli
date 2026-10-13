@@ -283,8 +283,8 @@ results are uploaded as JUnit XML via Pester's `TestResult` configuration.
 
 The `project-arch` job runs `tests\project-arch\ProjectArch.Tests.ps1` in four
 shards with the same-run x64 CLI. It generates .NET projects covering how
-`winapp run` conveys the target architecture (Platform vs. RuntimeIdentifier,
-reference graphs, packaging, Windows App SDK versions) and launches each app.
+`winapp run` builds them (architecture, reference graphs, packaging, Windows App
+SDK versions) and launches each app.
 It runs on every push to main and manual build, and on PRs whose changes match
 the path list in the `project-arch-changes` job; `build-and-package` accepts it
 as skipped only when that job says it isn't needed. Add a fixture there when

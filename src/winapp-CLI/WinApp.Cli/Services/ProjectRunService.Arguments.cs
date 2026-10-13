@@ -161,6 +161,11 @@ internal sealed partial class ProjectRunService
 
         AppendSolutionProperties(tokens, options);
 
+        if (!publish && !string.IsNullOrEmpty(options.PackagingReferenceTargets))
+        {
+            tokens.Add($"-p:{CustomAfterCommonTargetsProperty}={EscapeMsBuildPropertyValue(options.PackagingReferenceTargets)}");
+        }
+
         // SHIM (temporary): inject the resolved ref-pack winmd folder so cswinrt.exe finds contract winmds
         // without a registered Windows SDK. See CsWinRTMetadataShimService.
         if (!string.IsNullOrEmpty(csWinRTMetadataFolder))
@@ -300,7 +305,8 @@ internal sealed partial class ProjectRunService
         string? csWinRTMetadataFolder = null,
         bool includeRuntimeIdentifier = true,
         bool includePlatform = true,
-        bool includePublishProfile = true)
+        bool includePublishProfile = true,
+        IReadOnlyList<string>? properties = null)
     {
         var rid = options.EffectiveRuntimeIdentifier;
 
@@ -344,7 +350,7 @@ internal sealed partial class ProjectRunService
             tokens.Add($"-p:CsWinRTWindowsMetadata={csWinRTMetadataFolder}");
         }
 
-        foreach (var name in RequestedProperties)
+        foreach (var name in properties ?? RequestedProperties)
         {
             tokens.Add($"--getProperty:{name}");
         }

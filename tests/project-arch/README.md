@@ -1,13 +1,13 @@
 # `winapp run` architecture matrix
 
-This suite runs `winapp run` against generated .NET projects that cover how the target architecture reaches MSBuild, then checks that each app:
+This suite runs `winapp run` against generated .NET projects that cover how the target architecture and project references reach MSBuild, then checks that each app:
 
 1. builds and registers (or launches unpackaged) without errors,
-2. conveys the architecture the expected way: `-p:Platform` alone, or `-r win-<arch>` for fixtures marked `ExpectRid` (projects that set their own `RuntimeIdentifier` or enable `EnableDynamicPlatformResolution`),
-3. starts and shows a window (windowed apps, when this machine can run the architecture), and
+2. imports winapp's packaging-reference targets (`-p:CustomAfterMicrosoftCommonTargets=…`), unless the project sets that property itself, in which case winapp must keep the project's own value,
+3. starts and shows its own window, not an error dialog (windowed apps, when this machine can run the architecture), and
 4. is a PE image for the requested `--arch`.
 
-It guards the failure class behind [FluentStore-style](https://github.com/yoshiask/FluentStore) build errors such as `APPX1101: Payload contains two or more files with the same destination path`, `PRI175`/`PRI252` and `MSB3030`, which depend on how project references, packaging targets and `Platform`/`RuntimeIdentifier` interact.
+It guards the failure class behind [FluentStore-style](https://github.com/yoshiask/FluentStore) build errors such as `APPX1101: Payload contains two or more files with the same destination path`, `PRI175`/`PRI252` and `MSB3030`. Under the global `-r win-<arch>`, Windows App SDK packaging used to build a RID-agnostic referenced library a second time with the RID. A separate test (first shard only) builds such a graph without winapp's targets first, then checks that `winapp run` recovers without a clean.
 
 ## Run it
 
@@ -44,10 +44,10 @@ Requirements: Windows with Developer Mode, the .NET 10 SDK plus the .NET 8 runti
 `ProjectArch.psm1` defines the catalog in `Get-ProjectArchFixtures`. Each entry states what it guards. The axes are:
 
 - **App:** packaged WinUI, Windows App SDK self-contained, unpackaged, WPF, console; `<Platforms>` in the project, in `Directory.Build.props`, absent, or missing the target architecture.
-- **References:** `netstandard2.0`, WinUI libraries with and without `<Platforms>`/`<RuntimeIdentifiers>`, libraries that enable MSIX tooling, multi-targeted, diamond, `GlobalPropertiesToRemove="RuntimeIdentifier"`, `AnyCPU`-only, a referenced helper executable, and a solution.
-- **Project settings:** .NET `SelfContained`, `PublishAot` built without `--aot`, a hard-coded or `win-$(Platform)` `RuntimeIdentifier`, Visual Studio publish profiles, a trimmed build whose `$(Platform)` profile makes it self-contained, and `EnableDynamicPlatformResolution`.
+- **References:** `netstandard2.0`, WinUI libraries with and without `<Platforms>`/`<RuntimeIdentifiers>`, libraries that enable MSIX tooling, multi-targeted (including a framework-conditional `RuntimeIdentifier`), diamond, `GlobalPropertiesToRemove="RuntimeIdentifier"`, `SetPlatform` metadata, `AnyCPU`-only, a referenced or build-order-only helper executable, and a solution.
+- **Project settings:** .NET `SelfContained`, `PublishAot` built without `--aot`, a hard-coded or `win-$(Platform)` `RuntimeIdentifier`, Visual Studio publish profiles, a trimmed build whose `$(Platform)` profile makes it self-contained, `EnableDynamicPlatformResolution`, and a project-set `CustomAfterMicrosoftCommonTargets`.
 - **Where a setting is declared:** on the app, on a referenced project, or through an import (`Directory.Build.props`/`.targets`, a `$(…)` path). A setting that matters on the app usually matters on a referenced project too, so cover both.
-- **Architecture:** the host's, and `x86` (fixtures with an `-x86` suffix, plus `X01`–`X03`), which is cross-architecture on both x64 and arm64 hosts. Project-referenced analyzers and source generators only break cross-architecture builds.
+- **Architecture:** the host's, and `x86` (fixtures with an `-x86` suffix, plus `X01`–`X04` and `R25`), which is cross-architecture on both x64 and arm64 hosts. Project-referenced analyzers and source generators only break cross-architecture builds.
 - **Windows App SDK:** 1.6, 1.8 and 2.x.
 
 To cover a new shape, add an entry with a short `Why`, run it against the current CLI, and confirm it fails without the fix it protects.

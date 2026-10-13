@@ -24,9 +24,9 @@ function New-AppSpec([hashtable]$Overrides = @{}) {
 .SYNOPSIS
     Returns the fixture catalog. Each fixture is a hashtable:
     Id, Sdk ('1.6'|'1.8'|'2.5'), Why (what it guards), App (kind/packaging/Platforms/RIDs/refs/extra
-    properties), Libs (referenced projects), and optional PlatformsInProps, Sln, PubXml, Arch (overrides
-    the suite's -Architecture, for cross-architecture builds), and ExpectRid
-    (the project can't honor a Platform-only build, so winapp must pass -r win-<arch>).
+    properties), Libs (referenced projects), and optional PlatformsInProps, Sln, PubXml, TargetsXml, Arch
+    (overrides the suite's -Architecture, for cross-architecture builds), and UserCustomAfter (the fixture
+    sets its own CustomAfterMicrosoftCommonTargets, which winapp must keep).
 #>
 function Get-ProjectArchFixtures {
     $msixLib = @{ EnableMsixTooling = 'true' }
@@ -71,7 +71,7 @@ function Get-ProjectArchFixtures {
         @{ Id = 'R14-msix-lib-wasdk25'; Sdk = '2.5'; App = (New-AppSpec @{ Refs = @('LibW') }); Libs = @(@{ Name = 'LibW'; Kind = 'winui'; Extra = $msixLib }); Why = 'Library with MSIX tooling (2.x)' }
         @{ Id = 'R15-unpackaged-msix-lib'; Sdk = '1.8'; App = (New-AppSpec @{ Packaged = $false; Refs = @('LibW') }); Libs = @(@{ Name = 'LibW'; Kind = 'winui'; Extra = $msixLib }); Why = 'Unpackaged app with MSIX-tooling library' }
         @{ Id = 'R15-unpackaged-msix-lib-wasdk16'; Sdk = '1.6'; App = (New-AppSpec @{ Packaged = $false; Refs = @('LibW') }); Libs = @(@{ Name = 'LibW'; Kind = 'winui' }); Why = 'Unpackaged app with MSIX-tooling library (1.6)' }
-        @{ Id = 'R16-dynamic-platform-resolution'; Sdk = '1.8'; App = (New-AppSpec @{ Refs = @('LibW'); Extra = @{ EnableDynamicPlatformResolution = 'true' } }); Libs = @(@{ Name = 'LibW'; Kind = 'winui'; Rids = $script:AllRids; Extra = @{ EnableDynamicPlatformResolution = 'true' } }); ExpectRid = $true; Why = 'EnableDynamicPlatformResolution (needs the RID)' }
+        @{ Id = 'R16-dynamic-platform-resolution'; Sdk = '1.8'; App = (New-AppSpec @{ Refs = @('LibW'); Extra = @{ EnableDynamicPlatformResolution = 'true' } }); Libs = @(@{ Name = 'LibW'; Kind = 'winui'; Rids = $script:AllRids; Extra = @{ EnableDynamicPlatformResolution = 'true' } }); Why = 'EnableDynamicPlatformResolution' }
         @{ Id = 'R17-edpr-rid-split'; Sdk = '1.8'; App = (New-AppSpec @{ Refs = @(@{ Name = 'LibW'; Meta = @{ GlobalPropertiesToRemove = 'RuntimeIdentifier' } }, 'LibP'); Extra = @{ EnableDynamicPlatformResolution = 'true' } }); Libs = @(
                 @{ Name = 'LibW'; Kind = 'winui'; Platforms = $script:AllPlatforms; Refs = @('LibP') },
                 @{ Name = 'LibP'; Kind = 'plain'; Platforms = $script:AllPlatforms }); Why = 'EnableDynamicPlatformResolution with a reference that removes RuntimeIdentifier (must not get the RID back)' }
@@ -80,31 +80,31 @@ function Get-ProjectArchFixtures {
         @{ Id = 'P01-platforms-lack-arch'; Sdk = '1.8'; App = (New-AppSpec @{ Platforms = 'x86;x64' }); Why = '<Platforms> without the target arch' }
         @{ Id = 'P02-net-selfcontained'; Sdk = '1.8'; App = (New-AppSpec @{ Extra = @{ SelfContained = 'true' } }); Why = '.NET SelfContained without a RID' }
         @{ Id = 'P03-publishaot-build'; Sdk = '1.8'; App = (New-AppSpec @{ Extra = @{ PublishAot = 'true' } }); Why = 'PublishAot project built without --aot' }
-        @{ Id = 'P04-hardcoded-rid'; Sdk = '1.8'; App = (New-AppSpec @{ Extra = @{ RuntimeIdentifier = 'win-x86' } }); ExpectRid = $true; Why = 'Hard-coded RuntimeIdentifier for another arch (needs the RID)' }
-        @{ Id = 'P05-rid-from-platform'; Sdk = '1.8'; App = (New-AppSpec @{ Platforms = 'X86;X64;ARM64'; Extra = @{ RuntimeIdentifier = 'win-$(Platform)' } }); ExpectRid = $true; Why = 'RuntimeIdentifier=win-$(Platform) with upper-case platforms (needs the RID)' }
+        @{ Id = 'P04-hardcoded-rid'; Sdk = '1.8'; App = (New-AppSpec @{ Extra = @{ RuntimeIdentifier = 'win-x86' } }); Why = 'Hard-coded RuntimeIdentifier for another arch' }
+        @{ Id = 'P05-rid-from-platform'; Sdk = '1.8'; App = (New-AppSpec @{ Platforms = 'X86;X64;ARM64'; Extra = @{ RuntimeIdentifier = 'win-$(Platform)' } }); Why = 'RuntimeIdentifier=win-$(Platform) with upper-case platforms' }
         @{ Id = 'P06-publish-profiles'; Sdk = '1.8'; PubXml = @{ Name = 'win-{0}.pubxml'; Template = $true }; App = (New-AppSpec @{ Refs = @('LibW'); Extra = @{ PublishProfile = 'win-$(Platform).pubxml' } }); Libs = @(@{ Name = 'LibW'; Kind = 'winui' }); Why = 'Visual Studio template publish profiles' }
         @{ Id = 'P06-publish-profiles-wasdk16'; Sdk = '1.6'; PubXml = @{ Name = 'win10-{0}.pubxml'; Template = $true }; App = (New-AppSpec @{ Extra = @{ PublishProfile = 'win10-$(Platform).pubxml' } }); Why = 'WinAppSDK 1.6 template publish profiles' }
         @{ Id = 'P07-unpackaged-selfcontained'; Sdk = '1.8'; App = (New-AppSpec @{ Packaged = $false; Extra = @{ SelfContained = 'true'; WindowsAppSDKSelfContained = 'true' } }); Why = 'Unpackaged fully self-contained app' }
         @{ Id = 'P08-trimmed-profile-anycpu-lib'; Sdk = '1.8'; PubXml = @{ Name = 'debug-{0}.pubxml'; Template = $false }; App = (New-AppSpec @{ Refs = @('LibP'); Extra = @{ PublishTrimmed = 'true'; PublishProfile = 'debug-$(Platform).pubxml' } }); Libs = @(@{ Name = 'LibP'; Kind = 'plain' }); Why = 'Trimmed build whose $(Platform) profile makes it self-contained' }
 
         # Cross-architecture builds (Arch differs from x64 and arm64 hosts; x86 runs on both)
-        @{ Id = 'X01-generator-cross-arch'; Sdk = '1.8'; Arch = 'x86'; ExpectRid = $true; App = (New-AppSpec @{ Kind = 'console'; Packaged = $false; Platforms = $null; Rids = $null; Refs = @(@{ Name = 'Gen'; Meta = @{ OutputItemType = 'Analyzer'; ReferenceOutputAssembly = 'false' } }) }); Libs = @(@{ Name = 'Gen'; Kind = 'generator' }); Why = 'Project-referenced source generator built for another architecture (the compiler must still load it)' }
-        @{ Id = 'X02-generator-imported'; Sdk = '1.8'; Arch = 'x86'; ExpectRid = $true; App = (New-AppSpec @{ Kind = 'console'; Packaged = $false; Platforms = $null; Rids = $null }); Libs = @(@{ Name = 'Gen'; Kind = 'generator' }); TargetsXml = '<ItemGroup Condition="''$(MSBuildProjectName)'' == ''App''"><ProjectReference Include="$(MSBuildThisFileDirectory)Gen\Gen.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" /></ItemGroup>'; Why = 'Generator reference added by an imported Directory.Build.targets, cross-architecture' }
-        @{ Id = 'X03-generator-macro-path'; Sdk = '1.8'; Arch = 'x86'; ExpectRid = $true; App = (New-AppSpec @{ Kind = 'console'; Packaged = $false; Platforms = $null; Rids = $null; Refs = @(@{ Name = 'Gen'; Include = '$(MSBuildThisFileDirectory)..\Gen\Gen.csproj'; Meta = @{ OutputItemType = 'Analyzer'; ReferenceOutputAssembly = 'false' } }) }); Libs = @(@{ Name = 'Gen'; Kind = 'generator' }); Why = 'Generator reference through a $(...) path, cross-architecture' }
-        @{ Id = 'X04-generator-property-path'; Sdk = '1.8'; Arch = 'x86'; ExpectRid = $true; App = (New-AppSpec @{ Kind = 'console'; Packaged = $false; Platforms = $null; Rids = $null; Extra = @{ GenFolder = 'Gen' }; Refs = @(@{ Name = 'Gen'; Include = '..\$(GenFolder)\$(GenFolder).csproj'; Meta = @{ OutputItemType = 'Analyzer'; ReferenceOutputAssembly = 'false' } }) }); Libs = @(@{ Name = 'Gen'; Kind = 'generator' }); Why = 'Generator reference through a project-defined property path, cross-architecture' }
+        @{ Id = 'X01-generator-cross-arch'; Sdk = '1.8'; Arch = 'x86'; App = (New-AppSpec @{ Kind = 'console'; Packaged = $false; Platforms = $null; Rids = $null; Refs = @(@{ Name = 'Gen'; Meta = @{ OutputItemType = 'Analyzer'; ReferenceOutputAssembly = 'false' } }) }); Libs = @(@{ Name = 'Gen'; Kind = 'generator' }); Why = 'Project-referenced source generator built for another architecture (the compiler must still load it)' }
+        @{ Id = 'X02-generator-imported'; Sdk = '1.8'; Arch = 'x86'; App = (New-AppSpec @{ Kind = 'console'; Packaged = $false; Platforms = $null; Rids = $null }); Libs = @(@{ Name = 'Gen'; Kind = 'generator' }); TargetsXml = '<ItemGroup Condition="''$(MSBuildProjectName)'' == ''App''"><ProjectReference Include="$(MSBuildThisFileDirectory)Gen\Gen.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" /></ItemGroup>'; Why = 'Generator reference added by an imported Directory.Build.targets, cross-architecture' }
+        @{ Id = 'X03-generator-macro-path'; Sdk = '1.8'; Arch = 'x86'; App = (New-AppSpec @{ Kind = 'console'; Packaged = $false; Platforms = $null; Rids = $null; Refs = @(@{ Name = 'Gen'; Include = '$(MSBuildThisFileDirectory)..\Gen\Gen.csproj'; Meta = @{ OutputItemType = 'Analyzer'; ReferenceOutputAssembly = 'false' } }) }); Libs = @(@{ Name = 'Gen'; Kind = 'generator' }); Why = 'Generator reference through a $(...) path, cross-architecture' }
+        @{ Id = 'X04-generator-property-path'; Sdk = '1.8'; Arch = 'x86'; App = (New-AppSpec @{ Kind = 'console'; Packaged = $false; Platforms = $null; Rids = $null; Extra = @{ GenFolder = 'Gen' }; Refs = @(@{ Name = 'Gen'; Include = '..\$(GenFolder)\$(GenFolder).csproj'; Meta = @{ OutputItemType = 'Analyzer'; ReferenceOutputAssembly = 'false' } }) }); Libs = @(@{ Name = 'Gen'; Kind = 'generator' }); Why = 'Generator reference through a project-defined property path, cross-architecture' }
     )
 
     # Settings on referenced projects (the decision must look past the app)
     $fixtures += @(
-        @{ Id = 'R18-nested-edpr'; Sdk = '1.8'; ExpectRid = $true; App = (New-AppSpec @{ Refs = @('LibW') }); Libs = @(@{ Name = 'LibW'; Kind = 'winui'; Refs = @('LibP'); Extra = @{ EnableDynamicPlatformResolution = 'true' } }, @{ Name = 'LibP'; Kind = 'plain' }); Why = 'EnableDynamicPlatformResolution on a referenced project (needs the RID)' }
-        @{ Id = 'R19-ref-hardcoded-rid'; Sdk = '1.8'; ExpectRid = $true; App = (New-AppSpec @{ Refs = @('LibW') }); Libs = @(@{ Name = 'LibW'; Kind = 'winui'; Extra = @{ RuntimeIdentifier = 'win-x86' } }); Why = 'Referenced project with a hard-coded RuntimeIdentifier for another arch (needs the RID)' }
-        @{ Id = 'R20-ref-rid-from-platform'; Sdk = '1.8'; ExpectRid = $true; App = (New-AppSpec @{ Platforms = 'X86;X64;ARM64'; Refs = @('LibW') }); Libs = @(@{ Name = 'LibW'; Kind = 'winui'; Platforms = 'X86;X64;ARM64'; Extra = @{ RuntimeIdentifier = 'win-$(Platform)' } }); Why = 'Referenced project with RuntimeIdentifier=win-$(Platform) and upper-case platforms (needs the RID)' }
+        @{ Id = 'R18-nested-edpr'; Sdk = '1.8'; App = (New-AppSpec @{ Refs = @('LibW') }); Libs = @(@{ Name = 'LibW'; Kind = 'winui'; Refs = @('LibP'); Extra = @{ EnableDynamicPlatformResolution = 'true' } }, @{ Name = 'LibP'; Kind = 'plain' }); Why = 'EnableDynamicPlatformResolution on a referenced project' }
+        @{ Id = 'R19-ref-hardcoded-rid'; Sdk = '1.8'; App = (New-AppSpec @{ Refs = @('LibW') }); Libs = @(@{ Name = 'LibW'; Kind = 'winui'; Extra = @{ RuntimeIdentifier = 'win-x86' } }); Why = 'Referenced project with a hard-coded RuntimeIdentifier for another arch' }
+        @{ Id = 'R20-ref-rid-from-platform'; Sdk = '1.8'; App = (New-AppSpec @{ Platforms = 'X86;X64;ARM64'; Refs = @('LibW') }); Libs = @(@{ Name = 'LibW'; Kind = 'winui'; Platforms = 'X86;X64;ARM64'; Extra = @{ RuntimeIdentifier = 'win-$(Platform)' } }); Why = 'Referenced project with RuntimeIdentifier=win-$(Platform) and upper-case platforms' }
         @{ Id = 'R21-ref-exe'; Sdk = '1.8'; App = (New-AppSpec @{ Refs = @('Helper') }); Libs = @(@{ Name = 'Helper'; Kind = 'exe' }); Why = 'Referenced helper executable' }
-        @{ Id = 'R23-build-only-helper-rid'; Sdk = '1.8'; ExpectRid = $true; App = (New-AppSpec @{ Kind = 'console'; Packaged = $false; Platforms = $null; Rids = $null; Refs = @(@{ Name = 'Helper'; Meta = @{ ReferenceOutputAssembly = 'false' } }) }); Libs = @(@{ Name = 'Helper'; Kind = 'exe'; Extra = @{ RuntimeIdentifier = 'win-x86' } }); Why = 'Build-order-only helper reference (ReferenceOutputAssembly=false) with its own RuntimeIdentifier (needs the RID)' }
-        @{ Id = 'R24-multitarget-tfm-rid'; Sdk = '1.8'; ExpectRid = $true; App = (New-AppSpec @{ Kind = 'console'; Packaged = $false; Platforms = $null; Rids = $null; Refs = @('LibM') }); Libs = @(@{ Name = 'LibM'; Kind = 'multi'; Xml = '  <PropertyGroup Condition="''$(TargetFramework)'' != '''' and ''$(TargetFramework)'' != ''netstandard2.0''"><RuntimeIdentifier>win-x86</RuntimeIdentifier></PropertyGroup>' }); Why = 'Multi-targeted reference that sets a RuntimeIdentifier for only one target framework (needs the RID)' }
-        @{ Id = 'R25-helper-cross-arch'; Sdk = '1.6'; Arch = 'x86'; App = (New-AppSpec @{ Refs = @('LibW', @{ Name = 'Helper'; Meta = @{ ReferenceOutputAssembly = 'false' } }) }); Libs = @(@{ Name = 'LibW'; Kind = 'winui' }, @{ Name = 'Helper'; Kind = 'exe' }); Why = 'Build-order-only helper is not an analyzer: a cross-architecture build keeps Platform only (a global RID breaks the WinUI library on 1.6)' }
-        # Building the bundle's other platform runs Build on $(SolutionPath), which rejects a global RID (NETSDK1134).
-        @{ Id = 'R22-solution-bundle'; Sdk = '1.8'; Sln = $true; App = (New-AppSpec @{ Refs = @('LibP'); Extra = @{ GenerateAppxPackageOnBuild = 'true'; AppxBundle = 'Always'; AppxBundlePlatforms = 'x86|x64' } }); Libs = @(@{ Name = 'LibP'; Kind = 'plain' }); Why = 'App in a solution that builds an MSIX bundle on every build (the solution is rebuilt for the other platform)' }
+        @{ Id = 'R23-build-only-helper-rid'; Sdk = '1.8'; App = (New-AppSpec @{ Kind = 'console'; Packaged = $false; Platforms = $null; Rids = $null; Refs = @(@{ Name = 'Helper'; Meta = @{ ReferenceOutputAssembly = 'false' } }) }); Libs = @(@{ Name = 'Helper'; Kind = 'exe'; Extra = @{ RuntimeIdentifier = 'win-x86' } }); Why = 'Build-order-only helper reference (ReferenceOutputAssembly=false) with its own RuntimeIdentifier' }
+        @{ Id = 'R24-multitarget-tfm-rid'; Sdk = '1.8'; App = (New-AppSpec @{ Kind = 'console'; Packaged = $false; Platforms = $null; Rids = $null; Refs = @('LibM') }); Libs = @(@{ Name = 'LibM'; Kind = 'multi'; Xml = '  <PropertyGroup Condition="''$(TargetFramework)'' != '''' and ''$(TargetFramework)'' != ''netstandard2.0''"><RuntimeIdentifier>win-x86</RuntimeIdentifier></PropertyGroup>' }); Why = 'Multi-targeted reference that sets a RuntimeIdentifier for only one target framework' }
+        @{ Id = 'R25-helper-cross-arch'; Sdk = '1.6'; Arch = 'x86'; App = (New-AppSpec @{ Refs = @('LibW', @{ Name = 'Helper'; Meta = @{ ReferenceOutputAssembly = 'false' } }) }); Libs = @(@{ Name = 'LibW'; Kind = 'winui' }, @{ Name = 'Helper'; Kind = 'exe' }); Why = 'Packaged app with a WinUI library and a build-order-only helper, built for another architecture' }
+        @{ Id = 'R26-ref-setplatform-rid'; Sdk = '1.8'; App = (New-AppSpec @{ Kind = 'console'; Packaged = $false; Platforms = $null; Rids = $null; Refs = @(@{ Name = 'LibP'; Meta = @{ SetPlatform = 'Platform=AnyCPU' } }) }); Libs = @(@{ Name = 'LibP'; Kind = 'exe'; Xml = '  <PropertyGroup Condition="''$(Platform)'' == ''AnyCPU''"><RuntimeIdentifier>win-x86</RuntimeIdentifier></PropertyGroup>' }); Why = 'Reference whose SetPlatform metadata selects a RuntimeIdentifier' }
+        @{ Id = 'R27-user-customafter'; Sdk = '1.8'; UserCustomAfter = $true; App = (New-AppSpec @{ Refs = @('LibW') }); Libs = @(@{ Name = 'LibW'; Kind = 'winui' }); Why = 'Project that sets its own CustomAfterMicrosoftCommonTargets (winapp must keep it)' }
     )
 
     # The same shapes built cross-architecture: --arch x86 runs on both x64 and arm64 hosts.
@@ -172,6 +172,18 @@ function New-ProjectArchFixture([hashtable]$Fixture, [string]$Root) {
     # Isolate the fixture from any Directory.Build.* above the work root.
     $props = '<Project><PropertyGroup><Nullable>disable</Nullable><NoWarn>$(NoWarn);NU1603;NU1701</NoWarn>'
     if ($Fixture.ContainsKey('PlatformsInProps') -and $Fixture.PlatformsInProps) { $props += "<Platforms>$script:AllPlatforms</Platforms>" }
+    if ($Fixture.ContainsKey('UserCustomAfter') -and $Fixture.UserCustomAfter) {
+        # Set through an imported file, so only MSBuild evaluation (not the project text) shows it.
+        $props = $props.Replace('<Project>', '<Project><Import Project="$(MSBuildThisFileDirectory)eng\Build.props" />')
+        Write-FixtureFile "$Root\eng\Build.props" '<Project><PropertyGroup><CustomAfterMicrosoftCommonTargets>$(MSBuildThisFileDirectory)..\custom.after.targets</CustomAfterMicrosoftCommonTargets></PropertyGroup></Project>'
+        Write-FixtureFile "$Root\custom.after.targets" @'
+<Project>
+  <Target Name="FixtureCustomAfter" AfterTargets="Build" Condition="'$(MSBuildProjectName)' == 'App'">
+    <Touch Files="$(MSBuildProjectDirectory)\custom-after.marker" AlwaysCreate="true" />
+  </Target>
+</Project>
+'@
+    }
     $props += '</PropertyGroup></Project>'
     Write-FixtureFile "$Root\Directory.Build.props" $props
     $targets = if ($Fixture.ContainsKey('TargetsXml')) { $Fixture.TargetsXml } else { '' }
@@ -494,10 +506,11 @@ function Invoke-ProjectArchRun {
         [Parameter(Mandatory)][string]$Winapp,
         [Parameter(Mandatory)][string]$Architecture,
         [int]$TimeoutMinutes = 15,
-        [string]$DumpDirectory
+        [string]$DumpDirectory,
+        [switch]$NoLaunch
     )
 
-    $launch = Test-CanLaunchArchitecture $Architecture
+    $launch = (Test-CanLaunchArchitecture $Architecture) -and -not $NoLaunch
     $project = Join-Path $Root 'App\App.csproj'
     $mode = if ($launch) { '--detach' } else { '--no-launch' }
     $logPath = Join-Path $Root 'winapp-run.log'
