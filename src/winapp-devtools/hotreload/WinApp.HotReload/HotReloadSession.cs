@@ -462,12 +462,37 @@ internal sealed class HotReloadSession
         // Images and other files the build copies next to the app: the project file decides which, so it's asked.
         var assets = paths.Where(IsAsset).ToList();
         paths = paths.Except(assets, StringComparer.OrdinalIgnoreCase).ToList();
-        if (paths.Any(p => p.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)) || assets.Count > 0)
+        // Inputs of the app's source generators (AdditionalFiles): the generators read the new text.
+        foreach (var path in assets.Concat(paths))
         {
-            var error = await RefreshReferencesAsync(cancellationToken).ConfigureAwait(false);
-            if (error is not null)
+            foreach (var document in Project.AdditionalDocuments.Where(d => string.Equals(d.FilePath, path, StringComparison.OrdinalIgnoreCase)))
+            {
+                _solution = File.Exists(path)
+                    ? _solution.WithAdditionalDocumentText(document.Id, SourceText.From(await ReadSharedAsync(path, cancellationToken).ConfigureAwait(false), Encoding.UTF8, SourceHashAlgorithm.Sha256))
+                    : _solution.RemoveAdditionalDocument(document.Id);
+            }
+        }
+        var projectChanged = paths.Any(p => p.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase));
+        if (!projectChanged && assets.Count > 0 && assets.All(a => _contentTargets.ContainsKey(a) || !File.Exists(a)))
+        {
+            // Content the project already copies: copied straight over, without asking the build again.
+            foreach (var asset in assets.Where(File.Exists))
+            {
+                CopyChangedContent(asset, _contentTargets[asset], compare: true);
+            }
+        }
+        else if (projectChanged || assets.Count > 0)
+        {
+            var error = await RefreshReferencesAsync(projectChanged, assets, cancellationToken).ConfigureAwait(false);
+            if (error is not null && paths.All(p => p.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)) && libraryPaths.Count == 0)
             {
                 return new SaveResult(Outcome.Error, error);
+            }
+            // The rest of the save still applies against the references the app has; the project file is tried
+            // again when it changes.
+            if (error is not null)
+            {
+                _pendingNotes.Add($"{error}; project file changes take effect once it succeeds");
             }
             NoteNestedLibraries();
             foreach (var library in FindLibraries())
@@ -949,6 +974,28 @@ internal sealed class HotReloadSession
 
     /// <summary>"Type|Method" initializers for static fields added since the last update the app received.</summary>
     private readonly List<string> _pendingInitializers = [];
+
+    /// <summary>
+    /// Copies a content file next to the running app when it isn't there yet or (<paramref name="compare"/>) its bytes
+    /// differ; images showing it reload.
+    /// </summary>
+    private void CopyChangedContent(string source, string target, bool compare)
+    {
+        var destination = Path.Combine(_baseDirectory, target);
+        if (_baseDirectory.Length == 0 || !File.Exists(source) || (File.Exists(destination) && (!compare ||
+            (new FileInfo(destination).Length == new FileInfo(source).Length && File.ReadAllBytes(destination).AsSpan().SequenceEqual(File.ReadAllBytes(source))))))
+        {
+            return;
+        }
+        if (CopyContent(source, destination))
+        {
+            _changedAssets.Add(target.Replace('\\', '/'));
+        }
+        else
+        {
+            _pendingNotes.Add($"{Relative(source)} could not be copied next to the running app; it takes effect when the app restarts");
+        }
+    }
 
     /// <summary>Content files replaced since the last update the app received.</summary>
     private readonly List<string> _changedAssets = [];
@@ -1854,26 +1901,56 @@ internal sealed class HotReloadSession
             }
         }
     }
-    /// <summary>A project file edit (for example a new PackageReference): re-resolve references and deploy new ones next to the app.</summary>
-    private async Task<string?> RefreshReferencesAsync(CancellationToken cancellationToken)
+    /// <summary>Content the build copies next to the app, by source file, with its path there (as of the last refresh).</summary>
+    private readonly Dictionary<string, string> _contentTargets = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Runs MSBuild on the app project; returns the failure (its first errors), or null.</summary>
+    private async Task<string?> MSBuildAsync(IEnumerable<string> arguments, string what, CancellationToken cancellationToken)
     {
-        var output = Path.Combine(_markupDirectory, "references.txt");
-        var props = File.Exists(_options.CscArgsFile + ".props")
-            ? File.ReadAllLines(_options.CscArgsFile + ".props").Where(line => line.Contains('=') && !line.EndsWith('=')).Select(line => $"-p:{line}")
-            : [];
-        var arguments = new List<string> { "msbuild", _options.ProjectFile, "-restore", "-nologo", "-v:q", "-t:WinAppHotReloadReferences",
-            $"-p:CustomAfterMicrosoftCommonTargets={_options.TargetsFile}", $"-p:WinAppHotReloadOut={output}" };
-        arguments.AddRange(props);
         var start = new ProcessStartInfo(Environment.ProcessPath!) { WorkingDirectory = _projectDirectory, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
-        arguments.ForEach(start.ArgumentList.Add);
+        foreach (var argument in arguments)
+        {
+            start.ArgumentList.Add(argument);
+        }
         using var process = Process.Start(start)!;
         var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
         await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-        if (process.ExitCode != 0)
+        if (process.ExitCode == 0)
         {
-            var log = (await stdout.ConfigureAwait(false) + await stderr.ConfigureAwait(false)).Split('\n').Where(l => l.Contains("error", StringComparison.OrdinalIgnoreCase)).Take(3);
-            return $"{Path.GetFileName(_options.ProjectFile)}: restore failed: {string.Join(" ", log).Trim()}";
+            return null;
+        }
+        var log = (await stdout.ConfigureAwait(false) + await stderr.ConfigureAwait(false)).Split('\n')
+            .Where(l => l.Contains("error", StringComparison.OrdinalIgnoreCase)).Select(l => l.Trim()).Distinct().Take(3);
+        return $"{Path.GetFileName(_options.ProjectFile)}: {what} failed: {string.Join(" ", log)}";
+    }
+
+    /// <summary>
+    /// A project file edit (for example a new PackageReference) or new content: restore when the project changed, then
+    /// re-resolve references and deploy new ones next to the app.
+    /// </summary>
+    private async Task<string?> RefreshReferencesAsync(bool restore, IReadOnlyCollection<string> changedContent, CancellationToken cancellationToken)
+    {
+        var output = Path.Combine(_markupDirectory, "references.txt");
+        var built = File.Exists(_options.CscArgsFile + ".props")
+            ? File.ReadAllLines(_options.CscArgsFile + ".props").Where(line => line.Contains('=') && !line.EndsWith('=')).ToList()
+            : [];
+        if (restore)
+        {
+            // As the launch build restored: the configuration and runtime identifier only. The app's evaluated
+            // TargetFramework or Platform would flow into every referenced project (a netstandard2.0 source
+            // generator included) and leave its assets file without its own framework.
+            var restoreProperties = built.Where(line => line.StartsWith("Configuration=", StringComparison.OrdinalIgnoreCase) || line.StartsWith("RuntimeIdentifier=", StringComparison.OrdinalIgnoreCase));
+            if (await MSBuildAsync(["msbuild", _options.ProjectFile, "-t:Restore", "-nologo", "-v:q", .. restoreProperties.Select(line => $"-p:{line}")], "restore", cancellationToken).ConfigureAwait(false) is { } restoreError)
+            {
+                return restoreError;
+            }
+        }
+        if (await MSBuildAsync(["msbuild", _options.ProjectFile, "-restore:false", "-nologo", "-v:q", "-t:WinAppHotReloadReferences",
+            $"-p:CustomAfterMicrosoftCommonTargets={_options.TargetsFile}", $"-p:WinAppHotReloadOut={output}", .. built.Select(line => $"-p:{line}")],
+            "reading the project", cancellationToken).ConfigureAwait(false) is { } error)
+        {
+            return error;
         }
 
         var lines = await File.ReadAllLinesAsync(output, cancellationToken).ConfigureAwait(false);
@@ -1904,25 +1981,17 @@ internal sealed class HotReloadSession
         }
 
         _appItems = [.. lines.Where(l => l.StartsWith("/item:", StringComparison.Ordinal)).Select(l => l["/item:".Length..])];
+        _contentTargets.Clear();
         foreach (var line in lines.Where(l => l.StartsWith("/content:", StringComparison.Ordinal)))
         {
-            // Files the build copies next to the app (images, data): new ones, and ones that changed since.
+            // Files the build copies next to the app (images, data): new ones, and the ones saved now if they changed.
             var (source, target) = line["/content:".Length..].Split('|') is [var s, var t] ? (s, t) : ("", "");
-            var destination = Path.Combine(_baseDirectory, target);
-            if (_baseDirectory.Length == 0 || target.Length == 0 || !File.Exists(source) ||
-                (File.Exists(destination) && new FileInfo(destination).Length == new FileInfo(source).Length &&
-                 File.ReadAllBytes(destination).AsSpan().SequenceEqual(File.ReadAllBytes(source))))
+            if (target.Length == 0)
             {
                 continue;
             }
-            if (CopyContent(source, destination))
-            {
-                _changedAssets.Add(target.Replace('\\', '/'));
-            }
-            else
-            {
-                _pendingNotes.Add($"{Relative(source)} could not be copied next to the running app; it takes effect when the app restarts");
-            }
+            _contentTargets[source] = target;
+            CopyChangedContent(source, target, compare: changedContent.Contains(source, StringComparer.OrdinalIgnoreCase));
         }
         foreach (var line in lines.Where(l => l.StartsWith("/copylocal:", StringComparison.Ordinal)))
         {

@@ -1,0 +1,324 @@
+{
+  "schemaVersion": "1.0",
+  "id": "source-generator",
+  "title": "An app with a netstandard2.0 source generator project: generator inputs and project file edits",
+  "description": [
+    "Real solutions reference a source generator project (netstandard2.0, as an analyzer). Editing its AdditionalFiles input regenerates code live; project file edits restore without rewriting the generator's assets for the app's framework, so later saves keep applying."
+  ],
+  "app": {
+    "template": "app-template",
+    "assetsFrom": "samples/winui-app/Assets",
+    "projectFile": "TodoBench.csproj",
+    "rootNamespace": "TodoBench"
+  },
+  "setup": [
+    {
+      "id": "setup-generator-project",
+      "title": "A netstandard2.0 source generator next to the app",
+      "file": "..\\GreetingGen\\GreetingGen.csproj",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "<Project Sdk=\"Microsoft.NET.Sdk\">",
+          "  <PropertyGroup>",
+          "    <TargetFramework>netstandard2.0</TargetFramework>",
+          "    <LangVersion>latest</LangVersion>",
+          "    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>",
+          "    <IsRoslynComponent>true</IsRoslynComponent>",
+          "  </PropertyGroup>",
+          "  <ItemGroup>",
+          "    <PackageReference Include=\"Microsoft.CodeAnalysis.CSharp\" Version=\"4.8.0\" PrivateAssets=\"all\" />",
+          "  </ItemGroup>",
+          "</Project>"
+        ]
+      }
+    },
+    {
+      "id": "setup-generator",
+      "title": "It turns greeting.txt into code",
+      "file": "..\\GreetingGen\\GreetingGenerator.cs",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "using System.Text;",
+          "using Microsoft.CodeAnalysis;",
+          "using Microsoft.CodeAnalysis.Text;",
+          "",
+          "namespace GreetingGen;",
+          "",
+          "[Generator]",
+          "public sealed class GreetingGenerator : IIncrementalGenerator",
+          "{",
+          "    public void Initialize(IncrementalGeneratorInitializationContext context)",
+          "    {",
+          "        var files = context.AdditionalTextsProvider.Where(file => file.Path.EndsWith(\"greeting.txt\"));",
+          "        context.RegisterSourceOutput(files, (output, file) =>",
+          "        {",
+          "            var text = (file.GetText()?.ToString() ?? \"\").Trim().Replace(\"\\\"\", \"\");",
+          "            output.AddSource(\"Greeting.g.cs\", SourceText.From(",
+          "                \"namespace TodoBench;\\npublic static class Generated\\n{\\n    public static string Greeting() => \\\"\" + text + \"\\\";\\n}\\n\", Encoding.UTF8));",
+          "        });",
+          "    }",
+          "}"
+        ]
+      }
+    },
+    {
+      "id": "setup-input",
+      "title": "The generator's input",
+      "file": "greeting.txt",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "hello v1"
+        ]
+      }
+    },
+    {
+      "id": "setup-references",
+      "title": "The app references the generator as an analyzer and passes it the input",
+      "file": "TodoBench.csproj",
+      "edit": {
+        "op": "replace",
+        "find": [
+          "  <ItemGroup>",
+          "    <Manifest Include=\"$(ApplicationManifest)\" />"
+        ],
+        "text": [
+          "  <ItemGroup>",
+          "    <ProjectReference Include=\"..\\GreetingGen\\GreetingGen.csproj\" OutputItemType=\"Analyzer\" ReferenceOutputAssembly=\"false\" />",
+          "    <AdditionalFiles Include=\"greeting.txt\" />",
+          "  </ItemGroup>",
+          "",
+          "  <ItemGroup>",
+          "    <Manifest Include=\"$(ApplicationManifest)\" />"
+        ]
+      }
+    },
+    {
+      "id": "setup-window",
+      "title": "A window showing the generated text",
+      "file": "MainWindow.xaml",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "<?xml version=\"1.0\" encoding=\"utf-8\" ?>",
+          "<Window",
+          "    x:Class=\"TodoBench.MainWindow\"",
+          "    xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"",
+          "    xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"",
+          "    Title=\"TodoBench\">",
+          "    <StackPanel Spacing=\"8\" Margin=\"16\">",
+          "        <TextBlock AutomationProperties.AutomationId=\"Label\" Text=\"label v1\" />",
+          "        <Button AutomationProperties.AutomationId=\"Show\" Content=\"Show\" Click=\"Show_Click\" />",
+          "        <TextBlock x:Name=\"Result\" AutomationProperties.AutomationId=\"Result\" Text=\"idle\" />",
+          "    </StackPanel>",
+          "</Window>"
+        ]
+      }
+    },
+    {
+      "id": "setup-window-code",
+      "title": "Its click handler",
+      "file": "MainWindow.xaml.cs",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "using Microsoft.UI.Xaml;",
+          "",
+          "namespace TodoBench;",
+          "",
+          "public sealed partial class MainWindow : Window",
+          "{",
+          "    public MainWindow()",
+          "    {",
+          "        InitializeComponent();",
+          "    }",
+          "",
+          "    private void Show_Click(object sender, RoutedEventArgs e)",
+          "    {",
+          "        Result.Text = Generated.Greeting();",
+          "    }",
+          "}"
+        ]
+      }
+    }
+  ],
+  "dimensions": [],
+  "variants": [
+    {
+      "id": "default",
+      "primary": true,
+      "summary": "default",
+      "choices": {}
+    }
+  ],
+  "segments": [
+    {
+      "kind": "common",
+      "phase": "generator",
+      "title": "generator",
+      "actions": [
+        {
+          "id": "g01-generator-input",
+          "title": "Editing the generator's input regenerates its code",
+          "file": "greeting.txt",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "hello v1"
+            ],
+            "text": [
+              "hello v2"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-g01-generator-input",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "Show",
+                "assert": "invoke"
+              },
+              {
+                "target": "Result",
+                "assert": "text-equals",
+                "value": "hello v2"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "g02-project-comment",
+          "title": "A project file edit restores without breaking the generator",
+          "file": "TodoBench.csproj",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "<AdditionalFiles Include=\"greeting.txt\" />"
+            ],
+            "text": [
+              "<AdditionalFiles Include=\"greeting.txt\" />",
+              "    <!-- a comment -->"
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "g03-markup-after-restore",
+          "title": "Markup still applies after the restore",
+          "file": "MainWindow.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "Text=\"label v1\""
+            ],
+            "text": [
+              "Text=\"label v2\""
+            ]
+          },
+          "checkpoint": {
+            "id": "c-g03-markup-after-restore",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "Label",
+                "assert": "text-equals",
+                "value": "label v2"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "g04-add-package",
+          "title": "A package added: a real restore",
+          "file": "TodoBench.csproj",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "    <!-- a comment -->"
+            ],
+            "text": [
+              "    <PackageReference Include=\"CommunityToolkit.Mvvm\" Version=\"8.4.2\" />"
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "g05-code-after-restore",
+          "title": "Code still applies after it",
+          "file": "MainWindow.xaml.cs",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "Result.Text = Generated.Greeting();"
+            ],
+            "text": [
+              "Result.Text = Generated.Greeting() + \"!\";"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-g05-code-after-restore",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "Show",
+                "assert": "invoke"
+              },
+              {
+                "target": "Result",
+                "assert": "text-equals",
+                "value": "hello v2!"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "g06-generator-input-again",
+          "title": "And the generator input again",
+          "file": "greeting.txt",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "hello v2"
+            ],
+            "text": [
+              "hello v3"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-g06-generator-input-again",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "Show",
+                "assert": "invoke"
+              },
+              {
+                "target": "Result",
+                "assert": "text-equals",
+                "value": "hello v3!"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        }
+      ]
+    }
+  ]
+}

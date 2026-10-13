@@ -55,7 +55,8 @@ function New-JourneyApp([string]$Directory) {
         # Update, not Remove: a package added during the journey can bring Microsoft.WindowsAppSDK back transitively.
         Set-Content (Join-Path $shared 'Directory.Build.targets') @"
 <Project>
-  <ItemGroup>
+  <!-- WinUI projects only: a source generator or other netstandard project next to the app takes no WinUI. -->
+  <ItemGroup Condition="'`$(UseWinUI)' == 'true'">
     <PackageReference Update="Microsoft.WindowsAppSDK" ExcludeAssets="all" />
     <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="$WinUIPackageVersion" />
   </ItemGroup>
