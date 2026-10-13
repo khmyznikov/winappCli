@@ -131,6 +131,17 @@ function Test-UiCheck($Check, [int]$ProcessId) {
         'absent' { return Invoke-Ui (@('wait-for', $target, '--gone') + $app + @('-t', '5000')) }
         'toggle-state-equals' { return Invoke-Ui (@('wait-for', $target, '-p', 'ToggleState', '--value', $value) + $app + @('-t', '5000')) }
         'enabled-equals' { return Invoke-Ui (@('wait-for', $target, '-p', 'IsEnabled', '--value', $value) + $app + @('-t', '5000')) }
+        'property-equals' {
+            # value is "Property=Value", read from the XAML tree (properties UI Automation doesn't expose, like FontSize).
+            $property, $expected = $value -split '=', 2
+            $deadline = (Get-Date).AddSeconds(5)
+            do {
+                $output = & $Winapp devtools get-property $target $property @app 2>&1 | Out-String
+                if ($output -match "(?m)^\s*$([regex]::Escape($property)):\s*(\S+)" -and $Matches[1] -eq $expected) { return [pscustomobject]@{ Ok = $true; Output = $output.Trim() } }
+                Start-Sleep -Milliseconds 250
+            } while ((Get-Date) -lt $deadline)
+            return [pscustomobject]@{ Ok = $false; Output = "$($output.Trim()), expected $property=$expected" }
+        }
         'toggle-on' {
             $state = Invoke-Ui (@('get-property', $target, '-p', 'ToggleState') + $app)
             if ($state.Output -cnotmatch 'ToggleState: On') { $null = Invoke-Ui (@('invoke', $target) + $app) }

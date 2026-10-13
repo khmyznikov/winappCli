@@ -1802,6 +1802,17 @@ internal static class XamlReload
         return null;
     }
 
+    /// <summary>
+    /// An x:Bind that can't be applied, reported against the attribute in the user's file ("Pages/Home.xaml(12,20): ...")
+    /// as an error of the save: no later save makes it work unless the markup or code changes.
+    /// </summary>
+    private static void BindingError(Type component, RootBinding spec, string reason)
+    {
+        var where = ClassUris.TryGetValue(component.FullName!, out var uri) ? uri : component.Name;
+        var location = spec.Location is { } position ? $"({position})" : "";
+        ReportError($"{where}{location}: x:Bind {spec.Path} into {spec.Property}: {reason}");
+    }
+
     /// <param name="source">What the path is relative to: the component, or a template item.</param>
     /// <param name="functions">The component type holding generated x:Bind function methods.</param>
     /// <param name="watchOwner">Owns one-way function watchers, so they are dropped on the next evaluation.</param>
@@ -1819,7 +1830,7 @@ internal static class XamlReload
             }
             if (target is null || property is null)
             {
-                Report($"x:Bind {spec.Path}: {spec.Element ?? "root"}.{spec.Property} was not found");
+                BindingError(functions, spec, $"the property {spec.Property} was not found on {target?.GetType().Name ?? "the element"}");
                 return;
             }
             if (spec.Function is { } function)
@@ -1883,7 +1894,7 @@ internal static class XamlReload
         }
         catch (Exception ex)
         {
-            Report($"x:Bind {spec.Path}: {ex.GetBaseException().Message}");
+            BindingError(functions, spec, $"it can't be set ({ex.GetBaseException().Message})");
         }
     }
 
@@ -1991,16 +2002,33 @@ internal static class XamlReload
             {
                 return false;
             }
-            if (value == DependencyProperty.UnsetValue || !TryConvertForTarget(value, target, clr.PropertyType, spec, out value))
+            if (value == DependencyProperty.UnsetValue)
+            {
+                // A function that doesn't compile yet: the helper reports it as waiting.
+                return true;
+            }
+            if (value is null && clr.PropertyType.IsValueType && Nullable.GetUnderlyingType(clr.PropertyType) is null)
+            {
+                // As compiled x:Bind: a null along the path leaves the property as it is.
+                return true;
+            }
+            if (!TryConvertForTarget(value, target, clr.PropertyType, spec, out value))
             {
                 return false;
             }
-            clr.SetValue(target, value);
+            try
+            {
+                clr.SetValue(target, value);
+            }
+            catch (TargetInvocationException)
+            {
+                return false;
+            }
             return true;
         }
         if (!Evaluate())
         {
-            ReportError($"{spec.Element ?? "root"}.{spec.Property}: x:Bind {spec.Path} can't be evaluated live into this property; it takes effect when the app restarts");
+            BindingError(functions, spec, $"its value can't be converted to {clr.PropertyType.Name}");
             return;
         }
         var watch = method is not null ? spec.Watch : spec.Path.Length > 0 ? [spec.Path] : [];
@@ -2179,10 +2207,25 @@ internal static class XamlReload
             {
                 value = XamlBindingHelper.ConvertValue(propertyType, text);
             }
+            if (value is null && propertyType is { IsValueType: true } && Nullable.GetUnderlyingType(propertyType) is null)
+            {
+                // As compiled x:Bind: a null along the path ((x:Double)Combo.SelectedValue before anything is selected)
+                // leaves the property as it is; a value type can't hold null.
+                return;
+            }
+            if (!TryCoerce(value, propertyType, out value))
+            {
+                BindingError(functions, spec, $"a {value?.GetType().Name} can't be converted to {propertyType?.Name}");
+                return;
+            }
             evaluating = true;
             try
             {
                 target.SetValue(property, value);
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidCastException or COMException)
+            {
+                BindingError(functions, spec, $"a {value?.GetType().Name ?? "null"} can't be set ({ex.Message})");
             }
             finally
             {

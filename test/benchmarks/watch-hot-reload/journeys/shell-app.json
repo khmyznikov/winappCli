@@ -175,6 +175,8 @@
           "            <ComboBoxItem x:Name=\"SizeLarge\" Content=\"Large\" />",
           "        </ComboBox>",
           "        <TextBlock AutomationProperties.AutomationId=\"PickedSize\" Text=\"{x:Bind ((ComboBoxItem)Sizes.SelectedItem).Name, Mode=OneWay}\" />",
+          "        <ComboBox x:Name=\"FontPicker\" ItemsSource=\"{x:Bind FontSizes}\" Loaded=\"FontPicker_Loaded\" />",
+          "        <TextBlock x:Name=\"Sized\" Text=\"sized\" FontSize=\"{x:Bind (x:Double)FontPicker.SelectedValue, Mode=OneWay}\" />",
           "        <local:Echo>",
           "            <local:Echo.Values>",
           "                <local:EchoValue Value=\"{x:Bind Disable.IsChecked, Mode=OneWay}\" />",
@@ -202,6 +204,14 @@
           "    public OptionsPage()",
           "    {",
           "        InitializeComponent();",
+          "    }",
+          "",
+          "    // Like WinUI Gallery's ComboBox page: sizes in a List<double>, the selection made once the box has loaded.",
+          "    public System.Collections.Generic.List<double> FontSizes { get; } = new System.Collections.Generic.List<double> { 12, 20, 28 };",
+          "",
+          "    private void FontPicker_Loaded(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)",
+          "    {",
+          "        FontPicker.SelectedIndex = 1;",
           "    }",
           "",
           "    // Like a gallery's item page, which shows its sample in a frame of its own.",
@@ -665,6 +675,62 @@
                 "target": "EchoText",
                 "assert": "text-equals",
                 "value": "echo:True"
+              },
+              {
+                "target": "Sized",
+                "assert": "property-equals",
+                "value": "FontSize=20"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "s03b-cast-path-typo",
+          "title": "A typo in the path a cast reads is an error at its line, as the XAML compiler reports it",
+          "file": "OptionsPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "((ComboBoxItem)Sizes.SelectedItem)"
+            ],
+            "text": [
+              "((ComboBoxItem)SizesX.SelectedItem)"
+            ]
+          },
+          "expect": {
+            "outcome": "error",
+            "detail": "OptionsPage\\.xaml\\(\\d+,\\d+\\): Invalid binding path 'SizesX\\.SelectedItem' : Property 'SizesX' not found"
+          }
+        },
+        {
+          "id": "s03c-cast-path-fixed",
+          "title": "Fixing it applies, and the (x:Double) cast still sizes the text",
+          "file": "OptionsPage.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "((ComboBoxItem)SizesX.SelectedItem)"
+            ],
+            "text": [
+              "((ComboBoxItem)Sizes.SelectedItem)"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-s03c-cast-path-fixed",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "PickedSize",
+                "assert": "text-equals",
+                "value": "SizeSmall"
+              },
+              {
+                "target": "Sized",
+                "assert": "property-equals",
+                "value": "FontSize=20"
               }
             ]
           },

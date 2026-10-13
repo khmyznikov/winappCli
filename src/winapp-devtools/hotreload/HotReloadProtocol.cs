@@ -129,6 +129,8 @@ internal sealed class RootBinding
     public List<string> Watch { get; set; } = [];
     /// <summary>For two-way x:Bind with BindBack: the generated static method <c>void M(object source, object value)</c>.</summary>
     public string? BindBack { get; set; }
+    /// <summary>"line,column" of the attribute in the user's file, for messages about this binding.</summary>
+    public string? Location { get; set; }
 
     /// <summary>The BindBack path as written in markup; the helper turns it into <see cref="BindBack"/>.</summary>
     [System.Text.Json.Serialization.JsonIgnore]

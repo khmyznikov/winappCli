@@ -451,6 +451,7 @@ internal static class XamlTransform
                     var (owner, property) = SplitAttached(attribute.Name.LocalName, element.Name.NamespaceName);
                     bind.Property = property;
                     bind.OwnerType = owner;
+                    bind.Location = $"{((IXmlLineInfo)attribute).LineNumber},{((IXmlLineInfo)attribute).LinePosition}";
                     if (bind.Path.Contains('(') || bind.Path.Contains(':'))
                     {
                         // Functions, casts and static members ({x:Bind local:AppFacts.StaticBanner}) are compiled.
@@ -475,6 +476,11 @@ internal static class XamlTransform
                             bind.BindBack = bind.Function + "_Back";
                         }
                         Functions.Add(new XBindFunction(bind.Function, expression.CSharp, source!, value, back));
+                        // The paths it reads (the operand of a cast, a function's arguments) are checked like plain paths.
+                        foreach (var read in expression.Watch)
+                        {
+                            CheckPath(read, inTemplate ? template : null, attribute);
+                        }
                         if (inTemplate)
                         {
                             Hook().Bindings.Add(bind);
