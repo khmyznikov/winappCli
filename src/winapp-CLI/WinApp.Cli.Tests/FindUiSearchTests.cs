@@ -497,6 +497,53 @@ public class FindUiSearchTests
         }
     }
 
+    [TestMethod]
+    public void SearchVocabulary_EmbeddedFileLoads()
+    {
+        var vocabulary = SearchVocabulary.LoadEmbedded();
+
+        Assert.AreEqual(SearchVocabulary.SupportedSchemaVersion, vocabulary.SchemaVersion);
+        Assert.IsTrue(vocabulary.Phrases.Length > 0, "phrases must not be empty");
+        Assert.IsTrue(vocabulary.Groups.Length > 0, "groups must not be empty");
+        Assert.IsTrue(vocabulary.Expansions.Length > 0, "expansions must not be empty");
+        Assert.IsTrue(Synonyms.Phrases.Count > 0 && Synonyms.ReplacePhrases.Length > 0 && Synonyms.Map.Count > 0,
+            "Synonyms must be built from the embedded vocabulary");
+    }
+
+    [TestMethod]
+    public void Preprocess_ReplacePhrase_SubstitutesToken()
+    {
+        var tokens = BM25.Tokenize(Synonyms.Preprocess("sign in page"));
+
+        CollectionAssert.Contains(tokens, "login");
+        CollectionAssert.DoesNotContain(tokens, "sign", "a replace phrase must drop its original words");
+    }
+
+    [TestMethod]
+    public void Preprocess_AddPhrase_KeepsOriginalWords()
+    {
+        var tokens = BM25.Tokenize(Synonyms.Preprocess("data grid"));
+
+        foreach (var expected in new[] { "data", "grid", "datagrid" })
+        {
+            CollectionAssert.Contains(tokens, expected);
+        }
+    }
+
+    [TestMethod]
+    public void Expand_Group_IsTwoWay()
+    {
+        CollectionAssert.Contains(Synonyms.Expand(["webcam"]).ToList(), "camera");
+        CollectionAssert.Contains(Synonyms.Expand(["camera"]).ToList(), "webcam");
+    }
+
+    [TestMethod]
+    public void Expand_Expansion_IsOneWay()
+    {
+        CollectionAssert.Contains(Synonyms.Expand(["modal"]).ToList(), "contentdialog");
+        CollectionAssert.DoesNotContain(Synonyms.Expand(["contentdialog"]).ToList(), "modal");
+    }
+
     /// <summary>Common ways people describe a control without naming it must reach that control.</summary>
     [TestMethod]
     [DataRow("toolbar with icons", "commandbar")]

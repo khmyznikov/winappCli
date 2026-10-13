@@ -69,6 +69,12 @@
     <EmbeddedResource Include="Services\Controls\Data\core-patterns.json" LogicalName="core-patterns.json" />
     <EmbeddedResource Include="Services\Controls\Data\gallery-tags.json" LogicalName="gallery-tags.json" />
     <!--
+      Search vocabulary shared with the Windows samples site, so both searches match the same
+      phrasing. Verbatim copy of catalog/search-vocabulary.json from microsoft/winapp-samples at
+      e0b5b6a80e6bcec81f023a37f6a25e7d7a2ce334; edit it upstream and copy the new version here.
+    -->
+    <EmbeddedResource Include="Services\Controls\Data\search-vocabulary.json" LogicalName="search-vocabulary.json" />
+    <!--
       The baked corpus floor (see EmbeddedSnapshot.cs). Only the Brotli blob is committed
       and embedded: the corpus is a backup for the offline case, refreshed wholesale by
       the release bake, so release time is its source of truth rather than a committed
