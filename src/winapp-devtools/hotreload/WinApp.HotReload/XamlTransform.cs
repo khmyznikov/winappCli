@@ -568,17 +568,20 @@ internal static class XamlTransform
     }
 
     /// <summary>
-    /// App.xaml's &lt;Application.Resources&gt; as a standalone ResourceDictionary the runtime can parse on its own.
+    /// App.xaml's &lt;Application.Resources&gt; as a standalone ResourceDictionary the runtime can parse on its own, with
+    /// where each of its elements and attributes came from in the user's file (see <paramref name="runtimeLineMap"/>).
     /// Relative dictionary sources are made absolute, since the result is loaded without a base URI.
     /// </summary>
-    public static string ApplicationResources(string runtimeXaml, string appUri)
+    public static (string Xaml, List<int[]> LineMap) ApplicationResources(string runtimeXaml, string appUri, IReadOnlyList<int[]> runtimeLineMap)
     {
-        var root = XElement.Parse(runtimeXaml);
-        var content = root.Elements().FirstOrDefault(e => e.Name.LocalName.EndsWith(".Resources", StringComparison.Ordinal))?.Elements().ToList() ?? [];
+        var root = XElement.Parse(runtimeXaml, LoadOptions.SetLineInfo);
+        var property = root.Elements().FirstOrDefault(e => e.Name.LocalName.EndsWith(".Resources", StringComparison.Ordinal));
+        var content = property?.Elements().ToList() ?? [];
         var presentation = root.Name.Namespace;
-        var dictionary = content is [{ } single] && single.Name == presentation + "ResourceDictionary"
-            ? new XElement(single)
-            : new XElement(presentation + "ResourceDictionary", content);
+        var single = content is [{ } only] && only.Name == presentation + "ResourceDictionary";
+        var dictionary = single ? new XElement(content[0]) : new XElement(presentation + "ResourceDictionary", content);
+        // The elements the dictionary's were copied from, in document order.
+        var sources = single ? content[0].DescendantsAndSelf() : new[] { property ?? root }.Concat(content.SelectMany(c => c.DescendantsAndSelf()));
         foreach (var declaration in root.Attributes().Where(a => a.IsNamespaceDeclaration))
         {
             if (dictionary.Attribute(declaration.Name) is null)
@@ -594,7 +597,27 @@ internal static class XamlTransform
                 source.Value = new Uri(baseUri, source.Value).ToString();
             }
         }
-        return dictionary.ToString(SaveOptions.DisableFormatting);
+        var xaml = dictionary.ToString(SaveOptions.DisableFormatting);
+        var map = new List<int[]>();
+        void Add(IXmlLineInfo to, IXmlLineInfo from)
+        {
+            if (runtimeLineMap.FirstOrDefault(m => m[0] == from.LineNumber && m[1] == from.LinePosition) is { } user)
+            {
+                map.Add([to.LineNumber, to.LinePosition, user[2], user[3]]);
+            }
+        }
+        foreach (var (to, from) in XElement.Parse(xaml, LoadOptions.SetLineInfo).DescendantsAndSelf().Zip(sources))
+        {
+            Add(to, from);
+            foreach (var attribute in to.Attributes())
+            {
+                if (from.Attribute(attribute.Name) is { } original)
+                {
+                    Add(attribute, original);
+                }
+            }
+        }
+        return (xaml, map.OrderBy(m => m[0]).ThenBy(m => m[1]).ToList());
     }
 
     internal static RootBinding? ParseBind(string markup, string? defaultMode)

@@ -130,6 +130,7 @@ function Test-UiCheck($Check, [int]$ProcessId) {
         'text-contains' { return Invoke-Ui (@('wait-for', $target, '--value', $value, '--contains') + $app + @('-t', '5000')) }
         'absent' { return Invoke-Ui (@('wait-for', $target, '--gone') + $app + @('-t', '5000')) }
         'toggle-state-equals' { return Invoke-Ui (@('wait-for', $target, '-p', 'ToggleState', '--value', $value) + $app + @('-t', '5000')) }
+        'enabled-equals' { return Invoke-Ui (@('wait-for', $target, '-p', 'IsEnabled', '--value', $value) + $app + @('-t', '5000')) }
         'toggle-on' {
             $state = Invoke-Ui (@('get-property', $target, '-p', 'ToggleState') + $app)
             if ($state.Output -cnotmatch 'ToggleState: On') { $null = Invoke-Ui (@('invoke', $target) + $app) }

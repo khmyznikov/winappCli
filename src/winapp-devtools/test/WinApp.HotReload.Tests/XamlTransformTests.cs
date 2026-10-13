@@ -125,12 +125,18 @@ public sealed class XamlTransformTests
             </Application>
             """;
 
-        var dictionary = XElement.Parse(XamlTransform.ApplicationResources(app, "ms-appx:///App.xaml"));
+        var transformed = XamlTransform.Transform(app, new Resolver());
+        var (xaml, lineMap) = XamlTransform.ApplicationResources(transformed.RuntimeXaml, "ms-appx:///App.xaml", transformed.LineMap);
+        var dictionary = XElement.Parse(xaml, LoadOptions.SetLineInfo);
 
         Assert.AreEqual("ResourceDictionary", dictionary.Name.LocalName);
         CollectionAssert.AreEqual(new[] { "ms-appx:///Styles/Colors.xaml", "ms-appx:///Other.xaml" },
             dictionary.Descendants().Where(e => e.Attribute("Source") is not null).Select(e => (string)e.Attribute("Source")!).ToArray());
-        Assert.AreEqual("Todos", dictionary.Descendants().Single(e => e.Name.LocalName == "String").Value);
+        var title = dictionary.Descendants().Single(e => e.Name.LocalName == "String");
+        Assert.AreEqual("Todos", title.Value);
+        // Parse errors in the dictionary point at the user's App.xaml.
+        System.Xml.IXmlLineInfo at = title;
+        Assert.AreEqual(8, lineMap.Single(m => m[0] == at.LineNumber && m[1] == at.LinePosition)[2]);
     }
 
     [TestMethod]

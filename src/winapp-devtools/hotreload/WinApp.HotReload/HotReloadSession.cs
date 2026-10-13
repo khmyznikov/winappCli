@@ -390,7 +390,9 @@ internal sealed class HotReloadSession
             }
             _applicationSettings[path] = settings;
             // App.xaml: only its resources can change while the app runs.
-            return (new MarkupPayload { Kind = MarkupKind.Application, Uri = uri, Xaml = XamlTransform.ApplicationResources(transformed.RuntimeXaml, uri) }, null, transformed);
+            var (resources, lineMap) = XamlTransform.ApplicationResources(transformed.RuntimeXaml, uri, transformed.LineMap);
+            _sources[uri] = path;
+            return (new MarkupPayload { Kind = MarkupKind.Application, Uri = uri, Xaml = resources, LineMap = lineMap }, null, transformed);
         }
         if (transformed.ClassName is not null)
         {
@@ -915,13 +917,36 @@ internal sealed class HotReloadSession
                 }
             }
         }
+        // Static initializers and constructors already ran: a changed one, in a file this save changed or in a
+        // generator's output (a list built from attributes), takes effect at the next start.
+        var oldTrees = (await oldProject.GetCompilationAsync(cancellationToken).ConfigureAwait(false))!.SyntaxTrees
+            .GroupBy(t => t.FilePath, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        foreach (var tree in compilation.SyntaxTrees)
+        {
+            if (!oldTrees.TryGetValue(tree.FilePath, out var old) || ReferenceEquals(old, tree) || old.GetText(cancellationToken).ContentEquals(tree.GetText(cancellationToken)))
+            {
+                continue;
+            }
+            var before = StaticInitializers(old.GetRoot(cancellationToken));
+            foreach (var (name, initializer) in StaticInitializers(tree.GetRoot(cancellationToken)))
+            {
+                if (before.TryGetValue(name, out var was) && !was.IsEquivalentTo(initializer, topLevel: false))
+                {
+                    notes.Add(name.EndsWith(".cctor", StringComparison.Ordinal)
+                        ? $"{name[..^6]}'s static constructor ran when the app started: this change takes effect when the app restarts"
+                        : $"{name} is set once, when the app starts: this change takes effect when the app restarts");
+                }
+            }
+        }
         foreach (var component in _components.Values.Where(c => c.Pending && c.ClassName is not null && !c.ReplayDisabled))
         {
             if (compilation.GetTypeByMetadataName(component.ClassName!) is not { } type)
             {
                 continue;
             }
-            foreach (var constructor in type.InstanceConstructors.SelectMany(c => c.DeclaringSyntaxReferences).Select(r => r.GetSyntax(cancellationToken)).OfType<ConstructorDeclarationSyntax>())
+            // Only a constructor without parameters runs again on reload (see GeneratedPartial).
+            foreach (var constructor in type.InstanceConstructors.SelectMany(c => c.DeclaringSyntaxReferences).Select(r => r.GetSyntax(cancellationToken)).OfType<ConstructorDeclarationSyntax>()
+                .Where(c => c.ParameterList.Parameters.Count == 0))
             {
                 var model = compilation.GetSemanticModel(constructor.SyntaxTree);
                 foreach (var invocation in constructor.DescendantNodes().OfType<InvocationExpressionSyntax>())
@@ -944,6 +969,35 @@ internal sealed class HotReloadSession
             }
         }
         return notes;
+    }
+
+    /// <summary>"Type.Field" (or "Type.cctor") to the initializer (or body) of each static member in a file.</summary>
+    private static Dictionary<string, SyntaxNode> StaticInitializers(SyntaxNode root)
+    {
+        var result = new Dictionary<string, SyntaxNode>(StringComparer.Ordinal);
+        foreach (var type in root.DescendantNodes().OfType<TypeDeclarationSyntax>())
+        {
+            var name = string.Join(".", type.AncestorsAndSelf().OfType<TypeDeclarationSyntax>().Reverse().Select(t => t.Identifier.ValueText));
+            foreach (var member in type.Members.Where(m => m.Modifiers.Any(SyntaxKind.StaticKeyword) && !m.Modifiers.Any(SyntaxKind.ConstKeyword)))
+            {
+                switch (member)
+                {
+                    case FieldDeclarationSyntax field:
+                        foreach (var variable in field.Declaration.Variables.Where(v => v.Initializer is not null))
+                        {
+                            result.TryAdd($"{name}.{variable.Identifier.ValueText}", variable.Initializer!.Value);
+                        }
+                        break;
+                    case PropertyDeclarationSyntax { Initializer: { } initializer } property:
+                        result.TryAdd($"{name}.{property.Identifier.ValueText}", initializer.Value);
+                        break;
+                    case ConstructorDeclarationSyntax { Body: { } body }:
+                        result.TryAdd($"{name}.cctor", body);
+                        break;
+                }
+            }
+        }
+        return result;
     }
 
     /// <summary>The update for the current solution; a compiler crash becomes a <see cref="CompilerCrashException"/>.</summary>
@@ -1388,18 +1442,25 @@ internal sealed class HotReloadSession
         {
             userTrees.Add((await document.GetSyntaxTreeAsync(cancellationToken).ConfigureAwait(false))!);
         }
+        var classes = IndexClasses(userTrees);
         foreach (var component in _components.Values)
         {
             // Re-check every function each save: a C# edit may have made one compile.
             component.InvalidFunctions.Clear();
             // Likewise the replay: the constructor may only have referred to a type that didn't exist yet.
             component.ReplayDisabled = false;
-            component.SkippedStatements.Clear();
+            // Statements only a constructor can run stay left out while the constructor is unchanged (finding them
+            // again costs another compilation of the whole project).
+            var constructor = component.ClassName is null ? null : GeneratedPartial.ReplayedConstructor(classes.GetValueOrDefault(component.ClassName) ?? [])?.ToString();
+            if (constructor != component.SkippedFor)
+            {
+                component.SkippedStatements.Clear();
+                component.SkippedFor = constructor;
+            }
         }
         // Worked out on a copy: trying variants (with and without the constructor replay) must not leave a document that
         // is textually unchanged but a new version, which the compiler then emits as an edit of every method in it.
         var working = _solution;
-        var classes = IndexClasses(userTrees);
         // Only partials that can have a new problem are checked (binding every one is seconds on a large app): one whose
         // text changes, one whose class changed, and, after a code edit, one with x:Bind functions (their code may call
         // what changed).
@@ -1407,6 +1468,7 @@ internal sealed class HotReloadSession
             .Select(id => _solution.GetDocument(id)?.FilePath).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
         var codeChanged = changedFiles.Any(p => p.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) && IsSource(p));
         var check = new HashSet<string>(StringComparer.Ordinal);
+        Phase("generated: index");
         for (var pass = 0; pass < 8; pass++)
         {
             foreach (var component in _components.Values.Where(c => c.ClassName is not null))
@@ -1436,7 +1498,9 @@ internal sealed class HotReloadSession
                 }
             }
 
+            Phase("generated: partials");
             var compilation = (await working.GetProject(_projectId)!.GetCompilationAsync(cancellationToken).ConfigureAwait(false))!;
+            Phase("generated: compilation");
             var retry = false;
             foreach (var component in _components.Values.Where(c => c.ClassName is not null && check.Contains(c.ClassName)))
             {
@@ -1467,6 +1531,7 @@ internal sealed class HotReloadSession
                     }
                 }
             }
+            Phase($"generated: diagnostics ({check.Count})");
             if (!retry)
             {
                 foreach (var component in _components.Values.Where(c => c.Pending && c.ClassName is not null && c.SkippedStatements.Count > 0 && !c.ReplayDisabled))

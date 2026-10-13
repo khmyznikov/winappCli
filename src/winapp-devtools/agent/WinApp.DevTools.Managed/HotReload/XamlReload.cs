@@ -373,6 +373,10 @@ internal static class XamlReload
     internal static string Describe(Exception ex, string? uri, string? component = null)
     {
         var message = string.Join(" ", ex.GetBaseException().Message.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0 && l != NoText));
+        // A dictionary's items split by a property element (<ResourceDictionary.ThemeDictionaries>) in between.
+        message = message.Replace("The property '__implicit_items' is set more than once.",
+            "This dictionary's resources are split by another element (such as <ResourceDictionary.ThemeDictionaries>): keep them together in one block (the XAML compiler reports this as WMC0035).", StringComparison.Ordinal)
+            .Replace("'__implicit_items'", "the dictionary's resources", StringComparison.Ordinal);
         var position = System.Text.RegularExpressions.Regex.Match(message, @"\s*\[Line: (\d+) Position: (\d+)\]");
         if (uri is null)
         {
@@ -700,35 +704,20 @@ internal static class XamlReload
     }
 
     /// <summary>Frames by x:Name with the page they show, so a re-initialized window keeps its pages (and their view models).</summary>
-    private static Dictionary<string, Frame> NamedFrames(DependencyObject? root)
-    {
-        var frames = new Dictionary<string, Frame>(StringComparer.Ordinal);
-        void Walk(DependencyObject node)
-        {
-            if (node is Frame { Content: Page } frame && !string.IsNullOrEmpty(frame.Name))
-            {
-                frames.TryAdd(frame.Name, frame);
-                return;
-            }
-            for (var i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++)
-            {
-                Walk(VisualTreeHelper.GetChild(node, i));
-            }
-        }
-        if (root is not null)
-        {
-            Walk(root);
-        }
-        return frames;
-    }
+    private static Dictionary<string, Frame> NamedFrames(DependencyObject? root) =>
+        NameIndex(root as FrameworkElement).Values.OfType<Frame>().Where(f => f.Content is Page).ToDictionary(f => f.Name, StringComparer.Ordinal);
 
     private static List<(Frame Frame, Page Page)> KeepPages(object component, DependencyObject? oldRoot, FrameworkElement? root, Dictionary<string, Frame> oldFrames)
     {
         var kept = new List<(Frame, Page)>();
+        HotReloadAgent.Log($"frames to keep: {string.Join(", ", oldFrames.Keys)}");
+        Dictionary<string, FrameworkElement>? index = null;
         foreach (var (name, oldFrame) in oldFrames)
         {
-            if (root?.FindName(name) is not Frame frame || ReferenceEquals(frame, oldFrame) || oldFrame.Content is not Page page)
+            var found = root?.FindName(name) ?? (index ??= NameIndex(root)).GetValueOrDefault(name);
+            if (found is not Frame frame || ReferenceEquals(frame, oldFrame) || oldFrame.Content is not Page page)
             {
+                HotReloadAgent.Log($"not keeping frame {name}: {found?.GetType().Name ?? "no such name in the new markup"}");
                 continue;
             }
             if (KeepFrame(component, oldRoot, root, frame, oldFrame))
@@ -1126,6 +1115,9 @@ internal static class XamlReload
     private static Action ReleaseHostedContent(object component)
     {
         var released = new List<(DependencyObject Host, DependencyProperty Property, object Content)>();
+        // What the component's own markup built (a NavigationView's content) is rebuilt with it and stays.
+        var own = (ContentRoot(component) as FrameworkElement)?.BaseUri?.ToString();
+        bool Foreign(UIElement content) => content is not FrameworkElement element || element.BaseUri?.ToString() != own;
         // The component's named presenters and content controls (its x:Name fields): template parts and kept Frames are
         // never among them.
         for (var type = component.GetType(); type is not null && type.Assembly == component.GetType().Assembly; type = type.BaseType)
@@ -1134,11 +1126,11 @@ internal static class XamlReload
             {
                 switch (field.GetValue(component))
                 {
-                    case ContentPresenter { Content: UIElement content } presenter:
+                    case ContentPresenter { Content: UIElement content } presenter when Foreign(content):
                         released.Add((presenter, ContentPresenter.ContentProperty, content));
                         presenter.Content = null;
                         break;
-                    case ContentControl { Content: UIElement content } control and not Frame:
+                    case ContentControl { Content: UIElement content } control and not Frame when Foreign(content):
                         released.Add((control, ContentControl.ContentProperty, content));
                         control.Content = null;
                         break;
@@ -1161,10 +1153,37 @@ internal static class XamlReload
         };
     }
 
+    /// <summary>
+    /// Removes the markup's event handlers from an element of the old tree that is about to change (its code-added items
+    /// move to the rebuilt one): the app's handler isn't called for an element it no longer shows.
+    /// </summary>
+    private static void Unwire(object component, string element, object owner)
+    {
+        if (!ClassUris.TryGetValue(component.GetType().FullName!, out var uri) || !Manifests.TryGetValue(uri, out var manifest))
+        {
+            return;
+        }
+        foreach (var wiring in manifest.Events.Where(e => e.Element == element))
+        {
+            try
+            {
+                if (owner.GetType().GetEvent(wiring.Event) is { EventHandlerType: { } handlerType } info &&
+                    MakeHandler(handlerType, wiring.Path is null ? component : ResolvePath(component, wiring.Path), wiring.Handler) is { } handler)
+                {
+                    info.RemoveEventHandler(owner, handler);
+                }
+            }
+            catch (Exception ex) when (ex is COMException or ArgumentException or InvalidOperationException or TargetInvocationException)
+            {
+                HotReloadAgent.Log($"unwiring {element}.{wiring.Event} failed: {ex.Message}");
+            }
+        }
+    }
+
     private static void ReloadMarkup(object component)
     {
         var restore = Snapshot(component);
-        var keepAdded = CodeAddedItems.Detach(component);
+        var keepAdded = CodeAddedItems.Detach(component, (element, owner) => Unwire(component, element, owner));
         var hosted = ReleaseHostedContent(component);
         try
         {
@@ -1189,7 +1208,7 @@ internal static class XamlReload
         var type = component.GetType();
         HotReloadAgent.Log($"reinitialize {type.FullName}");
         var restore = Snapshot(component);
-        var keepAdded = CodeAddedItems.Detach(component);
+        var keepAdded = CodeAddedItems.Detach(component, (element, owner) => Unwire(component, element, owner));
         var hosted = ReleaseHostedContent(component);
         try
         {
@@ -1328,17 +1347,149 @@ internal static class XamlReload
     /// <summary>Loading handlers waiting to evaluate a component's x:Bind, so a reload before it loads can drop them.</summary>
     private static readonly ConditionalWeakTable<object, StrongBox<Windows.Foundation.TypedEventHandler<FrameworkElement, object>>> PendingBinds = new();
 
+    /// <summary>
+    /// Named elements under <paramref name="root"/>: its visual tree, content not shown yet, and flyouts (first name wins).
+    /// </summary>
+    private static Dictionary<string, FrameworkElement> NameIndex(FrameworkElement? root)
+    {
+        var index = new Dictionary<string, FrameworkElement>(StringComparer.Ordinal);
+        var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        var pending = new Stack<DependencyObject>();
+        void Push(object? item)
+        {
+            if (item is DependencyObject d && seen.Add(d))
+            {
+                pending.Push(d);
+            }
+        }
+        void PushFlyout(Microsoft.UI.Xaml.Controls.Primitives.FlyoutBase? flyout)
+        {
+            if (flyout is Flyout { Content: { } content })
+            {
+                Push(content);
+            }
+            else if (flyout is MenuFlyout menu)
+            {
+                foreach (var item in menu.Items)
+                {
+                    Push(item);
+                }
+            }
+        }
+        Push(root);
+        while (pending.TryPop(out var current))
+        {
+            if (current is FrameworkElement { Name: { Length: > 0 } name } element)
+            {
+                index.TryAdd(name, element);
+            }
+            if (!ReferenceEquals(current, root) && current is Frame or UserControl or Page)
+            {
+                // Another component's names are its own.
+                continue;
+            }
+            try
+            {
+                for (var i = 0; i < VisualTreeHelper.GetChildrenCount(current); i++)
+                {
+                    Push(VisualTreeHelper.GetChild(current, i));
+                }
+                switch (current)
+                {
+                    case Panel panel:
+                        foreach (var child in panel.Children)
+                        {
+                            Push(child);
+                        }
+                        break;
+                    case ContentControl control:
+                        Push(control.Content);
+                        break;
+                    case Border border:
+                        Push(border.Child);
+                        break;
+                    case ItemsControl items:
+                        foreach (var item in items.Items)
+                        {
+                            Push(item);
+                        }
+                        break;
+                    case MenuFlyoutSubItem sub:
+                        foreach (var item in sub.Items)
+                        {
+                            Push(item);
+                        }
+                        break;
+                    case Control control:
+                        // Not templated yet (this runs right after the markup loads): what a control like TitleBar or
+                        // NavigationView holds is only reachable through its properties (Content, RightHeader, MenuItems).
+                        foreach (var property in ContentProperties(control.GetType()))
+                        {
+                            switch (property.GetValue(control))
+                            {
+                                case IList<object> list:
+                                    foreach (var item in list)
+                                    {
+                                        Push(item);
+                                    }
+                                    break;
+                                case var value:
+                                    Push(value);
+                                    break;
+                            }
+                        }
+                        break;
+                }
+                if (current is UIElement ui)
+                {
+                    PushFlyout(ui.ContextFlyout);
+                }
+                if (current is FrameworkElement framework)
+                {
+                    PushFlyout(Microsoft.UI.Xaml.Controls.Primitives.FlyoutBase.GetAttachedFlyout(framework));
+                }
+                if (current is Button button)
+                {
+                    PushFlyout(button.Flyout);
+                }
+            }
+            catch (Exception ex) when (ex is COMException or TargetInvocationException)
+            {
+            }
+        }
+        return index;
+    }
+
+    private static readonly Dictionary<Type, PropertyInfo[]> s_contentProperties = [];
+
+    /// <summary>A control type's public properties that can hold markup elements: object, UIElement and IList&lt;object&gt;.</summary>
+    private static PropertyInfo[] ContentProperties(Type type)
+    {
+        if (!s_contentProperties.TryGetValue(type, out var properties))
+        {
+            s_contentProperties[type] = properties = type.GetProperties(BindingFlags.Instance | BindingFlags.Public)
+                .Where(p => p.CanRead && p.GetIndexParameters().Length == 0 && p.Name is not ("DataContext" or "Tag") &&
+                    (p.PropertyType == typeof(object) || typeof(UIElement).IsAssignableFrom(p.PropertyType) || p.PropertyType == typeof(IList<object>)))
+                .ToArray();
+        }
+        return properties;
+    }
+
     private static void Wire(object component, ComponentManifest manifest)
     {
         var type = component.GetType();
         var scope = component as FrameworkElement ?? (component as Window)?.Content as FrameworkElement;
+        Dictionary<string, FrameworkElement>? index = null;
+        // FindName misses elements the markup puts in some controls' content (a TitleBar's Content and headers) and in
+        // flyouts; those are found by walking what the markup built instead.
+        object? FindNamed(string name) => scope?.FindName(name) ?? (index ??= NameIndex(scope)).GetValueOrDefault(name);
         // Names the transform gave unnamed elements so they can be found here. Once found they're cleared: an element's
         // Name is also its UI Automation id and what DevTools shows, and these are no one's.
         var generated = new Dictionary<string, object>(StringComparer.Ordinal);
         foreach (var name in manifest.Events.Select(e => e.Element).Concat(manifest.Bindings.Select(b => b.Element)).OfType<string>()
             .Where(n => n.StartsWith(GeneratedNamePrefix, StringComparison.Ordinal)).Distinct())
         {
-            if (scope?.FindName(name) is FrameworkElement element)
+            if (FindNamed(name) is FrameworkElement element)
             {
                 generated[name] = element;
                 try
@@ -1350,7 +1501,7 @@ internal static class XamlReload
                 }
             }
         }
-        object? Find(string? name) => name is null ? component : generated.TryGetValue(name, out var found) ? found : scope?.FindName(name);
+        object? Find(string? name) => name is null ? component : generated.TryGetValue(name, out var found) ? found : FindNamed(name);
 
         foreach (var name in manifest.Names)
         {
@@ -1383,6 +1534,7 @@ internal static class XamlReload
             var eventInfo = element?.GetType().GetEvent(wiring.Event);
             if (element is null || eventInfo?.EventHandlerType is not { } handlerType)
             {
+                HotReloadAgent.Log($"no event {wiring.Event} on {wiring.Element}: {element?.GetType().FullName ?? "not found"} (scope {scope?.GetType().FullName})");
                 Report($"{type.Name}: {wiring.Label ?? wiring.Element ?? "root"} has no event {wiring.Event}");
                 continue;
             }

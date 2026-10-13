@@ -43,9 +43,10 @@ internal static class CodeAddedItems
 
     /// <summary>
     /// Before a re-init: returns what moves the code-added items into the rebuilt collections (nothing moves when the
-    /// component wasn't rebuilt, e.g. the reload was undone).
+    /// component wasn't rebuilt, e.g. the reload was undone). <paramref name="leaving"/> is told the field and old owner
+    /// items are about to leave, which then raises events (a selected item leaving deselects it).
     /// </summary>
-    public static Action<object> Detach(object component)
+    public static Action<object> Detach(object component, Action<string, object> leaving)
     {
         var before = NamedCollections(component)
             .Select(c => (c.Field, c.Owner, c.Collection, c.Items, Markup: FromMarkup.TryGetValue(c.Owner, out var known) && known.TryGetValue(c.Collection, out var markup) ? markup : null, Snapshot: c.Items.All().ToList()))
@@ -79,12 +80,18 @@ internal static class CodeAddedItems
                 {
                     continue;
                 }
+                if (added.Count > 0)
+                {
+                    leaving(field, owner);
+                }
                 foreach (var item in added)
                 {
                     try
                     {
                         items.Remove(item);
+                        var restore = Retemplate(item);
                         target.Items.Add(item);
+                        restore();
                     }
                     catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or ArgumentException or InvalidOperationException)
                     {
@@ -93,6 +100,69 @@ internal static class CodeAddedItems
                 }
             }
         };
+    }
+
+    /// <summary>
+    /// A NavigationViewItem keeps the template it got in the old menu, and with it a list of child items wired to the old
+    /// NavigationView (selecting a child there gives the new one no container). Its children are taken out, its template
+    /// applied again, and the returned action puts them back once it shows in the new menu, in a list wired to it.
+    /// </summary>
+    private static Action Retemplate(object item)
+    {
+        if (item is not NavigationViewItem { MenuItems.Count: > 0 } navigationItem || ChildList(navigationItem) is null)
+        {
+            // Never shown with children: nothing is wired yet.
+            return () => { };
+        }
+        var children = navigationItem.MenuItems.ToList();
+        var restoreChildren = children.Select(Retemplate).ToList();
+        navigationItem.MenuItems.Clear();
+        if (navigationItem.Template is { } template)
+        {
+            navigationItem.Template = null;
+            navigationItem.Template = template;
+        }
+        return () =>
+        {
+            void OnLoaded(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+            {
+                navigationItem.Loaded -= OnLoaded;
+                try
+                {
+                    children.ForEach(navigationItem.MenuItems.Add);
+                    restoreChildren.ForEach(restore => restore());
+                    // The new list starts hidden; expanding shows it.
+                    if (navigationItem.IsExpanded)
+                    {
+                        navigationItem.IsExpanded = false;
+                        navigationItem.IsExpanded = true;
+                    }
+                }
+                catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or ArgumentException or InvalidOperationException)
+                {
+                    HotReloadAgent.Log($"restoring the child items of {navigationItem.Content} failed: {ex.Message}");
+                }
+            }
+            navigationItem.Loaded += OnLoaded;
+        };
+    }
+
+    /// <summary>The list a NavigationViewItem shows its child items in (not one of a child's).</summary>
+    private static ItemsRepeater? ChildList(Microsoft.UI.Xaml.DependencyObject node)
+    {
+        for (var i = 0; i < Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(node); i++)
+        {
+            var child = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(node, i);
+            if (child is ItemsRepeater { Name: "NavigationViewItemMenuItemsHost" } list)
+            {
+                return list;
+            }
+            if (child is not NavigationViewItem && ChildList(child) is { } found)
+            {
+                return found;
+            }
+        }
+        return null;
     }
 
     /// <summary>How an item is recognized in a rebuilt collection: its type with its name, or its content and tag.</summary>

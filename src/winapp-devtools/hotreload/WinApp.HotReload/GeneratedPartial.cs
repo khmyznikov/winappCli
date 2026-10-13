@@ -38,6 +38,9 @@ internal sealed class XamlComponent(string xamlPath, string uri)
     /// </summary>
     public HashSet<int> SkippedStatements { get; } = [];
 
+    /// <summary>The constructor <see cref="SkippedStatements"/> were worked out for: they hold while it is unchanged.</summary>
+    public string? SkippedFor { get; set; }
+
     /// <summary>Once emitted for a new class, 'sealed' stays: unsealing a loaded type is a rude edit.</summary>
     public bool Sealed { get; set; }
 
