@@ -188,6 +188,7 @@ internal static class XamlReload
     {
         s_messages = messages;
         s_errors = errors;
+        CodeAddedItems.LaunchItems(request.LaunchItems);
         try
         {
             var everything = false;
@@ -215,7 +216,9 @@ internal static class XamlReload
                         var resources = (ResourceDictionary)XamlReader.Load(markup.Xaml);
                         if (markup.Kind == MarkupKind.Application)
                         {
-                            KeepMissing(Application.Current.Resources, resources);
+                            // Swapping them re-templates controls (a TextBox inside one is briefly gone): what the user typed is read first.
+                        TakeStatesBeforeResourceChange();
+                        KeepMissing(Application.Current.Resources, resources);
                             Application.Current.Resources = resources;
                             everything = true;
                             continue;
@@ -505,7 +508,7 @@ internal static class XamlReload
             {
                 if (everything || Affected(window))
                 {
-                    var state = UiState.Take(window.Content);
+                    var state = TakeState(window, window.Content);
                     var frames = NamedFrames(window.Content);
                     var selections = NavigationSelections(window.Content);
                     var oldRoot = window.Content;
@@ -523,28 +526,47 @@ internal static class XamlReload
                 Collect(window.Content, page => allPages || everything || Affected(page), Affected, frames, others);
                 frames.AddRange(kept.Where(k => (allPages || everything || Affected(k.Page)) && !s_loadedDuringRefresh.Contains(k.Page) && !frames.Any(f => ReferenceEquals(f.Page, k.Page))));
                 kept.Clear();
-                foreach (var (frame, page) in frames)
+                var pending = new Queue<(Frame Frame, Page Page)>(frames);
+                while (pending.TryDequeue(out var entry))
                 {
-                    var state = UiState.Take(page.Content);
+                    var (frame, page) = entry;
+                    var state = TakeState(page, page.Content);
                     var type = page.GetType().FullName!;
                     if (allPages || recreate.Contains(type))
                     {
                         Renavigate(frame, page);
                     }
-                    else if (replay.Contains(type))
-                    {
-                        Reinitialize(page);
-                    }
                     else
                     {
-                        // Only resources changed: reload the markup, without replaying the constructor.
-                        ReloadMarkup(page);
+                        // A page's own frames (a gallery page showing its sample in one) keep their pages, which the
+                        // page navigated them to in OnNavigatedTo, not in its markup.
+                        var nested = NamedFrames(page.Content);
+                        var oldRoot = page.Content;
+                        if (replay.Contains(type))
+                        {
+                            Reinitialize(page);
+                        }
+                        else
+                        {
+                            // Only resources changed: reload the markup, without replaying the constructor.
+                            ReloadMarkup(page);
+                        }
+                        if (nested.Count > 0 && !ReferenceEquals(oldRoot, page.Content))
+                        {
+                            foreach (var inner in KeepPages(page, oldRoot, page.Content as FrameworkElement, nested))
+                            {
+                                if ((allPages || everything || Affected(inner.Page)) && !s_loadedDuringRefresh.Contains(inner.Page))
+                                {
+                                    pending.Enqueue(inner);
+                                }
+                            }
+                        }
                     }
                     UiState.RestoreWhenLoaded((frame.Content as Page)?.Content as FrameworkElement, state, s_dispatcher);
                 }
                 foreach (var element in others)
                 {
-                    var state = UiState.Take(ContentRoot(element));
+                    var state = TakeState(element, ContentRoot(element));
                     Reinitialize(element);
                     UiState.RestoreWhenLoaded(ContentRoot(element) as FrameworkElement, state, s_dispatcher);
                 }
@@ -553,8 +575,28 @@ internal static class XamlReload
         finally
         {
             s_loadedDuringRefresh = null;
+            s_statesBefore = null;
         }
     }
+    /// <summary>UI state taken before App resources changed, by window or page (see TakeStatesBeforeResourceChange).</summary>
+    private static Dictionary<object, UiState.Snapshot?>? s_statesBefore;
+
+    private static void TakeStatesBeforeResourceChange()
+    {
+        s_statesBefore ??= new Dictionary<object, UiState.Snapshot?>(ReferenceEqualityComparer.Instance);
+        foreach (var window in LiveWindows())
+        {
+            s_statesBefore.TryAdd(window, UiState.Take(window.Content));
+            foreach (var page in Descendants(window.Content).OfType<Frame>().Select(f => f.Content).OfType<Page>())
+            {
+                s_statesBefore.TryAdd(page, UiState.Take(page.Content));
+            }
+        }
+    }
+
+    private static UiState.Snapshot? TakeState(object component, DependencyObject? root) =>
+        s_statesBefore is not null && s_statesBefore.TryGetValue(component, out var before) ? before : UiState.Take(root);
+
     /// <summary>
     /// A property getter, converter or x:Bind function whose body changed computes a new value, but nothing tells
     /// bindings to read it again. Raise PropertyChanged for changed getters on live instances, then have every live
@@ -830,14 +872,36 @@ internal static class XamlReload
         {
             dispatcher.TryEnqueue(DispatcherQueuePriority.Low, () =>
             {
+                var released = false;
+                void Done()
+                {
+                    if (!released)
+                    {
+                        released = true;
+                        // The selection change handlers run before this.
+                        dispatcher.TryEnqueue(DispatcherQueuePriority.Low, Release);
+                    }
+                }
                 try
                 {
-                    RestoreSelections(root, selections);
+                    if (RestoreSelections(root, selections, Done) == 0)
+                    {
+                        Done();
+                    }
+                    else
+                    {
+                        // A selected item that never shows (its parent collapsed) doesn't hold navigation off for good.
+                        var timer = dispatcher.CreateTimer();
+                        timer.Interval = TimeSpan.FromSeconds(2);
+                        timer.IsRepeating = false;
+                        timer.Tick += (_, _) => Done();
+                        timer.Start();
+                    }
                 }
-                finally
+                catch (Exception ex) when (ex is COMException or InvalidOperationException or ArgumentException)
                 {
-                    // The selection change handlers run before this.
-                    dispatcher.TryEnqueue(DispatcherQueuePriority.Low, Release);
+                    Done();
+                    HotReloadAgent.Log($"restoring the selection failed: {ex.Message}");
                 }
             });
         }
@@ -854,9 +918,11 @@ internal static class XamlReload
         root.Loaded += OnLoaded;
     }
 
-    private static void RestoreSelections(DependencyObject root, List<(string View, string Item)> selections)
+    /// <summary>Selects each view's item again; returns how many wait for their item to show (each calls <paramref name="done"/> once all have).</summary>
+    private static int RestoreSelections(DependencyObject root, List<(string View, string Item)> selections, Action done)
     {
         var index = 0;
+        var waiting = 0;
         foreach (var view in Descendants(root).OfType<NavigationView>().ToList())
         {
             var key = string.IsNullOrEmpty(view.Name) ? $"#{index}" : view.Name;
@@ -873,9 +939,31 @@ internal static class XamlReload
             IEnumerable<object> All(IEnumerable<object> items) => items.SelectMany(i => i is NavigationViewItem n ? All(n.MenuItems).Prepend(i) : [i]);
             if (All(view.MenuItems.Concat(view.FooterMenuItems)).FirstOrDefault(i => ItemKey(i) == wanted) is { } match && !ReferenceEquals(view.SelectedItem, match))
             {
+                // A nested item shows once its parent's list is rebuilt: selected before that, it has no container,
+                // and the app's SelectionChanged handler gets none.
+                if (match is NavigationViewItem { IsLoaded: false } item)
+                {
+                    HotReloadAgent.Log($"selecting {wanted} once it shows");
+                    void OnLoaded(object sender, RoutedEventArgs e)
+                    {
+                        item.Loaded -= OnLoaded;
+                        if (!ReferenceEquals(view.SelectedItem, item))
+                        {
+                            view.SelectedItem = item;
+                        }
+                        if (--waiting == 0)
+                        {
+                            done();
+                        }
+                    }
+                    item.Loaded += OnLoaded;
+                    waiting++;
+                    continue;
+                }
                 view.SelectedItem = match;
             }
         }
+        return waiting;
     }
 
     /// <summary>Layout the new markup gives the frame, carried onto the frame that is kept.</summary>
@@ -913,6 +1001,7 @@ internal static class XamlReload
                 }
             }
             place(oldFrame);
+            CodeAddedItems.KeptFromMarkup(oldFrame);
             // The component's x:Name field now names the frame that is in the tree.
             foreach (var field in component.GetType().GetFields(InstanceMembers).Where(f => f.FieldType.IsInstanceOfType(oldFrame)))
             {
@@ -1154,28 +1243,49 @@ internal static class XamlReload
     }
 
     /// <summary>
-    /// Removes the markup's event handlers from an element of the old tree that is about to change (its code-added items
-    /// move to the rebuilt one): the app's handler isn't called for an element it no longer shows.
+    /// Removes the component's event handlers from an element of the old tree that is about to change (its code-added
+    /// items move to the rebuilt one): the app's handler isn't called for an element it no longer shows. The compiled
+    /// markup's wiring isn't known, so every method of the component that fits an event is removed from it (removing
+    /// one that wasn't subscribed does nothing); handlers markup reloaded since then name other targets too.
     /// </summary>
     private static void Unwire(object component, string element, object owner)
     {
-        if (!ClassUris.TryGetValue(component.GetType().FullName!, out var uri) || !Manifests.TryGetValue(uri, out var manifest))
+        var handlers = new List<(EventInfo Event, Delegate Handler)>();
+        var methods = component.GetType().GetMethods(InstanceMembers).Where(m => !m.IsSpecialName && !m.IsGenericMethodDefinition).ToList();
+        foreach (var info in owner.GetType().GetEvents(BindingFlags.Instance | BindingFlags.Public))
         {
-            return;
+            if (info.EventHandlerType is not { } handlerType)
+            {
+                continue;
+            }
+            foreach (var method in methods)
+            {
+                if (Delegate.CreateDelegate(handlerType, component, method, throwOnBindFailure: false) is { } handler)
+                {
+                    handlers.Add((info, handler));
+                }
+            }
         }
-        foreach (var wiring in manifest.Events.Where(e => e.Element == element))
+        if (ClassUris.TryGetValue(component.GetType().FullName!, out var uri) && Manifests.TryGetValue(uri, out var manifest))
+        {
+            foreach (var wiring in manifest.Events.Where(e => e.Element == element && e.Path is not null))
+            {
+                if (owner.GetType().GetEvent(wiring.Event) is { EventHandlerType: { } handlerType } info &&
+                    MakeHandler(handlerType, ResolvePath(component, wiring.Path), wiring.Handler) is { } handler)
+                {
+                    handlers.Add((info, handler));
+                }
+            }
+        }
+        foreach (var (info, handler) in handlers)
         {
             try
             {
-                if (owner.GetType().GetEvent(wiring.Event) is { EventHandlerType: { } handlerType } info &&
-                    MakeHandler(handlerType, wiring.Path is null ? component : ResolvePath(component, wiring.Path), wiring.Handler) is { } handler)
-                {
-                    info.RemoveEventHandler(owner, handler);
-                }
+                info.RemoveEventHandler(owner, handler);
             }
             catch (Exception ex) when (ex is COMException or ArgumentException or InvalidOperationException or TargetInvocationException)
             {
-                HotReloadAgent.Log($"unwiring {element}.{wiring.Event} failed: {ex.Message}");
+                HotReloadAgent.Log($"unwiring {element}.{info.Name} failed: {ex.Message}");
             }
         }
     }

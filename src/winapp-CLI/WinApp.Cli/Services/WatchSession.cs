@@ -33,7 +33,11 @@ internal sealed class WatchSession
             <Copy SourceFiles="@(_WinAppHotReloadSource)" DestinationFiles="@(_WinAppHotReloadSource->'$(WinAppHotReloadOut).src\%(Identity)')" SkipUnchangedFiles="true" />
           </Target>
           <Target Name="WinAppHotReloadReferences" DependsOnTargets="ResolveReferences;FindReferenceAssembliesForReferences;AssignTargetPaths">
-            <WriteLinesToFile File="$(WinAppHotReloadOut)" Lines="@(ReferencePathWithRefAssemblies->'/reference:%(FullPath)');@(Analyzer->'/analyzer:%(FullPath)');@(ReferenceCopyLocalPaths->'/copylocal:%(FullPath)|%(DestinationSubDirectory)');@(ContentWithTargetPath->'/content:%(FullPath)|%(TargetPath)');@(Compile->'/item:%(FullPath)');@(Page->'/item:%(FullPath)')" Overwrite="true" />
+            <!-- Data files the build copies next to the app (None items with CopyToOutputDirectory), like Content. -->
+            <ItemGroup>
+              <_WinAppHotReloadCopied Include="@(_NoneWithTargetPath)" Condition="'%(_NoneWithTargetPath.CopyToOutputDirectory)' == 'Always' or '%(_NoneWithTargetPath.CopyToOutputDirectory)' == 'PreserveNewest'" />
+            </ItemGroup>
+            <WriteLinesToFile File="$(WinAppHotReloadOut)" Lines="@(ReferencePathWithRefAssemblies->'/reference:%(FullPath)');@(Analyzer->'/analyzer:%(FullPath)');@(ReferenceCopyLocalPaths->'/copylocal:%(FullPath)|%(DestinationSubDirectory)');@(ContentWithTargetPath->'/content:%(FullPath)|%(TargetPath)');@(_WinAppHotReloadCopied->'/content:%(FullPath)|%(TargetPath)');@(Compile->'/item:%(FullPath)');@(Page->'/item:%(FullPath)')" Overwrite="true" />
           </Target>
         </Project>
         """;

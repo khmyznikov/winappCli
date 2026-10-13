@@ -19,6 +19,23 @@ internal static class CodeAddedItems
     /// <summary>Per collection owner (a named element): the items its markup created.</summary>
     private static readonly ConditionalWeakTable<object, Dictionary<string, HashSet<object>>> FromMarkup = new();
 
+    /// <summary>Elements a reload kept in place of the ones the new markup created (a frame and its pages): markup's, not code's.</summary>
+    private static readonly ConditionalWeakTable<object, object> StandIns = new();
+
+    /// <summary><paramref name="kept"/> took the place of an element the rebuilt markup created.</summary>
+    public static void KeptFromMarkup(object kept) => StandIns.AddOrUpdate(kept, kept);
+
+    /// <summary>See HotReloadRequest.LaunchItems; the first counts for a class describe the markup it launched with.</summary>
+    private static readonly Dictionary<string, Dictionary<string, int>> Launched = new(StringComparer.Ordinal);
+
+    public static void LaunchItems(Dictionary<string, Dictionary<string, int>> counts)
+    {
+        foreach (var (type, items) in counts)
+        {
+            Launched.TryAdd(type, items);
+        }
+    }
+
     /// <summary>Right after a component loaded its markup (before its code adds anything).</summary>
     public static void RecordMarkup(object component)
     {
@@ -48,6 +65,7 @@ internal static class CodeAddedItems
     /// </summary>
     public static Action<object> Detach(object component, Action<string, object> leaving)
     {
+        var own = MarkupUri(component);
         var before = NamedCollections(component)
             .Select(c => (c.Field, c.Owner, c.Collection, c.Items, Markup: FromMarkup.TryGetValue(c.Owner, out var known) && known.TryGetValue(c.Collection, out var markup) ? markup : null, Snapshot: c.Items.All().ToList()))
             .Where(c => c.Snapshot.Count > 0).ToList();
@@ -61,20 +79,34 @@ internal static class CodeAddedItems
                     continue;
                 }
                 List<object> added;
+                var how = "recorded markup";
                 if (markup is not null)
                 {
                     // The replayed constructor may have added its own items again: those were the first ones it added.
                     var again = FromMarkup.TryGetValue(target.Owner, out var known) && known.TryGetValue(collection, out var rebuiltMarkup)
                         ? target.Items.All().Count(item => !rebuiltMarkup.Contains(item))
                         : 0;
-                    added = snapshot.Where(item => !markup.Contains(item)).Skip(again).ToList();
+                    added = snapshot.Where(item => !markup.Contains(item) && !StandIns.TryGetValue(item, out _)).Skip(again).ToList();
+                }
+                else if (collection != "Children" && Launched.GetValueOrDefault(component.GetType().FullName!)?.GetValueOrDefault($"{field}.{collection}") is { } launchCount)
+                {
+                    // Loaded before the agent was there, so what its markup created isn't recorded: the markup it
+                    // launched with created the first items, and code added the rest (after them, as code appends).
+                    var again = FromMarkup.TryGetValue(target.Owner, out var known) && known.TryGetValue(collection, out var rebuiltMarkup)
+                        ? target.Items.All().Count(item => !rebuiltMarkup.Contains(item))
+                        : 0;
+                    added = snapshot.Skip(launchCount).Where(item => !StandIns.TryGetValue(item, out _)).Skip(again).ToList();
+                    how = $"{launchCount} in the launch markup";
                 }
                 else if (collection != "Children")
                 {
-                    // Loaded before the agent was there, so what its markup created isn't known: the items the rebuilt
-                    // collection has no counterpart for (by name, or content and tag) are the ones code added.
-                    var present = target.Items.All().Select(Key).OfType<string>().ToHashSet(StringComparer.Ordinal);
-                    added = snapshot.Where(item => Key(item) is { } key && !present.Contains(key)).ToList();
+                    // Not even that is known: an element the old markup created has that markup's base URI; one code
+                    // created only has it when its parent passes it on.
+                    // The owner came from the same markup (a window's root may have no base URI).
+                    var origin = MarkupUri(owner) is { Length: > 0 } ownerUri ? ownerUri : own;
+                    var again = target.Items.All().Count(item => !FromMarkupOf(item, MarkupUri(target.Owner) is { Length: > 0 } rebuiltUri ? rebuiltUri : origin));
+                    added = snapshot.Where(item => !FromMarkupOf(item, origin) && !StandIns.TryGetValue(item, out _)).Skip(again).ToList();
+                    how = "by base URI";
                 }
                 else
                 {
@@ -84,6 +116,7 @@ internal static class CodeAddedItems
                 {
                     leaving(field, owner);
                 }
+                HotReloadAgent.Log($"{field}.{collection}: {snapshot.Count} items, {added.Count} added by code ({how})");
                 foreach (var item in added)
                 {
                     try
@@ -165,14 +198,17 @@ internal static class CodeAddedItems
         return null;
     }
 
-    /// <summary>How an item is recognized in a rebuilt collection: its type with its name, or its content and tag.</summary>
-    private static string? Key(object item) => item switch
+    /// <summary>Whether <paramref name="item"/> was created by the markup with base URI <paramref name="markup"/>.</summary>
+    private static bool FromMarkupOf(object item, string? markup) =>
+        markup is not null && item is Microsoft.UI.Xaml.FrameworkElement element && element.BaseUri?.ToString() == markup;
+
+    /// <summary>The base URI of what the component's markup built (its root element's).</summary>
+    private static string? MarkupUri(object component) => (component switch
     {
-        Microsoft.UI.Xaml.FrameworkElement { Name.Length: > 0 } named => $"{item.GetType().FullName}|#{named.Name}",
-        ContentControl control when control.Content is string or null && (control.Content ?? control.Tag) is not null =>
-            $"{item.GetType().FullName}|{control.Content}|{control.Tag}",
-        _ => null,
-    };
+        Microsoft.UI.Xaml.Window window => window.Content,
+        UserControl control => control.Content,
+        _ => component,
+    } as Microsoft.UI.Xaml.FrameworkElement)?.BaseUri?.ToString();
 
     private static IEnumerable<(string Field, object Owner, string Collection, Items Items)> NamedCollections(object component)
     {

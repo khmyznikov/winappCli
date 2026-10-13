@@ -10,7 +10,7 @@
     "assetsFrom": "samples/winui-app/Assets",
     "projectFile": "TodoBench.csproj",
     "rootNamespace": "TodoBench",
-    "launchExpect": "note: XAML hot reload is not enabled for this app\\. Build it in the Debug configuration, or set the EnableXamlHotReload project property to true\\. Saving a \\.xaml file restarts the app; C# edits still apply live\\."
+    "launchExpect": "note: XAML hot reload is not enabled for this app\\. Build it in the Debug configuration, or set the EnableXamlHotReload project property to true \\(for example -p EnableXamlHotReload=true\\)\\. Saving a \\.xaml file restarts the app; C# edits still apply live\\."
   },
   "setup": [
     {
@@ -150,7 +150,7 @@
           },
           "expect": {
             "outcome": "restart",
-            "detail": "XAML hot reload is not enabled for this app \\(a Debug build, or EnableXamlHotReload set to true, enables it\\)"
+            "detail": "XAML hot reload is not enabled for this app \\(a Debug build, or the EnableXamlHotReload project property set to true, for example -p EnableXamlHotReload=true, enables it\\)"
           }
         },
         {

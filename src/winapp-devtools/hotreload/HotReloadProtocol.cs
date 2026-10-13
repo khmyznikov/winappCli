@@ -33,6 +33,11 @@ internal sealed class HotReloadRequest
     public bool RefreshBindings { get; set; }
     /// <summary>"Type|Method" static methods that set static fields added to already-initialized types.</summary>
     public List<string> Initializers { get; set; } = [];
+    /// <summary>
+    /// Per XAML class, "Element.Collection" (Nav.MenuItems) to how many items the markup the app launched with puts there:
+    /// for instances loaded before the agent was there, the rest were added by code.
+    /// </summary>
+    public Dictionary<string, Dictionary<string, int>> LaunchItems { get; set; } = [];
 }
 
 internal sealed class DeltaPayload

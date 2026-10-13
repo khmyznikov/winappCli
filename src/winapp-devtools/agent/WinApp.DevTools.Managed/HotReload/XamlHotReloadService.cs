@@ -16,7 +16,7 @@ internal sealed class XamlHotReloadService
     public const int NotEnabled = unchecked((int)0x802B0029);
 
     public const string NotEnabledText =
-        "XAML hot reload is not enabled for this app. Build it in the Debug configuration, or set the EnableXamlHotReload project property to true.";
+        "XAML hot reload is not enabled for this app. Build it in the Debug configuration, or set the EnableXamlHotReload project property to true (for example -p EnableXamlHotReload=true).";
 
     private const int NotReady = unchecked((int)0x80070015);
     private const int NoInterface = unchecked((int)0x80004002);

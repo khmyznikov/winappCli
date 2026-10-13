@@ -620,6 +620,52 @@ internal static class XamlTransform
         return (xaml, map.OrderBy(m => m[0]).ThenBy(m => m[1]).ToList());
     }
 
+    /// <summary>
+    /// "Element.Collection" to the number of items the markup puts in each named element's item collection: property
+    /// elements (&lt;NavigationView.MenuItems&gt;, FooterMenuItems, TabItems, Items), and content written directly
+    /// inside an items control or TabView (other than a NavigationView, whose content is its page).
+    /// </summary>
+    public static Dictionary<string, int> CollectionItemCounts(string xaml)
+    {
+        var result = new Dictionary<string, int>(StringComparer.Ordinal);
+        XElement root;
+        try
+        {
+            root = XElement.Parse(xaml);
+        }
+        catch (XmlException)
+        {
+            return result;
+        }
+        XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
+        foreach (var element in root.Descendants())
+        {
+            if (((string?)element.Attribute(x + "Name") ?? (string?)element.Attribute("Name")) is not { Length: > 0 } name)
+            {
+                continue;
+            }
+            var type = element.Name.LocalName;
+            foreach (var property in element.Elements().Where(e => e.Name.LocalName.StartsWith(type + ".", StringComparison.Ordinal)))
+            {
+                var collection = property.Name.LocalName[(type.Length + 1)..];
+                if (collection is "MenuItems" or "FooterMenuItems" or "TabItems" or "Items")
+                {
+                    result[$"{name}.{collection}"] = property.Elements().Count();
+                }
+            }
+            if (!type.EndsWith("NavigationView", StringComparison.Ordinal) &&
+                element.Elements().Where(e => !e.Name.LocalName.Contains('.')).Count() is > 0 and var direct)
+            {
+                result.TryAdd($"{name}.{(type == "TabView" ? "TabItems" : "Items")}", direct);
+            }
+            foreach (var none in type.EndsWith("NavigationView", StringComparison.Ordinal) ? ["MenuItems", "FooterMenuItems"] : type == "TabView" ? new[] { "TabItems" } : [])
+            {
+                result.TryAdd($"{name}.{none}", 0);
+            }
+        }
+        return result;
+    }
+
     internal static RootBinding? ParseBind(string markup, string? defaultMode)
     {
         var body = markup.Trim();

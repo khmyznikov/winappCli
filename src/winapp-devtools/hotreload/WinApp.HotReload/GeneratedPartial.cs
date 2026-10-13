@@ -174,12 +174,12 @@ internal static class GeneratedPartial
         builder.Append("    internal void ").Append(ReplayMethod).AppendLine("()");
         builder.AppendLine("    {");
         var constructor = ReplayedConstructor(userParts);
-        // A constructor that takes arguments (MainWindow(object? arg = null), or one a DI container calls) can't run
-        // again without them: only its markup is loaded again.
-        canReplay &= constructor?.ParameterList.Parameters.Count == 0;
+        // A constructor that takes arguments (MainWindow(object? arg = null), or one a DI container calls) can't get
+        // them again: it replays without the statements that use them.
+        HashSet<int> skipped = constructor is null ? [.. component.SkippedStatements] : [.. component.SkippedStatements, .. ArgumentStatements(constructor)];
         if (constructor is not null)
         {
-            if (canReplay && constructor.Body is { } body && component.SkippedStatements.Count == 0)
+            if (canReplay && constructor.Body is { } body && skipped.Count == 0)
             {
                 // Everything between the braces: a closing #endif belongs to the brace, not the last statement.
                 builder.AppendLine(body.SyntaxTree.GetText().ToString(Microsoft.CodeAnalysis.Text.TextSpan.FromBounds(body.OpenBraceToken.Span.End, body.CloseBraceToken.SpanStart)));
@@ -191,13 +191,13 @@ internal static class GeneratedPartial
                 for (var i = 0; i < partial.Statements.Count; i++)
                 {
                     var statement = partial.Statements[i];
-                    builder.Append(component.SkippedStatements.Contains(i)
+                    builder.Append(skipped.Contains(i)
                         ? statement.GetLeadingTrivia().ToFullString() + ";" + statement.GetTrailingTrivia().ToFullString()
                         : statement.ToFullString());
                 }
                 builder.AppendLine(partial.CloseBraceToken.LeadingTrivia.ToFullString());
             }
-            else if (canReplay && constructor.ExpressionBody is { } expression)
+            else if (canReplay && constructor.ExpressionBody is { } expression && constructor.ParameterList.Parameters.Count == 0)
             {
                 builder.Append("        ").Append(expression.Expression.ToString()).AppendLine(";");
             }
@@ -209,6 +209,25 @@ internal static class GeneratedPartial
         builder.AppendLine("    }");
         builder.AppendLine("}");
         return builder.ToString();
+    }
+
+    /// <summary>Top-level statements of the constructor body (by index) that use one of its parameters.</summary>
+    public static HashSet<int> ArgumentStatements(ConstructorDeclarationSyntax constructor)
+    {
+        var parameters = constructor.ParameterList.Parameters.Select(p => p.Identifier.ValueText).ToHashSet(StringComparer.Ordinal);
+        var result = new HashSet<int>();
+        if (parameters.Count == 0 || constructor.Body is not { } body)
+        {
+            return result;
+        }
+        for (var i = 0; i < body.Statements.Count; i++)
+        {
+            if (body.Statements[i].DescendantNodesAndSelf().OfType<IdentifierNameSyntax>().Any(id => parameters.Contains(id.Identifier.ValueText)))
+            {
+                result.Add(i);
+            }
+        }
+        return result;
     }
 
     /// <summary>The constructor a reload replays: the parameterless one, else the one that loads the markup.</summary>

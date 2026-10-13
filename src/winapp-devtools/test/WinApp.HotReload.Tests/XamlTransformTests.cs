@@ -109,6 +109,28 @@ public sealed class XamlTransformTests
     }
 
     [TestMethod]
+    public void CollectionItemCountsCountWhatTheMarkupPutsInNamedItemCollections()
+    {
+        var counts = XamlTransform.CollectionItemCounts($"""
+            <Window x:Class="App.MainWindow" {Header}>
+              <NavigationView x:Name="Nav">
+                <NavigationView.MenuItems>
+                  <NavigationViewItem Content="Home" />
+                  <NavigationViewItem Content="Settings" />
+                </NavigationView.MenuItems>
+                <Frame x:Name="Body" />
+              </NavigationView>
+              <ListView x:Name="List"><x:String>a</x:String></ListView>
+            </Window>
+            """);
+
+        Assert.AreEqual(2, counts["Nav.MenuItems"]);
+        Assert.AreEqual(0, counts["Nav.FooterMenuItems"]);
+        Assert.AreEqual(1, counts["List.Items"]);
+        Assert.IsFalse(counts.ContainsKey("Nav.Items"));
+    }
+
+    [TestMethod]
     public void ApplicationResourcesBecomeAStandaloneDictionaryWithAbsoluteSources()
     {
         var app = """

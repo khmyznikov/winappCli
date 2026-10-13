@@ -918,7 +918,7 @@ New pages and controls (and navigating to them), new files and types, renamed or
 Requirements and limits:
 
 - A .NET 10 SDK, and a debuggable build configuration (the default `Debug`).
-- Live edits need a Debug build. In an optimized build (for example `-c Release`) winapp says so once when the app starts, and every save rebuilds and restarts the app. Live XAML edits also need the `EnableXamlHotReload` project property, which is `true` by default in Debug; without it, C# edits still apply live and saving a `.xaml` file restarts the app.
+- Live edits need a Debug build. In an optimized build (for example `-c Release`) winapp says so once when the app starts, and every save rebuilds and restarts the app. Live XAML edits also need the `EnableXamlHotReload` project property, which is `true` by default in Debug; without it, C# edits still apply live and saving a `.xaml` file restarts the app. For a custom debug configuration, pass `-p EnableXamlHotReload=true`.
 - Runs locally only; it can't be combined with `--on`, `--no-launch`, `--detach`, `--no-build`, `--aot`, or `--json`.
 - One `--watch` per project at a time: a second one reports the PID of the winapp already watching it. Stopping winapp (Ctrl+C, closing its terminal, or ending its process) also stops the app.
 - Because a constructor body runs again on reload, work it does that isn't about the UI (for example starting a timer or writing a file) also happens again. Event subscriptions it makes to your view models and collections are not doubled.

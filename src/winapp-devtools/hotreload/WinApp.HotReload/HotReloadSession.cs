@@ -199,6 +199,9 @@ internal sealed class HotReloadSession
 
     private Project Project => _solution.GetProject(_projectId)!;
 
+    /// <summary>See <see cref="HotReloadRequest.LaunchItems"/>: from the markup as the app launched with it.</summary>
+    private readonly Dictionary<string, Dictionary<string, int>> _launchItems = new(StringComparer.Ordinal);
+
     private async Task LoadComponentsAsync(CancellationToken cancellationToken)
     {
         var compilation = (await Project.GetCompilationAsync(cancellationToken).ConfigureAwait(false))!;
@@ -209,7 +212,12 @@ internal sealed class HotReloadSession
             var component = new XamlComponent(path, UriFor(path));
             try
             {
-                component.Latest = XamlTransform.Transform(await ReadSharedAsync(path, cancellationToken).ConfigureAwait(false), resolver);
+                var text = await ReadSharedAsync(path, cancellationToken).ConfigureAwait(false);
+                component.Latest = XamlTransform.Transform(text, resolver);
+                if (component.ClassName is { } className && XamlTransform.CollectionItemCounts(text) is { Count: > 0 } counts)
+                {
+                    _launchItems[className] = counts;
+                }
             }
             catch (XmlException)
             {
@@ -246,6 +254,9 @@ internal sealed class HotReloadSession
         Directory.EnumerateFiles(_projectDirectory, pattern, SearchOption.AllDirectories).Where(IsSource);
 
     private static readonly string[] AssetExtensions = [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg", ".json", ".txt", ".ttf", ".otf", ".mp3", ".mp4", ".wav", ".html"];
+
+    /// <summary>Content the app shows through an Image (which the agent reloads), rather than reads itself.</summary>
+    private static readonly string[] ImageExtensions = [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg"];
 
     /// <summary>Files the build typically copies next to the app (project Content), outside bin and obj.</summary>
     public static bool IsAsset(string path) => AssetExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase);
@@ -480,7 +491,7 @@ internal sealed class HotReloadSession
                 }
             }
             return new SaveResult(Outcome.Restart, XamlReloadUnavailable is not null
-                ? "XAML hot reload is not enabled for this app (a Debug build, or EnableXamlHotReload set to true, enables it): XAML changes take effect when the app restarts"
+                ? "XAML hot reload is not enabled for this app (a Debug build, or the EnableXamlHotReload project property set to true, for example -p EnableXamlHotReload=true, enables it): XAML changes take effect when the app restarts"
                 : "this app's WinUI version can't reload XAML while it runs");
         }
         if (!_librariesFound)
@@ -760,7 +771,7 @@ internal sealed class HotReloadSession
             return new SaveResult(Outcome.Restart, reason);
         }
 
-        var request = new HotReloadRequest { Op = "apply", Initializers = [.. _pendingInitializers], Assemblies = [.. _newAssemblies], Assets = [.. _changedAssets] };
+        var request = new HotReloadRequest { Op = "apply", Initializers = [.. _pendingInitializers], Assemblies = [.. _newAssemblies], Assets = [.. _changedAssets], LaunchItems = _launchItems };
         request.RefreshTypes.AddRange(libraryTypes);
         request.Deltas.AddRange(result.Deltas.Select(d => new DeltaPayload { ModuleId = d.ModuleId, Metadata = d.Metadata, IL = d.IL, Pdb = d.Pdb, UpdatedTypes = d.UpdatedTypes }));
         var applied = new List<string>();
@@ -897,12 +908,21 @@ internal sealed class HotReloadSession
                 var oldType = oldRoot?.DescendantNodes().OfType<ClassDeclarationSyntax>().FirstOrDefault(c => c.Identifier.ValueText == type.Identifier.ValueText);
                 if (!isApp)
                 {
-                    // A component whose constructor takes arguments: a reload only loads its markup again.
+                    // A component whose constructor takes arguments replays it without the statements that use them: a
+                    // change to one of those takes effect at restart.
                     if (symbol is not null && _components.Values.Any(c => c.ClassName == symbol.ToDisplayString()) &&
-                        GeneratedPartial.ReplayedConstructor([type]) is { ParameterList.Parameters.Count: > 0 } constructor &&
-                        (oldType is null || GeneratedPartial.ReplayedConstructor([oldType]) is not { } oldConstructor || !oldConstructor.IsEquivalentTo(constructor)))
+                        GeneratedPartial.ReplayedConstructor([type]) is { Body: { } body } constructor)
                     {
-                        notes.Add($"{type.Identifier.ValueText}'s constructor takes arguments, so a reload only loads its markup again: this constructor change takes effect when the app restarts");
+                        var old = oldType is null ? null : GeneratedPartial.ReplayedConstructor([oldType])?.Body;
+                        foreach (var index in GeneratedPartial.ArgumentStatements(constructor).Order())
+                        {
+                            var statement = body.Statements[index];
+                            if (old is null || !old.Statements.Any(s => s.IsEquivalentTo(statement)))
+                            {
+                                notes.Add($"{Relative(statement.SyntaxTree.FilePath)}({statement.GetLocation().GetLineSpan().StartLinePosition.Line + 1}): " +
+                                    $"`{statement.ToString().Split('\n')[0].Trim()}` uses {type.Identifier.ValueText}'s constructor arguments, which a reload doesn't have: this change takes effect when the app restarts");
+                            }
+                        }
                     }
                     continue;
                 }
@@ -944,12 +964,13 @@ internal sealed class HotReloadSession
             {
                 continue;
             }
-            // Only a constructor without parameters runs again on reload (see GeneratedPartial).
-            foreach (var constructor in type.InstanceConstructors.SelectMany(c => c.DeclaringSyntaxReferences).Select(r => r.GetSyntax(cancellationToken)).OfType<ConstructorDeclarationSyntax>()
-                .Where(c => c.ParameterList.Parameters.Count == 0))
+            // The replayed constructor (see GeneratedPartial), without the statements that use its arguments.
+            var parts = type.DeclaringSyntaxReferences.Select(r => r.GetSyntax(cancellationToken)).OfType<ClassDeclarationSyntax>().ToList();
+            foreach (var constructor in GeneratedPartial.ReplayedConstructor(parts) is { } replayed ? [replayed] : Array.Empty<ConstructorDeclarationSyntax>())
             {
                 var model = compilation.GetSemanticModel(constructor.SyntaxTree);
-                foreach (var invocation in constructor.DescendantNodes().OfType<InvocationExpressionSyntax>())
+                var skipped = GeneratedPartial.ArgumentStatements(constructor).Select(i => constructor.Body!.Statements[i]).ToList();
+                foreach (var invocation in constructor.DescendantNodes().OfType<InvocationExpressionSyntax>().Where(call => !skipped.Any(s => s.Span.Contains(call.Span))))
                 {
                     if (model.GetSymbolInfo(invocation, cancellationToken).Symbol is not IMethodSymbol method)
                     {
@@ -1094,6 +1115,10 @@ internal sealed class HotReloadSession
         if (CopyContent(source, destination))
         {
             _changedAssets.Add(target.Replace('\\', '/'));
+            if (compare && !ImageExtensions.Contains(Path.GetExtension(source), StringComparer.OrdinalIgnoreCase))
+            {
+                _pendingNotes.Add($"{Relative(source)} is copied next to the app; if the app reads it only when it starts, this change shows after a restart");
+            }
         }
         else
         {
@@ -1534,17 +1559,21 @@ internal sealed class HotReloadSession
             Phase($"generated: diagnostics ({check.Count})");
             if (!retry)
             {
-                foreach (var component in _components.Values.Where(c => c.Pending && c.ClassName is not null && c.SkippedStatements.Count > 0 && !c.ReplayDisabled))
+                foreach (var component in _components.Values.Where(c => c.Pending && c.ClassName is not null && !c.ReplayDisabled))
                 {
                     var constructor = GeneratedPartial.ReplayedConstructor(classes.GetValueOrDefault(component.ClassName!) ?? []);
-                    foreach (var index in component.SkippedStatements.Order())
+                    var arguments = constructor is null ? [] : GeneratedPartial.ArgumentStatements(constructor);
+                    foreach (var index in component.SkippedStatements.Union(arguments).Order())
                     {
                         if (constructor?.Body?.Statements.ElementAtOrDefault(index) is { } statement &&
                             _notedSkips.Add($"{component.ClassName}|{statement}"))
                         {
                             var first = statement.ToString().Split('\n')[0].Trim();
+                            var why = arguments.Contains(index)
+                                ? $"`{first}` uses the constructor's arguments"
+                                : $"only a constructor can run `{first}`";
                             _pendingNotes.Add($"{Relative(statement.SyntaxTree.FilePath)}({statement.GetLocation().GetLineSpan().StartLinePosition.Line + 1}): " +
-                                $"only a constructor can run `{first}`, so a reload of {component.ClassName![(component.ClassName.LastIndexOf('.') + 1)..]} replays its constructor without it");
+                                $"{why}, so a reload of {component.ClassName![(component.ClassName.LastIndexOf('.') + 1)..]} replays its constructor without it");
                         }
                     }
                 }

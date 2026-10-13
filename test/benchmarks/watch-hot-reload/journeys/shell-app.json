@@ -3,7 +3,7 @@
   "id": "shell-app",
   "title": "A shell window like the galleries': a constructor argument, menu items from startup code, nullable x:Bind paths",
   "description": [
-    "Real apps build their shell in App.OnLaunched: the window takes an argument and startup code fills its menu. Reloads keep that state, x:Bind through a nullable IsChecked.Value keeps working after a page reload, App.xaml errors point at the user's file, and edits that only take effect at restart say so."
+    "Real apps build their shell in App.OnLaunched: the window takes an argument and startup code fills its menu. Reloads keep that state (menu items code added, values the constructor set, a frame inside a page and what was typed there), x:Bind through a nullable IsChecked.Value keeps working after a page reload, App.xaml errors point at the user's file, data files the build copies reach the running app, and edits that only take effect at restart say so."
   ],
   "app": {
     "template": "app-template",
@@ -60,9 +60,17 @@
           "        <NavigationView.MenuItems>",
           "            <NavigationViewItem Content=\"Home\" AutomationProperties.AutomationId=\"NavHome\" />",
           "        </NavigationView.MenuItems>",
+          "        <NavigationView.FooterMenuItems>",
+          "            <NavigationViewItem Content=\"Help\" AutomationProperties.AutomationId=\"NavHelp\" />",
+          "        </NavigationView.FooterMenuItems>",
           "        <StackPanel Spacing=\"8\" Margin=\"16\">",
           "            <TextBlock AutomationProperties.AutomationId=\"Label\" Text=\"shell v1\" />",
           "            <TextBlock x:Name=\"Selected\" AutomationProperties.AutomationId=\"Selected\" Text=\"nothing selected\" />",
+          "            <TextBlock x:Name=\"Status\" AutomationProperties.AutomationId=\"Status\" Text=\"status from markup\" />",
+          "            <Button AutomationProperties.AutomationId=\"Count\" Content=\"Count\" Click=\"Count_Click\" />",
+          "            <TextBlock x:Name=\"CountText\" AutomationProperties.AutomationId=\"CountText\" Text=\"not counted\" />",
+          "            <Button AutomationProperties.AutomationId=\"ReadData\" Content=\"Read data\" Click=\"ReadData_Click\" />",
+          "            <TextBlock x:Name=\"DataText\" AutomationProperties.AutomationId=\"DataText\" Text=\"not read\" />",
           "            <Frame x:Name=\"Body\" />",
           "        </StackPanel>",
           "    </NavigationView>",
@@ -89,7 +97,22 @@
           "    {",
           "        InitializeComponent();",
           "        Title = $\"TodoBench ({argument})\";",
+          "        // Set by the constructor (like a title bar subtitle), and a footer item added in code.",
+          "        Status.Text = \"status from constructor\";",
+          "        var feedback = new NavigationViewItem { Content = \"Feedback\" };",
+          "        AutomationProperties.SetAutomationId(feedback, \"NavFeedback\");",
+          "        Nav.FooterMenuItems.Add(feedback);",
           "        Body.Navigate(typeof(OptionsPage));",
+          "    }",
+          "",
+          "    private void Count_Click(object sender, RoutedEventArgs e)",
+          "    {",
+          "        CountText.Text = $\"{Nav.MenuItems.Count}/{Nav.FooterMenuItems.Count}\";",
+          "    }",
+          "",
+          "    private void ReadData_Click(object sender, RoutedEventArgs e)",
+          "    {",
+          "        DataText.Text = System.IO.File.ReadAllText(System.IO.Path.Combine(System.AppContext.BaseDirectory, \"data.json\")).Trim();",
           "    }",
           "",
           "    public void AddNavigationItems(string[] names)",
@@ -131,6 +154,7 @@
           "        <CheckBox x:Name=\"Disable\" Content=\"Disable\" />",
           "        <Button x:Name=\"Target\" Content=\"Target\" IsEnabled=\"{x:Bind Disable.IsChecked.Value.Equals(x:False), Mode=OneWay}\" />",
           "        <CheckBox x:Name=\"Mirror\" Content=\"Mirror\" IsChecked=\"{x:Bind Disable.IsChecked.Value, Mode=OneWay}\" />",
+          "        <Frame x:Name=\"Inner\" />",
           "    </StackPanel>",
           "</Page>"
         ]
@@ -138,7 +162,7 @@
     },
     {
       "id": "setup-page-code",
-      "title": "Its code-behind",
+      "title": "Its code-behind, which shows an inner page in a frame of its own",
       "file": "OptionsPage.xaml.cs",
       "edit": {
         "op": "create-file",
@@ -153,7 +177,85 @@
           "    {",
           "        InitializeComponent();",
           "    }",
+          "",
+          "    // Like a gallery's item page, which shows its sample in a frame of its own.",
+          "    protected override void OnNavigatedTo(Microsoft.UI.Xaml.Navigation.NavigationEventArgs e)",
+          "    {",
+          "        Inner.Navigate(typeof(InnerPage));",
+          "    }",
           "}"
+        ]
+      }
+    },
+    {
+      "id": "setup-inner-page",
+      "title": "The inner page, with a text box",
+      "file": "InnerPage.xaml",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "<?xml version=\"1.0\" encoding=\"utf-8\" ?>",
+          "<Page",
+          "    x:Class=\"TodoBench.InnerPage\"",
+          "    xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"",
+          "    xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">",
+          "    <StackPanel Spacing=\"8\">",
+          "        <TextBlock AutomationProperties.AutomationId=\"InnerText\" Text=\"inner page\" />",
+          "        <TextBox AutomationProperties.AutomationId=\"Note\" />",
+          "    </StackPanel>",
+          "</Page>"
+        ]
+      }
+    },
+    {
+      "id": "setup-inner-page-code",
+      "title": "Its code-behind",
+      "file": "InnerPage.xaml.cs",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "using Microsoft.UI.Xaml.Controls;",
+          "",
+          "namespace TodoBench;",
+          "",
+          "public sealed partial class InnerPage : Page",
+          "{",
+          "    public InnerPage()",
+          "    {",
+          "        InitializeComponent();",
+          "    }",
+          "}"
+        ]
+      }
+    },
+    {
+      "id": "setup-data",
+      "title": "A data file the build copies next to the app",
+      "file": "data.json",
+      "edit": {
+        "op": "create-file",
+        "text": [
+          "data v1"
+        ]
+      }
+    },
+    {
+      "id": "setup-data-item",
+      "title": "The project copies it to the output (a None item, not Content)",
+      "file": "TodoBench.csproj",
+      "edit": {
+        "op": "replace",
+        "find": [
+          "  <ItemGroup>",
+          "    <Manifest Include=\"$(ApplicationManifest)\" />"
+        ],
+        "text": [
+          "  <ItemGroup>",
+          "    <None Update=\"data.json\" CopyToOutputDirectory=\"PreserveNewest\" />",
+          "  </ItemGroup>",
+          "",
+          "  <ItemGroup>",
+          "    <Manifest Include=\"$(ApplicationManifest)\" />"
         ]
       }
     }
@@ -220,6 +322,66 @@
                 "target": "Selected",
                 "assert": "text-equals",
                 "value": "Gamma 1"
+              },
+              {
+                "target": "Status",
+                "assert": "text-equals",
+                "value": "status from constructor"
+              },
+              {
+                "target": "Count",
+                "assert": "invoke"
+              },
+              {
+                "target": "CountText",
+                "assert": "text-equals",
+                "value": "4/2"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied"
+          }
+        },
+        {
+          "id": "s01b-footer-markup",
+          "title": "Renaming a footer item in markup leaves no copy of the old one next to the one code added",
+          "file": "MainWindow.xaml",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "Content=\"Help\""
+            ],
+            "text": [
+              "Content=\"Help 2\""
+            ]
+          },
+          "checkpoint": {
+            "id": "c-s01b-footer-markup",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "Status",
+                "assert": "text-equals",
+                "value": "status from constructor"
+              },
+              {
+                "target": "Count",
+                "assert": "invoke"
+              },
+              {
+                "target": "CountText",
+                "assert": "text-equals",
+                "value": "4/2"
+              },
+              {
+                "target": "NavFeedback",
+                "assert": "exists"
+              },
+              {
+                "target": "Note",
+                "assert": "set-value",
+                "value": "typed"
               }
             ]
           },
@@ -253,12 +415,36 @@
                 "value": "shell v2"
               },
               {
+                "target": "InnerText",
+                "assert": "text-equals",
+                "value": "inner page"
+              },
+              {
+                "target": "Note",
+                "assert": "text-equals",
+                "value": "typed"
+              },
+              {
                 "target": "NavHome",
                 "assert": "exists"
               },
               {
                 "target": "NavBeta",
                 "assert": "exists"
+              },
+              {
+                "target": "Status",
+                "assert": "text-equals",
+                "value": "status from constructor"
+              },
+              {
+                "target": "Count",
+                "assert": "invoke"
+              },
+              {
+                "target": "CountText",
+                "assert": "text-equals",
+                "value": "4/2"
               }
             ]
           },
@@ -328,7 +514,7 @@
           },
           "expect": {
             "outcome": "applied",
-            "detail": "note: MainWindow's constructor takes arguments, so a reload only loads its markup again"
+            "detail": "note: MainWindow\\.xaml\\.cs\\(\\d+\\): `Title = .*` uses MainWindow's constructor arguments, which a reload doesn't have"
           }
         },
         {
@@ -435,6 +621,39 @@
           "expect": {
             "outcome": "applied",
             "detail": "note: Catalog\\.Names is set once, when the app starts"
+          }
+        },
+        {
+          "id": "s09-data-file",
+          "title": "A data file the project copies to the output is copied next to the running app, with a note that apps often read such files only at startup",
+          "file": "data.json",
+          "edit": {
+            "op": "replace",
+            "find": [
+              "data v1"
+            ],
+            "text": [
+              "data v2"
+            ]
+          },
+          "checkpoint": {
+            "id": "c-s09-data-file",
+            "kind": "live",
+            "uiChecks": [
+              {
+                "target": "ReadData",
+                "assert": "invoke"
+              },
+              {
+                "target": "DataText",
+                "assert": "text-equals",
+                "value": "data v2"
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "applied",
+            "detail": "note: data\\.json is copied next to the app; if the app reads it only when it starts"
           }
         }
       ]

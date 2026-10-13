@@ -58,7 +58,9 @@ internal static class HotReloadAgent
         {
             if (Environment.CurrentManagedThreadId == UiThreadId && !s_recording)
             {
-                RecordCrash(e.Exception, lastException);
+                // Thrown just now, so its own trace holds at most the frame that threw (none when that is in WinRT's
+                // marshaling, as for a native E_POINTER): the frames that called it are still on this thread's stack.
+                RecordCrash(e.Exception, lastException, new System.Diagnostics.StackTrace(1, fNeedFileInfo: true).ToString());
             }
         };
         _ = Task.Run(() => ServeAsync(pipeName, token));
@@ -72,7 +74,7 @@ internal static class HotReloadAgent
     [ThreadStatic]
     private static bool s_recording;
 
-    internal static void RecordCrash(Exception? exception, string? file = null)
+    internal static void RecordCrash(Exception? exception, string? file = null, string? callers = null)
     {
         file ??= CrashFile;
         if (file is null || exception is null)
@@ -82,11 +84,13 @@ internal static class HotReloadAgent
         s_recording = true;
         try
         {
-            var frames = (exception.StackTrace ?? "").Split('\n').Select(l => l.Trim())
-                .Where(l => l.Length > 0 && !l.StartsWith("at WinRT.", StringComparison.Ordinal) && !l.StartsWith("at ABI.", StringComparison.Ordinal))
+            var own = (exception.StackTrace ?? "").Split('\n').Select(l => l.Trim()).ToList();
+            var frames = own.Concat((callers ?? "").Split('\n').Select(l => l.Trim()).Where(l => !own.Contains(l)))
+                .Where(l => l.Length > 0 && !l.StartsWith("at WinRT.", StringComparison.Ordinal) && !l.StartsWith("at ABI.", StringComparison.Ordinal) &&
+                    !l.StartsWith("at System.Runtime.", StringComparison.Ordinal))
                 // Methods updated while the app runs carry the update's generation (b__4#3_0#3): name them as written.
-                .Select(l => System.Text.RegularExpressions.Regex.Replace(l, @"#\d+", "")).Take(6);
-            File.WriteAllText(file, $"{exception.GetType().FullName}: {exception.Message}{Environment.NewLine}{string.Join(Environment.NewLine, frames)}");
+                .Select(l => System.Text.RegularExpressions.Regex.Replace(l, @"#\d+", "")).Take(8).ToList();
+            File.WriteAllText(file, $"{exception.GetType().FullName}: {exception.Message}{Environment.NewLine}{(frames.Count > 0 ? string.Join(Environment.NewLine, frames) : "(no managed frames: it was thrown in native code)")}");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
