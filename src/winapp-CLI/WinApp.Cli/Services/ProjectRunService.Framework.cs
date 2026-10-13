@@ -253,4 +253,41 @@ internal sealed partial class ProjectRunService
 
         return WindowsCommandLine.JoinArguments(tokens) ?? string.Empty;
     }
+
+    /// <summary>
+    /// SHIM (temporary): a cheap text check for whether the project file, or a <c>Directory.Build.props</c> /
+    /// <c>Directory.Build.targets</c> in its directory or any parent, mentions <c>CsWinRTWindowsMetadata</c>.
+    /// That is where a project pins its own value; a pin in some other imported file goes unnoticed.
+    /// </summary>
+    internal static bool ProjectMentionsCsWinRTMetadata(FileInfo csproj)
+    {
+        if (FileMentionsCsWinRTMetadata(csproj.FullName))
+        {
+            return true;
+        }
+
+        for (var directory = csproj.Directory; directory is not null; directory = directory.Parent)
+        {
+            if (FileMentionsCsWinRTMetadata(Path.Join(directory.FullName, "Directory.Build.props"))
+                || FileMentionsCsWinRTMetadata(Path.Join(directory.FullName, "Directory.Build.targets")))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool FileMentionsCsWinRTMetadata(string path)
+    {
+        try
+        {
+            return File.Exists(path)
+                && File.ReadAllText(path).Contains("CsWinRTWindowsMetadata", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
 }

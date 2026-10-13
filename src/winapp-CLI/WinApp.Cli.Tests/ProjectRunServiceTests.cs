@@ -2633,6 +2633,42 @@ public class ProjectRunServiceTests
     }
 
     [TestMethod]
+    public async Task BuildAndResolveAsync_TargetedSdkInstalled_ProjectMentionsMetadata_ReadsIt()
+    {
+        // The TFM's SDK is installed, but the project pins its own CsWinRTWindowsMetadata, which may name a
+        // missing SDK version, so winapp reads it rather than trusting the default.
+        var csproj = WriteFile("App.csproj", ExecutableCsproj.Replace(
+            "</PropertyGroup>",
+            "<CsWinRTWindowsMetadata>10.0.22621.0</CsWinRTWindowsMetadata></PropertyGroup>",
+            StringComparison.Ordinal));
+        var dotnet = new FakeDotNetService
+        {
+            RunDotnetCommandHandler = args => args.Contains("--getProperty:CsWinRTWindowsMetadata", StringComparison.Ordinal)
+                ? (0, """{ "Properties": { "CsWinRTWindowsMetadata": "10.0.22621.0", "TargetFramework": "net10.0-windows10.0.26100.0" } }""", string.Empty)
+                : (0, PackagedPropertiesJson(), string.Empty),
+        };
+        var shim = new FakeCsWinRTMetadataShimService { WindowsSdkAbsent = false };
+        var service = NewServiceWith(dotnet, shim, out _);
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: []);
+
+        await service.BuildAndResolveAsync(csproj, options, CancellationToken.None);
+
+        Assert.AreEqual("10.0.22621.0", shim.ResolvedProjectMetadata[0]);
+    }
+
+    [TestMethod]
+    public void ProjectMentionsCsWinRTMetadata_FindsProjectAndParentDirectoryBuildFiles()
+    {
+        var plain = WriteFileAt(@"src\Plain\Plain.csproj", ExecutableCsproj);
+        Assert.IsFalse(ProjectRunService.ProjectMentionsCsWinRTMetadata(plain));
+
+        WriteFileAt(@"src\Directory.Build.props",
+            "<Project><PropertyGroup><CsWinRTWindowsMetadata>sdk</CsWinRTWindowsMetadata></PropertyGroup></Project>");
+        Assert.IsTrue(ProjectRunService.ProjectMentionsCsWinRTMetadata(plain),
+            "a pin in a parent Directory.Build.props must be found");
+    }
+
+    [TestMethod]
     public async Task BuildAndResolveAsync_SdkPresent_NoPreShimRestore()
     {
         // C1: when a Windows SDK is registered the shim no-ops; there is nothing to restore-and-retry.

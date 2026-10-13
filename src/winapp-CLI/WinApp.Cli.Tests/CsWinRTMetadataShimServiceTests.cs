@@ -167,6 +167,17 @@ public class CsWinRTMetadataShimServiceTests
     }
 
     [TestMethod]
+    public void ResolveMetadataFolder_TfmSdkInstalledButProjectPinsMissingVersion_InjectsPinnedRefPack()
+    {
+        var expected = CreateRefPackVersion("10.0.22621.57");
+        CreateRefPackVersion("10.0.26100.57");
+        var service = NewService(CreateSdkRoot("10.0.26100.0"));
+
+        Assert.AreEqual(expected.FullName, service.ResolveMetadataFolder("net10.0-windows10.0.26100.0", "10.0.22621.0"),
+            "cswinrt reads the pinned 22621, so its missing SDK is replaced with the 22621 ref pack.");
+    }
+
+    [TestMethod]
     public void ResolveMetadataFolder_RequestedVersionDiffersFromTfm_PrefersRequestedRefPack()
     {
         // WindowsSDKVersion asks for 22621, which is missing, while the TFM says 26100.
