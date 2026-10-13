@@ -191,10 +191,11 @@ internal sealed partial class ProjectRunService
         ProjectRunOptions options,
         string verbosity,
         string? csWinRTMetadataFolder = null,
-        bool publish = true)
+        bool publish = true,
+        bool nativeTerminal = false)
     {
         var tokens = WindowsCommandLine.SplitArguments(
-            BuildBuildPassArguments(csproj, options, verbosity, csWinRTMetadataFolder, publish: publish)).ToList();
+            BuildBuildPassArguments(csproj, options, verbosity, csWinRTMetadataFolder, nativeTerminal, publish)).ToList();
         if (!publish)
         {
             // Property/item queries otherwise suppress the default Build target.

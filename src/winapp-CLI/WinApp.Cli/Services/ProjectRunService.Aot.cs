@@ -95,14 +95,13 @@ internal sealed partial class ProjectRunService
         DirectoryInfo workingDirectory,
         string? csWinRTMetadata,
         CancellationToken cancellationToken,
-        bool aot = false,
-        bool publish = true)
+        bool aot = false)
     {
         var arguments = BuildPublishArguments(
             csproj,
             options,
             ResolveBuildVerbosity(logger, options.Json),
-            csWinRTMetadata, publish);
+            csWinRTMetadata);
         var display = RedactSecretsForDisplay(
             WindowsCommandLine.JoinArguments(arguments) ?? string.Empty);
         logger.LogDebug("{UISymbol} dotnet {Arguments}", UiSymbols.Note, display);
@@ -114,7 +113,7 @@ internal sealed partial class ProjectRunService
         }
         else
         {
-            ansiConsole.MarkupLineInterpolated($"{UiSymbols.Wrench} {(publish ? "Publishing" : "Building")} {(aot ? "Native AOT" : csproj.Name)}...");
+            ansiConsole.MarkupLineInterpolated($"{UiSymbols.Wrench} Publishing {(aot ? "Native AOT" : csproj.Name)}...");
             writeLine = CreateSynchronizedRedactedLineWriter();
         }
 
@@ -125,7 +124,7 @@ internal sealed partial class ProjectRunService
             var (exitCode, output, error) = await dotNetService.RunDotnetCommandAsync(
                 workingDirectory,
                 [.. arguments, $"--getResultOutputFile:{resultFile}"],
-                publish ? BuildAotPublishEnvironment() : null,
+                BuildAotPublishEnvironment(),
                 writeLine,
                 writeLine,
                 cancellationToken);

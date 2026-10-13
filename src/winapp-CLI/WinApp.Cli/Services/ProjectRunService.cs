@@ -420,26 +420,47 @@ internal sealed partial class ProjectRunService(
 
         // Builds keep their evaluate-only output-discovery fallback. Publishes capture properties
         // after targets execute: a separate evaluation cannot recover target-assigned PublishDir.
+        // A DevTools run's build also reports the XAML pages and properties winapp reads, so it needs no separate evaluate.
         var captureBuild = options.CaptureDevToolsSources && !options.NoBuild;
-        if (!publish && !options.NoBuild && !captureBuild)
+        string? captured = null;
+        if (!publish && !options.NoBuild)
         {
-            var buildExit = await RunBuildPassAsync(csproj, buildOptions, workingDir, csWinRTMetadata, cancellationToken, redactBuildOutput);
-            if (buildExit != 0)
+            var resultFile = captureBuild ? Path.Join(Path.GetTempPath(), $"winapp-build-{Guid.NewGuid():N}.json") : null;
+            try
             {
-                // dotnet's diagnostics were already streamed live; log the summary and propagate the exit code.
-                logger.LogError("{UISymbol} Build failed for {Project} (exit code {ExitCode}).", UiSymbols.Error, csproj.Name, buildExit);
-                return new ProjectBuildOutcome(null, buildExit);
+                var buildExit = await RunBuildPassAsync(csproj, buildOptions, workingDir, csWinRTMetadata, cancellationToken, redactBuildOutput, resultFile);
+                if (buildExit != 0)
+                {
+                    // dotnet's diagnostics were already streamed live; log the summary and propagate the exit code.
+                    logger.LogError("{UISymbol} Build failed for {Project} (exit code {ExitCode}).", UiSymbols.Error, csproj.Name, buildExit);
+                    return new ProjectBuildOutcome(null, buildExit);
+                }
+                if (resultFile is not null)
+                {
+                    captured = File.Exists(resultFile) ? await File.ReadAllTextAsync(resultFile, cancellationToken) : string.Empty;
+                }
+            }
+            finally
+            {
+                if (resultFile is not null)
+                {
+                    TryDeleteFile(resultFile);
+                }
             }
         }
 
         int exitCode;
         string stdout;
         string stderr;
-        if (publish || captureBuild)
+        if (publish)
         {
             // Publish output already streamed; its properties come from the MSBuild result file.
             (exitCode, _, stderr, stdout) = await RunPublishPassAsync(
-                csproj, buildOptions, workingDir, csWinRTMetadata, cancellationToken, publish: publish);
+                csproj, buildOptions, workingDir, csWinRTMetadata, cancellationToken);
+        }
+        else if (captured is not null)
+        {
+            (exitCode, stdout, stderr) = (0, captured, string.Empty);
         }
         else
         {
@@ -911,6 +932,7 @@ internal sealed partial class ProjectRunService(
     /// Output goes through winapp, not inherited stdio, whenever it may quote a secret: when the build may
     /// restore, when its arguments carry a credential (a target can echo a property), or when
     /// <paramref name="redactOutput"/> reports that the restore it replays warnings from needed redaction.
+    /// With <paramref name="resultFile"/>, the same build also writes the properties and items winapp reads to that file.
     /// </summary>
     internal async Task<int> RunBuildPassAsync(
         FileInfo csproj,
@@ -918,9 +940,15 @@ internal sealed partial class ProjectRunService(
         DirectoryInfo workingDir,
         string? csWinRTMetadataFolder,
         CancellationToken cancellationToken,
-        bool redactOutput = false)
+        bool redactOutput = false,
+        string? resultFile = null)
     {
         var verbosity = ResolveBuildVerbosity(logger, options.Json);
+        string Arguments(bool nativeTerminal) => resultFile is null
+            ? BuildBuildPassArguments(csproj, options, verbosity, csWinRTMetadataFolder, nativeTerminal)
+            : WindowsCommandLine.JoinArguments([
+                .. BuildPublishArguments(csproj, options, verbosity, csWinRTMetadataFolder, publish: false, nativeTerminal),
+                $"--getResultOutputFile:{resultFile}"]) ?? string.Empty;
 
         var banner = $"Building {csproj.Name} ({options.Configuration} | {options.Architecture})...";
         var stopwatch = Stopwatch.StartNew();
@@ -929,7 +957,7 @@ internal sealed partial class ProjectRunService(
         // (Console.Error is synchronized, so concurrent stdout/stderr callbacks are safe).
         if (options.Json || !logger.IsEnabled(LogLevel.Information))
         {
-            var redirectedArgs = BuildBuildPassArguments(csproj, options, verbosity, csWinRTMetadataFolder);
+            var redirectedArgs = Arguments(nativeTerminal: false);
             // --json emits the invocation on stderr (the injected args stay discoverable); --quiet suppresses it.
             if (options.Json)
             {
@@ -949,11 +977,11 @@ internal sealed partial class ProjectRunService(
         var nativeTerminal = UsesNativeTerminalBuild(options) && options.NoRestore && !redactOutput;
         if (nativeTerminal)
         {
-            var nativeArgs = BuildBuildPassArguments(csproj, options, verbosity, csWinRTMetadataFolder, nativeTerminal: true);
+            var nativeArgs = Arguments(nativeTerminal: true);
             nativeTerminal = string.Equals(RedactSecretsForDisplay(nativeArgs), nativeArgs, StringComparison.Ordinal);
         }
 
-        var buildArgs = BuildBuildPassArguments(csproj, options, verbosity, csWinRTMetadataFolder, nativeTerminal);
+        var buildArgs = Arguments(nativeTerminal);
         var command = $"dotnet {RedactSecretsForDisplay(buildArgs)}";
         var verbose = logger.IsEnabled(LogLevel.Debug);
         ansiConsole.MarkupLineInterpolated($"{UiSymbols.Wrench} {banner}");

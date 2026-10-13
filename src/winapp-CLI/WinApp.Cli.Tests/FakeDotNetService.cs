@@ -123,16 +123,8 @@ internal class FakeDotNetService : IDotNetService
         ArgumentListWorkingDirectories.Add(workingDirectory);
         var result = RunDotnetArgumentListHandler?.Invoke(arguments) ?? (0, string.Empty, string.Empty);
 
-        // Mirror MSBuild's --getResultOutputFile: write the property result to the requested file. By
-        // default the scripted stdout doubles as the result so property-only scenarios need no setup.
-        const string resultFileSwitch = "--getResultOutputFile:";
-        if (arguments.FirstOrDefault(a => a.StartsWith(resultFileSwitch, StringComparison.Ordinal)) is { } resultFileArgument)
-        {
-            ResultOutputFiles.Add(resultFileArgument[resultFileSwitch.Length..]);
-            File.WriteAllText(
-                ResultOutputFiles[^1],
-                ResultOutputFileHandler is null ? result.Item2 : ResultOutputFileHandler(arguments));
-        }
+        // By default the scripted stdout doubles as the result so property-only scenarios need no setup.
+        WriteResultFile(arguments, result.Item2);
 
         // Mirror the real service: when a caller supplies line callbacks (e.g. the verbose scaffold
         // streaming its post-creation output), replay the scripted stdout/stderr through them so tests
@@ -154,6 +146,17 @@ internal class FakeDotNetService : IDotNetService
         }
 
         return Task.FromResult(result);
+    }
+
+    /// <summary>Mirrors MSBuild's <c>--getResultOutputFile</c>: writes the property result to the requested file.</summary>
+    private void WriteResultFile(IReadOnlyList<string> arguments, string scriptedOutput)
+    {
+        const string resultFileSwitch = "--getResultOutputFile:";
+        if (arguments.FirstOrDefault(a => a.StartsWith(resultFileSwitch, StringComparison.Ordinal)) is { } resultFileArgument)
+        {
+            ResultOutputFiles.Add(resultFileArgument[resultFileSwitch.Length..]);
+            File.WriteAllText(ResultOutputFiles[^1], ResultOutputFileHandler is null ? scriptedOutput : ResultOutputFileHandler(arguments));
+        }
     }
 
     private static string[] SplitLines(string? text)
@@ -180,6 +183,7 @@ internal class FakeDotNetService : IDotNetService
     public Task<int> RunDotnetStreamingAsync(DirectoryInfo workingDirectory, string arguments, Action<string>? onOutputLine, Action<string>? onErrorLine, IReadOnlyDictionary<string, string>? environmentOverrides = null, CancellationToken cancellationToken = default)
     {
         StreamingCalls.Add(arguments);
+        WriteResultFile(WinApp.Cli.Helpers.WindowsCommandLine.SplitArguments(arguments).ToArray(), string.Empty);
         foreach (var token in WinApp.Cli.Helpers.WindowsCommandLine.SplitArguments(arguments)
             .Where(token => token.EndsWith(".slnf", StringComparison.OrdinalIgnoreCase) && File.Exists(token)))
         {
@@ -221,6 +225,7 @@ internal class FakeDotNetService : IDotNetService
     public Task<int> RunDotnetInheritedAsync(DirectoryInfo workingDirectory, string arguments, IReadOnlyDictionary<string, string>? environmentOverrides = null, CancellationToken cancellationToken = default)
     {
         InheritedCalls.Add(arguments);
+        WriteResultFile(WinApp.Cli.Helpers.WindowsCommandLine.SplitArguments(arguments).ToArray(), string.Empty);
         if (RunDotnetInheritedHandler is not null)
         {
             return Task.FromResult(RunDotnetInheritedHandler(arguments));

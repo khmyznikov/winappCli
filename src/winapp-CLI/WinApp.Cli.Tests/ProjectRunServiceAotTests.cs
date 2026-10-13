@@ -205,12 +205,12 @@ public sealed class ProjectRunServiceAotTests
         var dotnet = new FakeDotNetService
         {
             RunDotnetCommandHandler = _ => (0, evaluated, ""),
-            RunDotnetArgumentListHandler = _ => (0, built, ""),
+            ResultOutputFileHandler = _ => built,
         };
         var outcome = await NewService(dotnet).BuildAndResolveAsync(
             project, Options(noRestore: true) with { CaptureDevToolsSources = true }, CancellationToken.None);
         Assert.AreEqual(0, outcome.ExitCode);
-        var command = dotnet.ArgumentListInvocations.Single();
+        var command = Helpers.WindowsCommandLine.SplitArguments(dotnet.StreamingCalls.Single());
         Assert.AreEqual("build", command[0]);
         CollectionAssert.Contains(command.ToList(), "-target:Build");
         CollectionAssert.DoesNotContain(command.ToList(), "--no-incremental");
@@ -242,7 +242,12 @@ public sealed class ProjectRunServiceAotTests
         var dotnet = new FakeDotNetService
         {
             RunDotnetCommandHandler = _ => (0, properties, ""),
-            RunDotnetArgumentListHandler = _ => (exitCode, "Build diagnostic", "Build stderr"),
+            RunDotnetStreamingHandler = (_, output, error) =>
+            {
+                output?.Invoke("Build diagnostic");
+                error?.Invoke("Build stderr");
+                return exitCode;
+            },
             ResultOutputFileHandler = _ => properties,
         };
         using var logger = new LevelLogger<ProjectRunService>(LogLevel.Information);
@@ -266,6 +271,34 @@ public sealed class ProjectRunServiceAotTests
         Assert.IsFalse(output.Contains("\"Properties\"", StringComparison.Ordinal));
         Assert.IsFalse(output.Contains("\"Items\"", StringComparison.Ordinal));
         if (json) { Assert.AreEqual("", _consoles.Last().Output); }
+    }
+
+    // DevTools is on by default for WinUI, so its build must look like any other `winapp run` build on a terminal.
+    [TestMethod]
+    public async Task DevToolsBuild_OnATerminal_RendersLikeAnyOtherBuild()
+    {
+        var project = WriteProject();
+        var assets = WriteFile("obj\\project.assets.json", "{}");
+        WriteFile("bin\\Sample.exe", "controlled executable path");
+        var propertyDocument = System.Text.Json.Nodes.JsonNode.Parse(PropertyJson(project, assets, false, "None"))!;
+        propertyDocument["Properties"]!["RunCommand"] = Path.Join(_tempDirectory.FullName, "bin", "Sample.exe");
+        propertyDocument["Items"] = System.Text.Json.Nodes.JsonNode.Parse("""{"Page":[{"Identity":"Main.xaml"}],"ApplicationDefinition":[]}""");
+        var dotnet = new FakeDotNetService { ResultOutputFileHandler = _ => propertyDocument.ToJsonString() };
+        using var logger = new LevelLogger<ProjectRunService>(LogLevel.Information);
+        var service = NewService(dotnet, logger: logger);
+        service.NativeTerminalGateOverrideForTests = () => true;
+
+        var outcome = await service.BuildAndResolveAsync(project,
+            Options() with { CaptureDevToolsSources = true }, CancellationToken.None);
+
+        Assert.AreEqual(0, outcome.ExitCode);
+        CollectionAssert.AreEqual((string[])["Main.xaml"], outcome.Resolution!.DevToolsXamlSources!.ToArray());
+        var build = dotnet.InheritedCalls.Single();
+        StringAssert.Contains(build, "--getItem:Page,ApplicationDefinition");
+        Assert.IsFalse(build.Contains("-tl:off", StringComparison.Ordinal), "dotnet's terminal logger renders the build");
+        var output = _consoles.Last().Output;
+        StringAssert.Contains(output, "Building Sample.csproj (Debug | x64)...");
+        StringAssert.Contains(output, "Built Sample in ");
     }
 
     [TestMethod]
