@@ -444,7 +444,7 @@ public partial class UiCommandTests
         Assert.AreEqual(expectRight, click.RightClick);
         CollectionAssert.Contains(_fakeDesktopForeground.ForegroundRequests, 4242L,
             "the session window is brought to the foreground before the click");
-        Assert.AreEqual(1, _fakeForeground.Calls.Count, "the foreground guard runs before the click");
+        Assert.AreEqual(2, _fakeForeground.Calls.Count, "the foreground guard runs before and after the cursor settles");
         Assert.AreEqual(1, _fakeDesktopLock.DesktopSectionEnters, "the click runs inside a desktop section");
 
         var result = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(TestAnsiConsole.Output);
@@ -453,6 +453,21 @@ public partial class UiCommandTests
         Assert.AreEqual(250, result.GetProperty("y").GetInt32());
         Assert.AreEqual(4242L, result.GetProperty("hwnd").GetInt64());
         Assert.IsFalse(result.TryGetProperty("warnings", out _), "an in-window point has no warnings");
+    }
+
+    [TestMethod]
+    public async Task Click_At_FinalForegroundGateDenies_AbortsWithoutClicking()
+    {
+        _fakeTargetResolver.TargetResult.WindowHandle = 4242;
+        _fakeForeground.DenyOnCallNumber = 2;
+        _fakeForeground.DenyReason = ForegroundCheck.ForegroundNotTarget;
+
+        var exitCode = await InvokeMouseAtAsync("click", ["--at", "100,100", "-a", "TestApp"]);
+
+        Assert.AreEqual(1, exitCode);
+        AssertJsonErrorCode("foreground_not_target");
+        Assert.AreEqual(1, _fakeMouse.MoveCursorCalls.Count, "the cursor was positioned before the final gate");
+        Assert.AreEqual(0, _fakeMouse.ClickCalls.Count, "the final gate must abort before the button-down");
     }
 
     [TestMethod]

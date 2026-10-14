@@ -123,7 +123,17 @@ internal class UiClickCommand : Command, IShortDescription, IHelpExamples
                             return 1;
                         }
 
-                        mouseInput.Click(at.X, at.Y, doubleClick, rightClick);
+                        // Same settle + final foreground gate as the selector path, so focus can't move
+                        // between the check and the button-down.
+                        mouseInput.MoveCursor(at.X, at.Y);
+                        await Task.Delay(CursorSettleMs, cancellationToken);
+                        if (!foregroundGuard.TryEnsureForeground(
+                                uiTarget.WindowHandle, logger, json, clickType, parseResult.InvocationConfiguration.Error))
+                        {
+                            return 1;
+                        }
+
+                        mouseInput.Click(at.X, at.Y, doubleClick, rightClick, settleMs: 0);
                     }
 
                     WriteResult(json, elementId: null, clickType, at.X, at.Y, uiTarget.WindowHandle, prep.OutOfWindowWarning);
