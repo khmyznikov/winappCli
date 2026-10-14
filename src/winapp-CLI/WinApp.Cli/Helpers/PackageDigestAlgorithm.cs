@@ -3,7 +3,6 @@
 
 using System.IO.Compression;
 using System.Xml;
-using System.Xml.Linq;
 
 namespace WinApp.Cli.Helpers;
 
@@ -38,8 +37,12 @@ internal static class PackageDigestAlgorithm
                 return Default;
             }
 
+            // HashMethod is on the root element, so stop there instead of parsing the whole block map,
+            // which lists a hash for every 64 KB block and can be many megabytes.
             using var stream = entry.Open();
-            var hashMethod = XDocument.Load(stream).Root?.Attribute("HashMethod")?.Value;
+            using var reader = XmlReader.Create(stream, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit });
+            reader.MoveToContent();
+            var hashMethod = reader.GetAttribute("HashMethod");
             return hashMethod != null && HashMethods.TryGetValue(hashMethod, out var algorithm) ? algorithm : Default;
         }
         catch (Exception ex) when (ex is InvalidDataException or IOException or XmlException or UnauthorizedAccessException)

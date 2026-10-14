@@ -68,4 +68,17 @@ public class PackageDigestAlgorithmTests : BaseCommandTests
 
         Assert.AreEqual("SHA256", PackageDigestAlgorithm.Detect(package));
     }
+
+    [TestMethod]
+    public void Detect_MalformedBlockMap_ReturnsSha256()
+    {
+        var path = Path.Join(_tempDirectory.FullName, "malformed.msix");
+        using (var archive = ZipFile.Open(path, ZipArchiveMode.Create))
+        {
+            using var writer = new StreamWriter(archive.CreateEntry("AppxBlockMap.xml").Open());
+            writer.Write("not xml");
+        }
+
+        Assert.AreEqual("SHA256", PackageDigestAlgorithm.Detect(new FileInfo(path)));
+    }
 }
