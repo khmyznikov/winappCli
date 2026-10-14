@@ -74,6 +74,7 @@ winapp CLI works with a variety of app frameworks:
 
 Additional guides:
 - [Packaging an EXE/CLI](guides/packaging-cli.md): step-by-step guide for packaging an existing EXE/CLI as MSIX
+- [.NET file-based apps](guides/dotnet-file-based.md): run a single `.cs` file with package identity, no project file or manifest required
 - [Sparse packaging](guides/sparse.md): give an unpackaged app package identity with an identity-only (sparse) MSIX and external content
 - [Shell Completion](guides/shell-completion.md): enable tab completion for commands, options, and values in PowerShell, bash, zsh, and fish
 - [DevTools](guides/devtools.md): inspect a running WinUI 3 app, try live property changes, and leave comments for an agent ([advanced](guides/devtools-advanced.md))
