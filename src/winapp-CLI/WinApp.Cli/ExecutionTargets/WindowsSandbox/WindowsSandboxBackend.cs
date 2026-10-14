@@ -248,12 +248,10 @@ internal sealed class WindowsSandboxBackend(
             return reused;
         }
 
-        // An epoch pins the guest winapp prepared. Saved state alone cannot prove that guest is still
-        // there (the same ID may have been restarted), so an unanswered reconnect fails instead of
-        // preparing a new guest under the old epoch.
-        if (lifecycle.CurrentExpectation() is { Epoch: not null } pinned)
+        // Recheck after a failed reconnect before preparing the caller's exact instance.
+        if (lifecycle.CurrentExpectation() is { } expectation)
         {
-            throw pinned.GenerationUnverified(lease.Epoch);
+            expectation.RequireOnlyRunning(await cli.ListAsync(cancellationToken).ConfigureAwait(false));
         }
 
         _progress.Report(lease.IsWarm

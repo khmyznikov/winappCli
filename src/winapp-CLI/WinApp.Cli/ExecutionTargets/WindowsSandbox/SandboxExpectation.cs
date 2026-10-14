@@ -16,15 +16,13 @@ namespace WinApp.Cli.ExecutionTargets.WindowsSandbox;
 /// a replaced or foreign instance is never prepared and a new one is never started behind its back.
 /// </para>
 /// <para>
-/// The value is either a Sandbox ID (what <c>wsb start --id</c> and <c>wsb list</c> use) or an
-/// epoch from winapp's own JSON output. An epoch additionally pins the generation, so the same
-/// instance taken over again with fresh winapp state is refused too.
+/// The value is the provider GUID used by <c>wsb start --id</c> and <c>wsb list</c>. It does not
+/// distinguish guests restarted under the same ID.
 /// </para>
 /// </remarks>
 /// <param name="InstanceId">The expected Sandbox ID.</param>
-/// <param name="Epoch">The expected generation, when the caller gave an epoch.</param>
 /// <param name="Source">Where the value came from, for error messages.</param>
-internal sealed record SandboxExpectation(string InstanceId, ExecutionTargetEpoch? Epoch, string Source)
+internal sealed record SandboxExpectation(string InstanceId, string Source)
 {
     /// <summary>The command-line option.</summary>
     public const string OptionName = "--expect-sandbox";
@@ -47,45 +45,32 @@ internal sealed record SandboxExpectation(string InstanceId, ExecutionTargetEpoc
         return string.IsNullOrWhiteSpace(raw) ? null : Parse(raw, EnvironmentVariable);
     }
 
-    /// <summary>Parses a Sandbox ID or epoch.</summary>
+    /// <summary>Parses a Sandbox provider GUID.</summary>
     /// <param name="value">The value as given.</param>
     /// <param name="source">The option or variable it came from, named in errors.</param>
-    /// <exception cref="ExecutionTargetException">The value is neither a Sandbox ID nor an epoch.</exception>
+    /// <exception cref="ExecutionTargetException">The value is not a Sandbox provider GUID.</exception>
     public static SandboxExpectation Parse(string? value, string source)
     {
         var trimmed = value?.Trim() ?? string.Empty;
-        var separator = trimmed.IndexOf(':', StringComparison.Ordinal);
-        var id = separator < 0 ? trimmed : trimmed[..separator];
-        var nonce = separator < 0 ? null : trimmed[(separator + 1)..];
 
         // wsb identifies instances by GUID. Requiring one turns a mistake such as
         // `--expect-sandbox sandbox` into an immediate error instead of a confusing mismatch.
-        if (!Guid.TryParseExact(id, "D", out _) ||
-            (nonce is not null && (nonce.Length == 0 || nonce.Any(char.IsWhiteSpace))))
+        if (!Guid.TryParseExact(trimmed, "D", out _))
         {
             throw ExecutionTargetException.Create(
                 ExecutionTargetErrorCodes.TargetInvalid,
-                $"{source} must be a Windows Sandbox ID or an epoch reported by winapp, but was '{trimmed}'.",
-                userAction:
-                    "Pass the ID from 'wsb list' (for example 3f2b6c1e-0000-4000-8000-000000000000), or the " +
-                    "ExecutionTarget.Epoch value from a previous --json result.",
+                $"{source} must be a Windows Sandbox provider GUID, but was '{trimmed}'.",
+                userAction: "Pass the ID from 'wsb list' (for example 3f2b6c1e-0000-4000-8000-000000000000).",
                 example: $"winapp run . --on sandbox {OptionName} <sandbox-id>",
                 context: new Dictionary<string, string> { ["source"] = source });
         }
 
-        return new SandboxExpectation(
-            id,
-            nonce is null ? null : ExecutionTargetEpoch.Create(id, nonce),
-            source);
+        return new SandboxExpectation(trimmed, source);
     }
 
     /// <summary>Whether <paramref name="instanceId"/> is the expected Sandbox.</summary>
     public bool IsInstance(string? instanceId) =>
         string.Equals(instanceId, InstanceId, StringComparison.OrdinalIgnoreCase);
-
-    /// <summary>Whether <paramref name="epoch"/> satisfies this expectation.</summary>
-    public bool Accepts(ExecutionTargetEpoch epoch) =>
-        Epoch is not { } expected || string.Equals(expected.Value, epoch.Value, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Fails unless the expected Sandbox is the only one running.</summary>
     /// <exception cref="ExecutionTargetException">It is not running, or another one is.</exception>
@@ -113,40 +98,10 @@ internal sealed record SandboxExpectation(string InstanceId, ExecutionTargetEpoc
             running);
     }
 
-    /// <summary>
-    /// The error for an expected Sandbox that is running but is no longer the generation the caller
-    /// named.
-    /// </summary>
-    public ExecutionTargetException GenerationMismatch(ExecutionTargetEpoch? actual) =>
-        Mismatch(
-            $"The expected Windows Sandbox {InstanceId} is running, but not in the generation that was expected.",
-            $"Rediscover the current epoch with '{SnapshotCommand}', or pass only the Sandbox ID.",
-            running: null,
-            actual,
-            new ExecutionTargetNextCommand { Command = SnapshotCommand, Advisory = true });
-
-    /// <summary>
-    /// The error for an expected generation that winapp's saved state still names, but whose guest
-    /// no longer answers, so it may have been restarted under the same ID.
-    /// </summary>
-    public ExecutionTargetException GenerationUnverified(ExecutionTargetEpoch epoch) =>
-        Mismatch(
-            $"The expected Windows Sandbox {InstanceId} is running, but winapp could not confirm it is still the expected generation.",
-            "The Sandbox may have been restarted. Pass only the Sandbox ID to let winapp prepare it again.",
-            running: null,
-            epoch,
-            new ExecutionTargetNextCommand { Command = SnapshotCommand, Advisory = true });
-
-    // Passing the ID overrides a stale epoch in WINAPP_EXPECT_SANDBOX, which would otherwise make the
-    // suggested command fail the same way.
-    private string SnapshotCommand => $"winapp target snapshot sandbox --json {OptionName} {InstanceId}";
-
     private ExecutionTargetException Mismatch(
         string message,
         string userAction,
-        IReadOnlyList<string>? running,
-        ExecutionTargetEpoch? actualEpoch = null,
-        ExecutionTargetNextCommand? nextCommand = null)
+        IReadOnlyList<string> running)
     {
         var context = new Dictionary<string, string>
         {
@@ -154,28 +109,15 @@ internal sealed record SandboxExpectation(string InstanceId, ExecutionTargetEpoc
             ["source"] = Source,
         };
 
-        if (Epoch is { } expectedEpoch)
-        {
-            context["expectedEpoch"] = expectedEpoch.Value;
-        }
-
-        if (actualEpoch is { IsNone: false } actual)
-        {
-            context["epoch"] = actual.Value;
-        }
-
-        if (running is not null)
-        {
-            context["sandboxIds"] = string.Join(',', running);
-        }
+        context["sandboxIds"] = string.Join(',', running);
 
         return ExecutionTargetException.Create(
             ExecutionTargetErrorCodes.InstanceMismatch,
             message,
             userAction: userAction,
             context: context,
-            nextCommand: nextCommand ?? (running is { Count: > 0 }
+            nextCommand: running.Count > 0
                 ? new ExecutionTargetNextCommand { Command = "wsb list", Advisory = true }
-                : null));
+                : null);
     }
 }

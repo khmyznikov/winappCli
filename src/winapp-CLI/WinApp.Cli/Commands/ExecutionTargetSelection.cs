@@ -80,8 +80,8 @@ internal static class ExecutionTargetSelection
     public static Option<string?> ExpectSandboxOption { get; } = new(SandboxExpectation.OptionName)
     {
         Description =
-            "Use only this Windows Sandbox: a Sandbox ID from 'wsb list', or an epoch from winapp's " +
-            "--json output. winapp fails instead of starting or taking over any other Sandbox. " +
+            "Use only this Windows Sandbox: its provider GUID from 'wsb list'. " +
+            "winapp fails instead of starting or taking over any other Sandbox. " +
             "Overrides the WINAPP_EXPECT_SANDBOX environment variable.",
         Recursive = true,
     };

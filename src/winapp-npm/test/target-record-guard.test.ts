@@ -113,6 +113,19 @@ test('buildTargetRecordArgs: overwrite is forwarded only when explicitly enabled
   assert.ok(!buildTargetRecordArgs({ target: 'sandbox', durationSec: 1 }).includes('--overwrite'));
 });
 
+test('buildTargetRecordArgs: the expected Sandbox GUID precedes the target terminator', () => {
+  const id = '11111111-2222-4333-8444-555555555555';
+  const args = buildTargetRecordArgs({
+    target: 'sandbox',
+    durationSec: 1,
+    expectSandbox: id,
+  });
+  const option = args.indexOf('--expect-sandbox');
+  assert.ok(option >= 0);
+  assert.equal(args[option + 1], id);
+  assert.ok(option < args.indexOf('--'));
+});
+
 test('targetRecord passes cancellation and workflow without changing process state', async () => {
   const controller = new AbortController();
   let invoked = false;

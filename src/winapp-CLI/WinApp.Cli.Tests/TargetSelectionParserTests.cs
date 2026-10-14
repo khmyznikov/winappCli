@@ -211,7 +211,6 @@ public class TargetSelectionParserTests : BaseCommandTests
     [TestMethod]
     [DataRow("run", ".", "--on", "sandbox", "--expect-sandbox", SandboxId)]
     [DataRow("ui", "inspect", "--on", "sandbox", "--expect-sandbox", SandboxId)]
-    [DataRow("ui", "inspect", "--on", "sandbox", "--expect-sandbox", SandboxId + ":ABCDEF")]
     [DataRow("target", "snapshot", "sandbox", "--expect-sandbox", SandboxId)]
     [DataRow("target", "exec", "sandbox", "--expect-sandbox", SandboxId, "--", "cmd")]
     public void ExpectSandbox_WithASandboxTarget_IsAccepted(params string[] args)
@@ -227,6 +226,7 @@ public class TargetSelectionParserTests : BaseCommandTests
     [DataRow("run", ".", "--expect-sandbox", SandboxId)]
     [DataRow("ui", "inspect", "--on", "local", "--expect-sandbox", SandboxId)]
     [DataRow("ui", "inspect", "--on", "sandbox", "--expect-sandbox", "sandbox")]
+    [DataRow("ui", "inspect", "--on", "sandbox", "--expect-sandbox", SandboxId + ":ABCDEF")]
     public void ExpectSandbox_WithoutASandboxTargetOrMalformed_IsRefused(params string[] args)
     {
         var error = ExecutionTargetSelection.Validate(Parse(args));
@@ -241,6 +241,30 @@ public class TargetSelectionParserTests : BaseCommandTests
         var parsed = Parse(["cert", "generate", "--expect-sandbox", SandboxId]);
 
         Assert.AreNotEqual(0, parsed.Errors.Count);
+    }
+
+    [TestMethod]
+    [DataRow("run", ".", "--on", "sandbox", "--expect-sandbox")]
+    [DataRow("ui", "inspect", "--on", "sandbox", "--expect-sandbox")]
+    [DataRow("target", "snapshot", "sandbox", "--expect-sandbox")]
+    public void ExpectSandbox_WithNoValue_UsesTheNormalParseError(params string[] args)
+    {
+        var parsed = Parse(args);
+
+        Assert.IsNotEmpty(parsed.Errors);
+        Assert.IsNull(ExecutionTargetSelection.Validate(parsed));
+    }
+
+    [TestMethod]
+    [DataRow("--expect-sandbox=" + SandboxId)]
+    [DataRow("--expect-sandbox:" + SandboxId)]
+    public void ExpectSandbox_AttachedGuidValue_IsAccepted(string option)
+    {
+        var parsed = Parse(["ui", "inspect", "--on", "sandbox", option]);
+
+        Assert.IsEmpty(parsed.Errors);
+        Assert.IsNull(ExecutionTargetSelection.Validate(parsed));
+        Assert.AreEqual(SandboxId, ExecutionTargetSelection.RawExpectation(parsed));
     }
 
     // ---- Misspelt options never become positional values ---------------------------

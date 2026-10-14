@@ -281,23 +281,11 @@ internal sealed class WindowsSandboxLifecycle(
         {
             var epoch = ExecutionTargetEpoch.Create(managedId, bootNonce);
 
-            if (!expectation.Accepts(epoch))
-            {
-                throw expectation.GenerationMismatch(epoch);
-            }
-
             return new SandboxInstanceLease(
                 managedId,
                 epoch,
                 SandboxInstanceOrigin.Reused,
                 IsWarm: string.Equals(state.BootstrappedEpoch, epoch.Value, StringComparison.Ordinal));
-        }
-
-        // An epoch names a generation winapp already recorded. Taking the instance over now would
-        // mint a new generation, which is exactly what the caller asked winapp not to use.
-        if (expectation.Epoch is not null)
-        {
-            throw expectation.GenerationMismatch(actual: null);
         }
 
         return await AdoptRunningInstanceAsync(state, running[0], cancellationToken).ConfigureAwait(false);
@@ -323,15 +311,11 @@ internal sealed class WindowsSandboxLifecycle(
         {
             var epoch = ExecutionTargetEpoch.Create(managedId, bootNonce);
 
-            return expectation.Accepts(epoch)
-                ? new SandboxReconciliation(TargetLifecycleState.Running, managedId, epoch, revision)
-                : throw expectation.GenerationMismatch(epoch);
+            return new SandboxReconciliation(TargetLifecycleState.Running, managedId, epoch, revision);
         }
 
         // Running, but winapp has not taken it over yet, so there is no winapp state to report.
-        return expectation.Epoch is null
-            ? new SandboxReconciliation(TargetLifecycleState.Terminated, null, ExecutionTargetEpoch.None, revision)
-            : throw expectation.GenerationMismatch(actual: null);
+        return new SandboxReconciliation(TargetLifecycleState.Terminated, null, ExecutionTargetEpoch.None, revision);
     }
 
     /// <summary>
@@ -517,6 +501,11 @@ internal sealed class WindowsSandboxLifecycle(
                     Advisory = true,
                 },
                 example: "winapp run . --on sandbox");
+        }
+
+        if (CurrentExpectation() is { } expectation)
+        {
+            expectation.RequireOnlyRunning(await cli.ListAsync(cancellationToken).ConfigureAwait(false));
         }
 
         _progress.Report(AdoptingMessage);

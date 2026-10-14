@@ -742,6 +742,29 @@ public class WindowsSandboxLifecycleTests
     }
 
     [TestMethod]
+    public async Task Expected_ReplacedBeforeAdoptionCommit_FailsWithoutClaiming()
+    {
+        _expectedSandbox = ExpectedId;
+        _cli.SetRunning(ExpectedId);
+        var enumerations = 0;
+        _cli.OnList = () =>
+        {
+            if (++enumerations == 2)
+            {
+                _cli.SetRunning(OtherId);
+            }
+        };
+
+        var ex = await Assert.ThrowsExactlyAsync<ExecutionTargetException>(
+            () => NewLifecycle().EnsureInstanceAsync(OpenSandbox, TestContext.CancellationTokenSource.Token));
+
+        Assert.AreEqual(ExecutionTargetErrorCodes.InstanceMismatch, ex.Error.Code);
+        Assert.IsNull(_stateStore.Read(WindowsSandboxTarget.Default));
+        Assert.AreEqual(0, _cli.LaunchCount);
+        Assert.IsEmpty(_cli.Stopped);
+    }
+
+    [TestMethod]
     public async Task Expected_DifferentSandboxRunning_FailsWithoutChangingAnything()
     {
         _expectedSandbox = ExpectedId;
@@ -753,6 +776,8 @@ public class WindowsSandboxLifecycleTests
         Assert.AreEqual(ExecutionTargetErrorCodes.InstanceMismatch, ex.Error.Code);
         Assert.AreEqual(ExpectedId, ex.Error.Context!["expectedSandboxId"]);
         Assert.AreEqual(OtherId, ex.Error.Context["sandboxIds"]);
+        Assert.AreEqual("wsb list", ex.Error.NextCommand!.Command);
+        Assert.IsTrue(ex.Error.NextCommand.Advisory);
         Assert.AreEqual(0, _cli.LaunchCount);
         Assert.IsNull(_stateStore.Read(WindowsSandboxTarget.Default), "Nothing may be taken over.");
     }
@@ -801,7 +826,7 @@ public class WindowsSandboxLifecycleTests
     }
 
     [TestMethod]
-    public async Task Expected_MatchingEpoch_IsReusedWarm()
+    public async Task Expected_MatchingId_IsReusedWarm()
     {
         _cli.SetRunning(ExpectedId);
         var adopted = await NewLifecycle().EnsureInstanceAsync(OpenSandbox, TestContext.CancellationTokenSource.Token);
@@ -811,43 +836,12 @@ public class WindowsSandboxLifecycleTests
             state with { BootstrappedEpoch = adopted.Epoch.Value },
             state.Revision);
 
-        _expectedSandbox = adopted.Epoch.Value.ToLowerInvariant();
+        _expectedSandbox = ExpectedId;
         var lease = await NewLifecycle().EnsureInstanceAsync(OpenSandbox, TestContext.CancellationTokenSource.Token);
 
         Assert.AreEqual(SandboxInstanceOrigin.Reused, lease.Origin);
         Assert.AreEqual(adopted.Epoch, lease.Epoch);
         Assert.IsTrue(lease.IsWarm);
-    }
-
-    [TestMethod]
-    public async Task Expected_EpochFromAnotherGeneration_Fails()
-    {
-        _cli.SetRunning(ExpectedId);
-        await NewLifecycle().EnsureInstanceAsync(OpenSandbox, TestContext.CancellationTokenSource.Token);
-
-        _expectedSandbox = $"{ExpectedId}:OLDNONCE";
-
-        var ex = await Assert.ThrowsExactlyAsync<ExecutionTargetException>(
-            () => NewLifecycle().EnsureInstanceAsync(OpenSandbox, TestContext.CancellationTokenSource.Token));
-
-        Assert.AreEqual(ExecutionTargetErrorCodes.InstanceMismatch, ex.Error.Code);
-        Assert.AreEqual($"{ExpectedId}:OLDNONCE", ex.Error.Context!["expectedEpoch"]);
-        Assert.AreEqual(
-            $"winapp target snapshot sandbox --json --expect-sandbox {ExpectedId}",
-            ex.Error.NextCommand?.Command);
-    }
-
-    [TestMethod]
-    public async Task Expected_EpochButNotYetOwned_FailsInsteadOfMintingANewGeneration()
-    {
-        _expectedSandbox = $"{ExpectedId}:SOMENONCE";
-        _cli.SetRunning(ExpectedId);
-
-        var ex = await Assert.ThrowsExactlyAsync<ExecutionTargetException>(
-            () => NewLifecycle().EnsureInstanceAsync(OpenSandbox, TestContext.CancellationTokenSource.Token));
-
-        Assert.AreEqual(ExecutionTargetErrorCodes.InstanceMismatch, ex.Error.Code);
-        Assert.IsNull(_stateStore.Read(WindowsSandboxTarget.Default));
     }
 
     [TestMethod]
@@ -915,6 +909,7 @@ public class WindowsSandboxLifecycleTests
     [DataRow("sandbox")]
     [DataRow("not-a-guid")]
     [DataRow("11111111-2222-4333-8444-555555555555:")]
+    [DataRow("11111111-2222-4333-8444-555555555555:ABCDEF")]
     public void Expectation_MalformedValue_IsRejected(string value)
     {
         var ex = Assert.ThrowsExactly<ExecutionTargetException>(
@@ -927,6 +922,27 @@ public class WindowsSandboxLifecycleTests
     public void Expectation_EmptyEnvironmentVariable_MeansNoExpectation()
     {
         Assert.IsNull(SandboxExpectation.FromEnvironment(_ => "  "));
+    }
+
+    [TestMethod]
+    public void Expectation_Environment_RejectsAGenerationValue()
+    {
+        var ex = Assert.ThrowsExactly<ExecutionTargetException>(
+            () => SandboxExpectation.FromEnvironment(_ => $"{ExpectedId}:ABCDEF"));
+
+        Assert.AreEqual(ExecutionTargetErrorCodes.TargetInvalid, ex.Error.Code);
+        Assert.AreEqual(SandboxExpectation.EnvironmentVariable, ex.Error.Context!["source"]);
+    }
+
+    [TestMethod]
+    public void Expectation_ProviderGuid_IsTrimmedAndMatchedCaseInsensitively()
+    {
+        const string id = "3f2b6c1e-0000-4000-8000-000000000000";
+        var expectation = SandboxExpectation.Parse($" {id} ", SandboxExpectation.OptionName);
+
+        Assert.AreEqual(id, expectation.InstanceId);
+        Assert.IsTrue(expectation.IsInstance(id.ToUpperInvariant()));
+        expectation.RequireOnlyRunning([id.ToUpperInvariant()]);
     }
 
     /// <summary>A store whose commits start failing after a given number of successes.</summary>

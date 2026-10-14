@@ -98,7 +98,7 @@ internal static class ExecutionTargetErrorCodes
 
     /// <summary>
     /// The caller named the Sandbox winapp may use, and the running Sandbox is not that one, is not
-    /// running, or is not in the expected generation. Nothing was started, taken over, or stopped.
+    /// running, or is not the only one running. No replacement is started, taken over, or stopped.
     /// </summary>
     public const string InstanceMismatch = "sandbox_instance_mismatch";
 

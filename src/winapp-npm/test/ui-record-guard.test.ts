@@ -94,6 +94,20 @@ test('buildUiRecordArgs: overwrite is forwarded only when explicitly enabled', (
   assert.ok(!buildUiRecordArgs({ durationSec: 1 }).includes('--overwrite'));
 });
 
+test('buildUiRecordArgs: the expected Sandbox GUID precedes the selector terminator', () => {
+  const id = '11111111-2222-4333-8444-555555555555';
+  const args = buildUiRecordArgs({
+    on: 'sandbox',
+    durationSec: 1,
+    selector: 'MyApp',
+    expectSandbox: id,
+  });
+  const option = args.indexOf('--expect-sandbox');
+  assert.ok(option >= 0);
+  assert.equal(args[option + 1], id);
+  assert.ok(option < args.indexOf('--'));
+});
+
 test('buildUiRecordArgs: all options produce correct arg list', () => {
   const opts: UiRecordOptions = {
     app: 'myapp',

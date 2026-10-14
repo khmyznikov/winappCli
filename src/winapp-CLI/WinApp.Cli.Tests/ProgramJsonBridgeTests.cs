@@ -23,6 +23,36 @@ namespace WinApp.Cli.Tests;
 public class ProgramJsonBridgeTests : BaseCommandTests
 {
     [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task MissingSandboxExpectation_Json_UsesTheExistingParseErrorEnvelope(bool targetCommand)
+    {
+        var args = targetCommand
+            ? new[] { "target", "snapshot", "sandbox", "--json", "--expect-sandbox" }
+            : ["ui", "inspect", "--on", "sandbox", "--json", "--expect-sandbox"];
+        var (stdout, stderr, exitCode) = await InvokeProgramAsync(args);
+
+        Assert.AreNotEqual(0, exitCode);
+        Assert.AreEqual(string.Empty, stdout);
+        using var document = JsonDocument.Parse(stderr);
+        Assert.AreEqual(targetCommand ? ExecutionTargetErrorCodes.TargetInvalidArguments : UiJsonError.CodeInvalidArguments,
+            document.RootElement.GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [TestMethod]
+    public async Task LocalSandboxExpectation_Json_IsRejectedBeforeDispatch()
+    {
+        var (stdout, stderr, exitCode) = await InvokeProgramAsync(
+            ["ui", "inspect", "--on", "local", "--expect-sandbox", "11111111-2222-4333-8444-555555555555", "--json"]);
+
+        Assert.AreEqual(TargetOutput.InvalidCommandLineExitCode, exitCode);
+        Assert.AreEqual(string.Empty, stdout);
+        using var document = JsonDocument.Parse(stderr);
+        Assert.AreEqual(ExecutionTargetErrorCodes.TargetInvalid,
+            document.RootElement.GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [TestMethod]
     public async Task Pen_PressureInfinity_Rejected_NoInjection()
     {
         // SCL in the full parse chain parses "Infinity" as float.PositiveInfinity (parse succeeds).
