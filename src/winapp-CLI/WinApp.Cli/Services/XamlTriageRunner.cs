@@ -54,16 +54,8 @@ internal static class XamlTriageRunner
 
         try
         {
-            // DbgEng reads _NT_* variables for extension and symbol-server search paths, and either can make
-            // it load a DLL. The caller chose this environment, so none of it is used.
-            foreach (var name in Environment.GetEnvironmentVariables().Keys.Cast<string>()
-                .Where(n => n.StartsWith("_NT_", StringComparison.OrdinalIgnoreCase)).ToList())
-            {
-                Environment.SetEnvironmentVariable(name, null);
-            }
-
-            // Everything this process loads or runs is re-verified here, not just by the parent, and held
-            // until the engine is done, so the files checked are the files loaded.
+            // The DLLs and script named by the arguments are re-verified here, not just by the parent, and
+            // held until the engine is done, so the files checked are the files loaded.
             using var inputs = VerifyInputs(bin, jsProvider, ext);
             Console.Out.Write(RunDbgEngExtension(dump, inputs.BinDir, inputs.JsProviderPath, inputs.ExtPath, useSymbols));
             return 0;

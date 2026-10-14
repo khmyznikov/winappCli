@@ -146,7 +146,7 @@ If your environment blocks those downloads, either install **Debugging Tools for
 
 When triage succeeds the console shows a one-line verdict (the stowed exception's error code/message). When it can't run, the console says so, the log explains why, and the standard managed/native analysis still runs.
 
-The triage pass runs in a short-lived child process, because winapp's main process has already loaded the system `dbghelp.dll` and the modern `dbgeng.dll` can't bind alongside it. Decoding the stowed-exception structures also needs OS symbols (`combase.dll`), which `--symbols` downloads from the Microsoft public symbol server; on builds whose symbols aren't published there, triage still identifies the stowed exception but can't fully expand it. Triage ignores debugger environment variables such as `_NT_SYMBOL_PATH`, so use `--symbols` to get OS symbols.
+The triage pass runs in a short-lived child process, because winapp's main process has already loaded the system `dbghelp.dll` and the modern `dbgeng.dll` can't bind alongside it. Decoding the stowed-exception structures also needs OS symbols (`combase.dll`), which `--symbols` downloads from the Microsoft public symbol server; on builds whose symbols aren't published there, triage still identifies the stowed exception but can't fully expand it.
 
 ## IDE setup
 
