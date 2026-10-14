@@ -1399,11 +1399,11 @@ internal partial class MsixService
                 .Select(file => file.RelativePath);
             await priService.MergeAssetsIntoPriAsync(layout, packageName, assets, taskContext, cancellationToken);
         }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
+        // Best effort: a failed merge only costs the unplated taskbar icon, so warn and keep launching.
+        // An untrusted makepri still stops the run.
+        catch (Exception ex) when (ex is not BuildToolSignatureException
+            && ex is IOException or UnauthorizedAccessException or System.Xml.XmlException
+                or System.ComponentModel.Win32Exception or InvalidOperationException or ArgumentException)
         {
             logger.LogWarning(ex, "{UISymbol} Could not add the manifest's logos to resources.pri: {Message}. The taskbar and Start icons may show on a colored background. Re-run with --verbose for details.", UiSymbols.Warning, ex.Message);
             taskContext.AddDebugMessage($"{UiSymbols.Warning} PRI merge error details: {ex}");

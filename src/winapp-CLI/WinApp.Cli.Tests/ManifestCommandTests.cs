@@ -66,9 +66,9 @@ public class ManifestCommandTests : BaseCommandTests
 
         // The taskbar draws the icon on an accent-colored plate unless it finds the unplated
         // variant for the current theme; the light taskbar only accepts altform-lightunplated.
-        Assert.IsTrue(File.Exists(Path.Combine(assetsDir, "AppList.targetsize-24_altform-unplated.png")),
+        Assert.IsTrue(File.Exists(Path.Join(assetsDir, "AppList.targetsize-24_altform-unplated.png")),
             "Dark-theme unplated taskbar icon should be generated");
-        Assert.IsTrue(File.Exists(Path.Combine(assetsDir, "AppList.targetsize-24_altform-lightunplated.png")),
+        Assert.IsTrue(File.Exists(Path.Join(assetsDir, "AppList.targetsize-24_altform-lightunplated.png")),
             "Light-theme unplated taskbar icon should be generated");
     }
 

@@ -46,9 +46,9 @@
 
     <!--
       A file-based app has no .ico of its own, so its window would show no icon in the title bar.
-      Give it a placeholder that matches winapp's default manifest logos, both embedded in the exe
-      and copied to Assets\AppIcon.ico (the path the WinUI templates use and that frameworks such as
-      Reactor read at run time). Set '#:property ApplicationIcon=path\to\app.ico' to use your own.
+      Give it a placeholder that matches winapp's default manifest logos. Set
+      '#:property ApplicationIcon=path\to\app.ico' to use your own. Either icon is embedded in the
+      exe and copied to Assets\AppIcon.ico (see the ItemGroup below).
     -->
     <_WinAppDefaultApplicationIcon Condition="'$(_WinAppFileBasedApp)' == 'true' And '$(ApplicationIcon)' == '' And '$(Win32Resource)' == ''">true</_WinAppDefaultApplicationIcon>
     <ApplicationIcon Condition="'$(_WinAppDefaultApplicationIcon)' == 'true'">$(MSBuildThisFileDirectory)WinAppDefault.ico</ApplicationIcon>
@@ -105,8 +105,13 @@
     <WinAppManifestPath Condition="'$(_WinAppFileBasedApp)' != 'true' And '$(WinAppManifestPath)' == '' And Exists('$(MSBuildProjectDirectory)\appxmanifest.xml')">$(MSBuildProjectDirectory)\appxmanifest.xml</WinAppManifestPath>
   </PropertyGroup>
 
-  <ItemGroup Condition="'$(_WinAppDefaultApplicationIcon)' == 'true'">
-    <Content Include="$(MSBuildThisFileDirectory)WinAppDefault.ico" Link="Assets\AppIcon.ico" CopyToOutputDirectory="PreserveNewest" Visible="false" />
+  <!--
+    Copy a file-based app's icon to Assets\AppIcon.ico, the path the WinUI templates use and that
+    frameworks such as Reactor read at run time for the title bar. A file-based app cannot declare
+    Content items itself, so without this an icon set through ApplicationIcon is only embedded in the exe.
+  -->
+  <ItemGroup Condition="'$(_WinAppFileBasedApp)' == 'true' And '$(ApplicationIcon)' != ''">
+    <Content Include="$(ApplicationIcon)" Link="Assets\AppIcon.ico" CopyToOutputDirectory="PreserveNewest" Visible="false" />
   </ItemGroup>
 
   <!--

@@ -854,15 +854,15 @@ $ExtraProps  </PropertyGroup>
         # Without an icon the window's title bar shows none (#1077).
 
         BeforeAll {
-            # Returns the Link of every Content item the targets add for the default icon.
-            function script:Get-DefaultIconContentLinks {
+            # Returns the source of every Content item the targets copy to Assets\AppIcon.ico.
+            function script:Get-AppIconContentSources {
                 param([string]$CsPath)
                 Push-Location (Split-Path -Path $CsPath -Parent)
                 try {
                     $out = & dotnet build $CsPath -getItem:Content -nologo 2>&1
                     if ($LASTEXITCODE -ne 0) { throw "Failed to read Content items:`n$($out -join [Environment]::NewLine)" }
                     $json = ($out -join "`n") | ConvertFrom-Json
-                    @($json.Items.Content | Where-Object { $_.Identity -like '*WinAppDefault.ico' } | ForEach-Object { $_.Link })
+                    @($json.Items.Content | Where-Object { $_.Link -eq 'Assets\AppIcon.ico' } | ForEach-Object { $_.Identity })
                 }
                 finally {
                     Pop-Location
@@ -875,14 +875,14 @@ $ExtraProps  </PropertyGroup>
             $icon = script:Get-FileBasedProperty -CsPath $cs -Property "ApplicationIcon"
             $icon | Should -Be (Join-Path (Split-Path $script:targetsPath -Parent) "WinAppDefault.ico")
             $icon | Should -Exist
-            script:Get-DefaultIconContentLinks -CsPath $cs | Should -Be @('Assets\AppIcon.ico')
+            script:Get-AppIconContentSources -CsPath $cs | Should -Be @($icon)
         }
 
-        It "Keeps an icon the app declares itself" {
+        It "Keeps an icon the app declares itself and copies it for the title bar" {
             $cs = script:New-FileBasedApp -CaseName "icon-authored" -Directives @(
                 'OutputType=Exe', 'TargetFramework=net10.0-windows10.0.19041.0', 'ApplicationIcon=mine.ico')
             script:Get-FileBasedProperty -CsPath $cs -Property "ApplicationIcon" | Should -Be "mine.ico"
-            script:Get-DefaultIconContentLinks -CsPath $cs | Should -BeNullOrEmpty
+            script:Get-AppIconContentSources -CsPath $cs | Should -Be @('mine.ico')
         }
 
         It "Does not add an icon when the app embeds its own Win32 resources" {
@@ -890,6 +890,7 @@ $ExtraProps  </PropertyGroup>
             $cs = script:New-FileBasedApp -CaseName "icon-win32res" -Directives @(
                 'OutputType=Exe', 'TargetFramework=net10.0-windows10.0.19041.0', 'Win32Resource=app.res')
             script:Get-FileBasedProperty -CsPath $cs -Property "ApplicationIcon" | Should -BeNullOrEmpty
+            script:Get-AppIconContentSources -CsPath $cs | Should -BeNullOrEmpty
         }
 
         It "Leaves a regular project's icon alone" {

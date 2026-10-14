@@ -2560,15 +2560,15 @@ public class MsixServiceIdentityTests : BaseCommandTests
         // A file-based WinUI app's build PRI only indexes XAML; the manifest logos must be added so the
         // shell finds the unplated taskbar variant (#1077).
         var srcDir = _tempDirectory.CreateSubdirectory("raw-input");
-        var srcManifest = new FileInfo(Path.Combine(srcDir.FullName, "Package.appxmanifest"));
+        var srcManifest = new FileInfo(Path.Join(srcDir.FullName, "Package.appxmanifest"));
         await File.WriteAllTextAsync(srcManifest.FullName, BuildRawManifest(), TestContext.CancellationToken);
-        await File.WriteAllTextAsync(Path.Combine(srcDir.FullName, "TestApp.exe"), "pe", TestContext.CancellationToken);
-        await File.WriteAllTextAsync(Path.Combine(srcDir.FullName, "TestApp.pri"), "pri-bytes", TestContext.CancellationToken);
+        await File.WriteAllTextAsync(Path.Join(srcDir.FullName, "TestApp.exe"), "pe", TestContext.CancellationToken);
+        await File.WriteAllTextAsync(Path.Join(srcDir.FullName, "TestApp.pri"), "pri-bytes", TestContext.CancellationToken);
         var assets = srcDir.CreateSubdirectory("Assets");
-        await File.WriteAllTextAsync(Path.Combine(assets.FullName, "logo.png"), "png", TestContext.CancellationToken);
-        await File.WriteAllTextAsync(Path.Combine(assets.FullName, "logo.targetsize-24_altform-unplated.png"), "png", TestContext.CancellationToken);
+        await File.WriteAllTextAsync(Path.Join(assets.FullName, "logo.png"), "png", TestContext.CancellationToken);
+        await File.WriteAllTextAsync(Path.Join(assets.FullName, "logo.targetsize-24_altform-unplated.png"), "png", TestContext.CancellationToken);
 
-        var output = new DirectoryInfo(Path.Combine(_tempDirectory.FullName, "layout"));
+        var output = new DirectoryInfo(Path.Join(_tempDirectory.FullName, "layout"));
 
         await _msixService.AddLooseLayoutIdentityAsync(
             srcManifest, srcDir, output, TestTaskContext, LayoutReconciliation.Exact, cancellationToken: TestContext.CancellationToken);
@@ -2578,7 +2578,7 @@ public class MsixServiceIdentityTests : BaseCommandTests
             .ToList();
         Assert.AreEqual(1, merges.Count, "The renamed build PRI should be merged with the manifest logos once.");
         StringAssert.Contains(merges[0].Arguments, "/in \"TestApp\"");
-        Assert.AreEqual("fake pri", await File.ReadAllTextAsync(Path.Combine(output.FullName, "resources.pri"), TestContext.CancellationToken),
+        Assert.AreEqual("fake pri", await File.ReadAllTextAsync(Path.Join(output.FullName, "resources.pri"), TestContext.CancellationToken),
             "resources.pri should be replaced by the merged PRI");
     }
 
