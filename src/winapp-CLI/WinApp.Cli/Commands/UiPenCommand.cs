@@ -189,14 +189,14 @@ internal class UiPenCommand : Command, IShortDescription, IHelpExamples
 
             if (path is null && at is null && !UiQueryOptions.HasQuery(parseResult, selectorStr))
             {
-                logger.LogError("{Symbol} Provide a target: a selector, --at x,y, or --path.", UiSymbols.Error);
+                logger.LogError("{Symbol} Provide a target: a selector, --type, --class-name, --at x,y, or --path.", UiSymbols.Error);
                 UiJsonError.Emit(json, UiJsonError.CodeInvalidArguments, "Provide a target: a selector, --type, --class-name, --at x,y, or --path.");
                 return 1;
             }
 
             if ((path is not null || at is not null) && UiQueryOptions.HasFilters(parseResult))
             {
-                return RejectInvalidArguments(parseResult, json, "--type, --root, and --class-name narrow a selector and cannot be combined with --at or --path.");
+                return RejectInvalidArguments(parseResult, json, "--type, --root, and --class-name pick an element and cannot be combined with --at or --path.");
             }
 
             // Missing-app check runs after all argument validation so invalid arg values return

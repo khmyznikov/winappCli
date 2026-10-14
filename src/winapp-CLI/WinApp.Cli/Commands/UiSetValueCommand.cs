@@ -80,11 +80,12 @@ internal class UiSetValueCommand : Command, IShortDescription, IHelpExamples
 
             if (value is null)
             {
-                // The value is the second positional, so with no selector it must follow an empty one.
-                var usage = UiQueryOptions.HasElementFilters(parseResult) && !string.IsNullOrWhiteSpace(selectorStr)
-                    ? "set-value \"\" <value> --type <type> -a <app>"
-                    : "set-value <selector> <value> -a <app>";
-                var message = $"A value is required. Usage: {UiCommandAdvice.Command(usage)}";
+                var message = $"A value is required. Usage: {UiCommandAdvice.Command("set-value <selector> <value> -a <app>")}";
+                if (UiQueryOptions.HasElementFilters(parseResult))
+                {
+                    // The value is the second positional, so with no selector it must follow an empty one.
+                    message += $". Without a selector: {UiCommandAdvice.Command("set-value \"\" <value> --type <type> -a <app>")}";
+                }
                 logger.LogError("{Symbol} {Message}", UiSymbols.Error, message);
                 UiJsonError.Emit(json, UiJsonError.CodeInvalidArguments, message);
                 return 1;

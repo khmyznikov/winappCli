@@ -134,11 +134,15 @@ public partial class UiCommandTests
     }
 
     [TestMethod]
-    public async Task FilterOnly_SetValue_OnePositionalPointsAtTheEmptySelector()
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task FilterOnly_SetValue_MissingValuePointsAtTheEmptySelector(bool onePositional)
     {
-        // "draft" binds to the selector slot, so the value is missing; the hint shows how to omit the selector.
-        var exit = await ParseAndInvokeWithCaptureAsync(GetRequiredService<UiSetValueCommand>(),
-            ["draft", "--class-name", "CalendarSurface", "-a", "TestApp"]);
+        // A lone "draft" binds to the selector slot, so the value is missing either way.
+        List<string> args = ["--class-name", "CalendarSurface", "-a", "TestApp"];
+        if (onePositional) { args.Insert(0, "draft"); }
+
+        var exit = await ParseAndInvokeWithCaptureAsync(GetRequiredService<UiSetValueCommand>(), [.. args]);
 
         Assert.AreEqual(1, exit);
         StringAssert.Contains(ConsoleStdErr.ToString(), "set-value \"\" <value>");
