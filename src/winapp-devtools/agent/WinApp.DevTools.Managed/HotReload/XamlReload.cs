@@ -281,14 +281,6 @@ internal static class XamlReload
                 // The code is in; the UI didn't rebuild. The markup is sent again with the next save.
                 ReportError("the UI could not be rebuilt: " + ex.Message);
             }
-            // x:Bind of components reloaded in place, once every constructor replay has finished: what they report
-            // belongs to this save.
-            while (s_deferredBinds is { Count: > 0 } deferred)
-            {
-                var next = deferred[0];
-                deferred.RemoveAt(0);
-                next();
-            }
             NotifyChangedProperties(request.ChangedProperties, request.RefreshBindings);
             if (request.Deltas.Count > 0)
             {
@@ -307,12 +299,37 @@ internal static class XamlReload
         {
             s_messages = null;
             s_errors = null;
-            s_deferredBinds = null;
         }
     }
 
-    /// <summary>During an update: x:Bind evaluations of components reloaded in place, run before the update reports back.</summary>
+    /// <summary>
+    /// During an update: x:Bind evaluations of components reloaded in place. They run in a dispatcher callback of their own
+    /// after the update (once every constructor replay has finished and the new trees have been queued for layout), as
+    /// they would on their own; the update reports back after them, so what they report belongs to this save.
+    /// </summary>
     private static List<Action>? s_deferredBinds;
+
+    /// <summary>Runs the evaluations <see cref="Apply"/> deferred, reporting into the same update's lists.</summary>
+    public static void ApplyDeferredBindings(List<string> messages, List<string> errors)
+    {
+        s_messages = messages;
+        s_errors = errors;
+        try
+        {
+            while (s_deferredBinds is { Count: > 0 } deferred)
+            {
+                var next = deferred[0];
+                deferred.RemoveAt(0);
+                next();
+            }
+        }
+        finally
+        {
+            s_deferredBinds = null;
+            s_messages = null;
+            s_errors = null;
+        }
+    }
 
     /// <summary>
     /// A library deployed while the app runs has its compiled markup embedded in its .pri, which only a build merges

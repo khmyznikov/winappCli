@@ -135,7 +135,7 @@ internal static class HotReloadAgent
                 "hello" => await XamlReload.InitializeAsync().ConfigureAwait(false) is { } error
                     ? new HotReloadResponse { Error = error }
                     : new HotReloadResponse { Ok = true, Capabilities = Capabilities(), BaseDirectory = AppContext.BaseDirectory, XamlReload = XamlReload.Supported, XamlReloadUnavailable = XamlReload.Unavailable },
-                "apply" => await XamlReload.OnUiThreadAsync(() => Apply(request)).ConfigureAwait(false),
+                "apply" => await ApplyAsync(request).ConfigureAwait(false),
                 _ => new HotReloadResponse { Error = $"unknown operation '{request.Op}'" },
             };
         }
@@ -143,6 +143,26 @@ internal static class HotReloadAgent
         {
             return new HotReloadResponse { Error = ex.GetBaseException().Message };
         }
+    }
+
+    /// <summary>The update on the UI thread, then (a separate callback, as on their own) x:Bind of what it reloaded in place.</summary>
+    private static async Task<HotReloadResponse> ApplyAsync(HotReloadRequest request)
+    {
+        HotReloadResponse response = new();
+        try
+        {
+            response = await XamlReload.OnUiThreadAsync(() => Apply(request)).ConfigureAwait(false);
+        }
+        finally
+        {
+            // Always drained, so evaluations a later load defers aren't left waiting for an update that never runs them.
+            await XamlReload.OnUiThreadAsync(() =>
+            {
+                XamlReload.ApplyDeferredBindings(response.Messages, response.Errors);
+                return true;
+            }).ConfigureAwait(false);
+        }
+        return response;
     }
 
     private static string Capabilities() =>
