@@ -2903,7 +2903,7 @@ public class MsixServiceIdentityTests : BaseCommandTests
         _fakeWindowsAppRuntime.InstallRuntimePackages =
             [("Microsoft.WindowsAppRuntime.2", "2.5.1.0"), ("Microsoft.WinAppRuntime.DDLM", "2.5.1.0")];
         _fakeWindowsAppRuntime.IsRuntimeRegisteredResult = true;
-        var vcxproj = new FileInfo(Path.Combine(_tempDirectory.FullName, "App.vcxproj"));
+        var vcxproj = new FileInfo(Path.Join(_tempDirectory.FullName, "App.vcxproj"));
 
         var prepared = await _msixService.EnsureWindowsAppRuntimeInstalledAsync(
             vcxproj, "x64", framework: null, noRestore: false, TestTaskContext,
@@ -2921,7 +2921,7 @@ public class MsixServiceIdentityTests : BaseCommandTests
         _fakeDotNet.PackageListResult = new DotNetPackageListJson([new DotNetProject([new DotNetFramework("native", [], [])])]);
         var packageDir = _tempDirectory.CreateSubdirectory(@"packages\Microsoft.WindowsAppSDK.2.5.1");
         _fakeWindowsAppRuntime.MsixDirectory = null;
-        var vcxproj = new FileInfo(Path.Combine(_tempDirectory.FullName, "App.vcxproj"));
+        var vcxproj = new FileInfo(Path.Join(_tempDirectory.FullName, "App.vcxproj"));
 
         var ex = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
             _msixService.EnsureWindowsAppRuntimeInstalledAsync(
@@ -2936,7 +2936,7 @@ public class MsixServiceIdentityTests : BaseCommandTests
     public async Task EnsureWindowsAppRuntimeInstalledAsync_NoWindowsAppSdk_IsSkipped()
     {
         _fakeDotNet.PackageListResult = new DotNetPackageListJson([new DotNetProject([new DotNetFramework("native", [], [])])]);
-        var vcxproj = new FileInfo(Path.Combine(_tempDirectory.FullName, "App.vcxproj"));
+        var vcxproj = new FileInfo(Path.Join(_tempDirectory.FullName, "App.vcxproj"));
 
         var prepared = await _msixService.EnsureWindowsAppRuntimeInstalledAsync(
             vcxproj, "x64", framework: null, noRestore: false, TestTaskContext, cancellationToken: TestContext.CancellationToken);

@@ -256,7 +256,7 @@ public class RunCommandProjectModeTests : BaseCommandTests
         var targetDir = CreateTargetDir(withManifest: false);
         var packageDir = Path.Join(_tempDirectory.FullName, "packages", "Microsoft.WindowsAppSDK.Runtime.2.5.1");
         _fakeProjectRunService.BuildOutcome = new ProjectBuildOutcome(
-            new ProjectRunResolution(project, targetDir.FullName, Path.Combine(targetDir.FullName, "App.exe"), ProjectPackaging.Unpackaged, false, "x64",
+            new ProjectRunResolution(project, targetDir.FullName, Path.Join(targetDir.FullName, "App.exe"), ProjectPackaging.Unpackaged, false, "x64",
                 WindowsAppSdkPackageDir: packageDir), 0);
         var command = GetRequiredService<RunCommand>();
 
