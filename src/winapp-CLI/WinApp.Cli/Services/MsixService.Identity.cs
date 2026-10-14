@@ -360,10 +360,12 @@ internal partial class MsixService
 
         // If there is a pri file named after the executable, rename it to resources.pri
         var priFilePath = Path.Combine(outputAppXDirectory.FullName, Path.GetFileNameWithoutExtension(executableMatch.Name) + ".pri");
+        var renamedBuildPri = false;
         if (File.Exists(priFilePath))
         {
             var resourcesPriPath = Path.Combine(outputAppXDirectory.FullName, "resources.pri");
             File.Move(priFilePath, resourcesPriPath, overwrite: true);
+            renamedBuildPri = true;
             taskContext.AddDebugMessage($"{UiSymbols.Files} Renamed {Path.GetFileName(priFilePath)} to resources.pri");
         }
 
@@ -437,6 +439,14 @@ internal partial class MsixService
         else
         {
             taskContext.AddDebugMessage($"{UiSymbols.Warning} Manifest directory and target directory are the same, skipping assets copy");
+        }
+
+        // The build's own PRI (e.g. a WinUI app's XAML resources) knows nothing about the manifest's logos.
+        // Without them indexed, the shell can't find the unplated taskbar variant and draws the logo on an
+        // accent-colored plate (#1077).
+        if (renamedBuildPri)
+        {
+            await MergeManifestAssetsIntoPriAsync(outputAppXDirectory, copiedAppxManifestPath, manifestContent, taskContext, cancellationToken);
         }
 
         {
@@ -1377,6 +1387,27 @@ internal partial class MsixService
         }
 
         RemoveCompetingLayoutManifests(outputAppXDirectory, taskContext);
+    }
+
+    private async Task MergeManifestAssetsIntoPriAsync(
+        DirectoryInfo layout, FileInfo stagedManifest, string manifestContent, TaskContext taskContext, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var packageName = ParseAppxManifestAsync(manifestContent).PackageName;
+            var assets = MrtAssetHelper.GetExpandedManifestReferencedFiles(stagedManifest, taskContext)
+                .Select(file => file.RelativePath);
+            await priService.MergeAssetsIntoPriAsync(layout, packageName, assets, taskContext, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "{UISymbol} Could not add the manifest's logos to resources.pri: {Message}. The taskbar and Start icons may show on a colored background. Re-run with --verbose for details.", UiSymbols.Warning, ex.Message);
+            taskContext.AddDebugMessage($"{UiSymbols.Warning} PRI merge error details: {ex}");
+        }
     }
 
     /// <summary>

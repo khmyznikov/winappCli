@@ -850,6 +850,67 @@ $ExtraProps  </PropertyGroup>
         }
     }
 
+    Context "Default application icon" {
+        # Without an icon the window's title bar shows none (#1077).
+
+        BeforeAll {
+            # Returns the Link of every Content item the targets add for the default icon.
+            function script:Get-DefaultIconContentLinks {
+                param([string]$CsPath)
+                Push-Location (Split-Path -Path $CsPath -Parent)
+                try {
+                    $out = & dotnet build $CsPath -getItem:Content -nologo 2>&1
+                    if ($LASTEXITCODE -ne 0) { throw "Failed to read Content items:`n$($out -join [Environment]::NewLine)" }
+                    $json = ($out -join "`n") | ConvertFrom-Json
+                    @($json.Items.Content | Where-Object { $_.Identity -like '*WinAppDefault.ico' } | ForEach-Object { $_.Link })
+                }
+                finally {
+                    Pop-Location
+                }
+            }
+        }
+
+        It "Gives a file-based app the shipped placeholder icon" {
+            $cs = script:New-FileBasedApp -CaseName "icon-default"
+            $icon = script:Get-FileBasedProperty -CsPath $cs -Property "ApplicationIcon"
+            $icon | Should -Be (Join-Path (Split-Path $script:targetsPath -Parent) "WinAppDefault.ico")
+            $icon | Should -Exist
+            script:Get-DefaultIconContentLinks -CsPath $cs | Should -Be @('Assets\AppIcon.ico')
+        }
+
+        It "Keeps an icon the app declares itself" {
+            $cs = script:New-FileBasedApp -CaseName "icon-authored" -Directives @(
+                'OutputType=Exe', 'TargetFramework=net10.0-windows10.0.19041.0', 'ApplicationIcon=mine.ico')
+            script:Get-FileBasedProperty -CsPath $cs -Property "ApplicationIcon" | Should -Be "mine.ico"
+            script:Get-DefaultIconContentLinks -CsPath $cs | Should -BeNullOrEmpty
+        }
+
+        It "Does not add an icon when the app embeds its own Win32 resources" {
+            # The compiler rejects an icon combined with a .res file.
+            $cs = script:New-FileBasedApp -CaseName "icon-win32res" -Directives @(
+                'OutputType=Exe', 'TargetFramework=net10.0-windows10.0.19041.0', 'Win32Resource=app.res')
+            script:Get-FileBasedProperty -CsPath $cs -Property "ApplicationIcon" | Should -BeNullOrEmpty
+        }
+
+        It "Leaves a regular project's icon alone" {
+            $dir = Join-Path $script:fbRoot "icon-csproj"
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            $projPath = Join-Path $dir "test.csproj"
+            Set-Content -Path $projPath -Value @"
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <OutputType>WinExe</OutputType>
+  </PropertyGroup>
+  <Import Project="$($script:propsPath)" />
+  <Import Project="$($script:targetsPath)" />
+</Project>
+"@
+            $out = & dotnet msbuild $projPath -getProperty:ApplicationIcon -nologo 2>&1
+            ($out | Select-Object -Last 1).ToString().Trim() | Should -BeNullOrEmpty
+        }
+    }
+
     Context "Gate activation" {
         It "Activates without an authored manifest" {
             # The whole point of the feature: a file-based app has no manifest by design, and
