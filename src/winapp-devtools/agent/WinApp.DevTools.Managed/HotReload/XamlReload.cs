@@ -31,6 +31,9 @@ internal static class XamlReload
     private const BindingFlags InstanceMembers = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
 
     private static readonly Dictionary<string, ComponentManifest> Manifests = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>SPIKE (S1/S2): markup comes from the real XAML compiler's .xbf, wired by the compiled code alone.</summary>
+    private static readonly bool RealCompilerSpike = Environment.GetEnvironmentVariable("WINAPP_HOT_RELOAD_REAL_COMPILER") == "1";
     private static readonly List<WeakReference<Window>> KnownWindows = [];
     private static readonly ConditionalWeakTable<object, Dictionary<string, Delegate>> RootHandlers = new();
     private static XamlHotReloadService? s_service;
@@ -93,6 +96,11 @@ internal static class XamlReload
         s_service = service;
         Hook.Attached = OnHook;
         service.AdviseComponentLoaded(OnLoaded);
+        if (RealCompilerSpike)
+        {
+            // SPIKE: types come only from the app's own compiled metadata provider (updated by edit and continue).
+            return null;
+        }
         s_provider = new ReflectionMetadataProvider();
         var provider = WinRT.MarshalInterface<IXamlMetadataProvider>.FromManaged(s_provider);
         try
@@ -233,6 +241,22 @@ internal static class XamlReload
                         ReportError(Describe(ex, markup.Uri));
                         continue;
                     }
+                }
+                if (markup.Xbf is { } xbf)
+                {
+                    // SPIKE: the XAML compiler's own .xbf; the page's compiled InitializeComponent and Connect do the rest.
+                    Manifests.Remove(markup.Uri);
+                    if (markup.Manifest.ClassName.Length > 0)
+                    {
+                        ClassUris[markup.Manifest.ClassName] = markup.Uri;
+                    }
+                    s_service!.RemoveComponentMarkup(markup.Uri);
+                    var binaryResult = s_service!.SetComponentMarkup(markup.Uri, binary: true, xbf);
+                    if (binaryResult < 0)
+                    {
+                        ReportError($"{markup.Uri}: {Marshal.GetExceptionForHR(binaryResult)?.Message}");
+                    }
+                    continue;
                 }
                 if (markup.Kind == MarkupKind.Component)
                 {
@@ -773,6 +797,64 @@ internal static class XamlReload
         }
     }
 
+    /// <summary>
+    /// SPIKE: simulates a reset hook the XAML compiler could generate (a MetadataUpdateHandler): the app's XamlTypeInfo
+    /// provider builds its type tables once, so a type added by an update isn't found, and an inserted type shifts the
+    /// indexes the updated CreateXamlType uses. A new provider builds them again with the updated code.
+    /// </summary>
+    public static void SpikeResetTypeInfo()
+    {
+        if (RealCompilerSpike && Application.Current is { } app && app.GetType().GetField("__appProvider", InstanceMembers) is { } field)
+        {
+            field.SetValue(app, null);
+            HotReloadAgent.Log("spike: reset the app's XamlTypeInfo provider");
+        }
+    }
+
+    /// <summary>
+    /// SPIKE: before a delta, stops the compiled x:Bind of the components about to be re-initialized, while their code still
+    /// matches their fields (after the delta, an old Bindings object runs the new code against fields it never set).
+    /// </summary>
+    public static void SpikeStopTracking(IReadOnlyCollection<string> types)
+    {
+        if (!RealCompilerSpike || types.Count == 0)
+        {
+            return;
+        }
+        void Stop(object component)
+        {
+            if (types.Contains(component.GetType().FullName!) && component.GetType().GetField("Bindings", InstanceMembers)?.GetValue(component) is { } bindings)
+            {
+                try
+                {
+                    bindings.GetType().GetMethod("StopTracking")?.Invoke(bindings, null);
+                    HotReloadAgent.Log($"spike: stopped tracking {component.GetType().Name} {bindings.GetType().Name}#{System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(bindings)}");
+                }
+                catch (Exception ex)
+                {
+                    HotReloadAgent.Log($"spike: StopTracking failed: {ex.GetBaseException().Message}");
+                }
+            }
+        }
+        void Walk(DependencyObject? element)
+        {
+            if (element is null)
+            {
+                return;
+            }
+            Stop(element);
+            for (var i = 0; i < Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(element); i++)
+            {
+                Walk(Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(element, i));
+            }
+        }
+        foreach (var window in LiveWindows())
+        {
+            Stop(window);
+            Walk(window.Content);
+        }
+    }
+
     /// <summary>Runs the component's x:Bind again: the compiled Bindings object, or the stand-in live reload installed.</summary>
     private static void UpdateCompiledBindings(object component)
     {
@@ -780,6 +862,16 @@ internal static class XamlReload
         {
             var bindings = component.GetType().GetField("Bindings", InstanceMembers)?.GetValue(component);
             bindings?.GetType().GetMethod("Update")?.Invoke(bindings, null);
+            if (RealCompilerSpike)
+            {
+                HotReloadAgent.Log($"spike: {component.GetType().Name}.Bindings field={(component.GetType().GetField("Bindings", InstanceMembers) is not null)} value={bindings?.GetType().FullName ?? "null"}");
+                foreach (var property in component.GetType().GetProperties(InstanceMembers).Where(p => typeof(System.ComponentModel.INotifyPropertyChanged).IsAssignableFrom(p.PropertyType) && p.GetIndexParameters().Length == 0))
+                {
+                    var source = property.GetValue(component);
+                    var handlers = source is null ? null : LiveObjects.Fields(source.GetType()).FirstOrDefault(f => f.Name == "PropertyChanged")?.GetValue(source) as Delegate;
+                    HotReloadAgent.Log($"spike: {component.GetType().Name}.{property.Name}.PropertyChanged has {handlers?.GetInvocationList().Length ?? 0} handler(s): {string.Join(", ", handlers?.GetInvocationList().Select(d => d.Target?.GetType().Name + "#" + System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(d.Target!)) ?? [])}");
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -1536,6 +1628,15 @@ internal static class XamlReload
             if (Manifests.TryGetValue(uri, out var manifest))
             {
                 Wire(component, manifest);
+            }
+            else if (RealCompilerSpike && (component as FrameworkElement ?? ContentRoot(component) as FrameworkElement) is { } spikeRoot && s_dispatcher is { } spikeDispatcher)
+            {
+                // SPIKE: re-initialized in place, so the root's Loading (which runs the compiled Bindings.Initialize) won't fire.
+                HotReloadAgent.Log($"spike: {component.GetType().Name} root loaded={spikeRoot.IsLoaded}");
+                if (spikeRoot.IsLoaded)
+                {
+                    spikeDispatcher.TryEnqueue(DispatcherQueuePriority.Low, () => UpdateCompiledBindings(component));
+                }
             }
             CodeAddedItems.RecordMarkup(component);
             Stamp(component);

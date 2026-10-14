@@ -27,7 +27,7 @@ internal sealed record SaveResult(Outcome Outcome, string Detail, IReadOnlyList<
 /// Owns the Roslyn view of the running app and turns each batch of saved files into one live update:
 /// an edit-and-continue delta for C#, runtime-parseable markup for XAML, and the instances to rebuild.
 /// </summary>
-internal sealed class HotReloadSession
+internal sealed partial class HotReloadSession
 {
     private const string ExplicitInterfaceCapability = "AddExplicitInterfaceImplementation";
     private static readonly string[] ExcludedDirectories = ["bin", "obj", ".git", ".vs", "packages", "node_modules"];
@@ -118,6 +118,11 @@ internal sealed class HotReloadSession
         var info = CreateProjectInfo(workspace, options.ProjectFile, cscArgs);
         info = info.WithCompilationOutputInfo(info.CompilationOutputInfo.WithAssemblyPath(SnapshotBaseline(info.CompilationOutputInfo.AssemblyPath!, options.PipeName)));
         info = info.WithDocuments(info.Documents.Select(document => AsBuilt(document, options.CscArgsFile, projectDirectory)));
+        if (RealCompiler)
+        {
+            // SPIKE: the per-save builds overwrite obj; the baseline keeps the text the running binary was built from.
+            info = info.WithDocuments(info.Documents.Select(document => document.FilePath is { } p && IsGenerated(p) ? Pinned(document) : document));
+        }
         var solution = workspace.AddProject(info).Solution;
         var capabilities = (hello.Capabilities ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries).ToImmutableArray();
         var newTypeCapabilities = capabilities.Add(ExplicitInterfaceCapability);
@@ -127,7 +132,10 @@ internal sealed class HotReloadSession
 
         session = new HotReloadSession(options, agent, workspace, info.Id, solution, enc, hello.BaseDirectory ?? "", cscArgs) { _xamlReload = hello.XamlReload, XamlReloadUnavailable = hello.XamlReloadUnavailable };
         await session.LoadComponentsAsync(cancellationToken).ConfigureAwait(false);
-        session._warmUp = Task.Run(() => session.WarmUpAsync(cancellationToken), cancellationToken);
+        if (!RealCompiler)
+        {
+            session._warmUp = Task.Run(() => session.WarmUpAsync(cancellationToken), cancellationToken);
+        }
         return session;
     }
 
@@ -461,6 +469,10 @@ internal sealed class HotReloadSession
     {
         await _warmUp.ConfigureAwait(false);
         _phase.Restart();
+        if (RealCompiler && !paths.Any(IsBuildFile) && paths.All(p => p.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) || p.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase)))
+        {
+            return await ProcessRealCompilerAsync(paths, cancellationToken).ConfigureAwait(false);
+        }
         var batch = paths.Select(Relative).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         if (paths.FirstOrDefault(p => p.EndsWith(".appxmanifest", StringComparison.OrdinalIgnoreCase)) is { } manifest)
         {

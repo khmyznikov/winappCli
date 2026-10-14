@@ -172,6 +172,7 @@ internal static class HotReloadAgent
     {
         var response = new HotReloadResponse { Ok = true };
         var updatedTypes = new List<Type>();
+        XamlReload.SpikeStopTracking(request.RefreshTypes);
         foreach (var delta in request.Deltas)
         {
             var assembly = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(a => !a.IsDynamic && a.ManifestModule.ModuleVersionId == delta.ModuleId);
@@ -196,6 +197,7 @@ internal static class HotReloadAgent
         }
         if (request.Deltas.Count > 0)
         {
+            XamlReload.SpikeResetTypeInfo();
             InvokeUpdateHandlers([.. updatedTypes]);
         }
         foreach (var initializer in request.Initializers)

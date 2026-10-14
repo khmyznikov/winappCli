@@ -99,11 +99,13 @@ internal sealed class EncService
         object? Get(string name) => updatesType.GetProperty(name)!.GetValue(updates);
 
         var errors = ((ImmutableArray<Diagnostic>)Get("PersistentDiagnostics")!).Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
+        LastWarnings = [.. ((ImmutableArray<Diagnostic>)Get("PersistentDiagnostics")!).Where(d => d.Severity != DiagnosticSeverity.Error)];
         var rude = new List<Diagnostic>();
         foreach (var entry in (IEnumerable)Get("TransientDiagnostics")!)
         {
             var diagnostics = (ImmutableArray<Diagnostic>)entry.GetType().GetField("Item2")!.GetValue(entry)!;
             rude.AddRange(diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error));
+            LastWarnings.AddRange(diagnostics.Where(d => d.Severity != DiagnosticSeverity.Error));
         }
         var deltas = new List<EncDelta>();
         foreach (var update in (IEnumerable)Get("ProjectUpdates")!)
@@ -116,6 +118,9 @@ internal sealed class EncService
         var restart = ((IDictionary)Get("ProjectsToRestart")!).Count > 0 || ((ICollection)Get("ProjectsToRebuild")!).Count > 0;
         return new EncResult(Get("Status")!.ToString()!, errors, rude, deltas, restart);
     }
+
+    /// <summary>SPIKE: the warnings of the last update (ENC1005 marks documents out of sync with the build).</summary>
+    public List<Diagnostic> LastWarnings { get; private set; } = [];
 
     public void CapabilitiesChanged() => _type.GetMethod("CapabilitiesChanged")!.Invoke(_service, null);
 
