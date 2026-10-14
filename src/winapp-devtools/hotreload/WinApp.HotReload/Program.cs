@@ -212,6 +212,9 @@ internal static class Program
                 }
 
                 List<string> changed;
+                // A save can show up while it's still being written (truncated, then filled): an empty or half-written
+                // file would look like code deleted. Each file is read once it stops changing.
+                await WaitUntilWrittenAsync(batch, cts.Token).ConfigureAwait(false);
                 lock (hashes)
                 {
                     changed = batch.Where(path =>
@@ -349,6 +352,53 @@ internal static class Program
         (path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".resw", StringComparison.OrdinalIgnoreCase) ||
          path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".appxmanifest", StringComparison.OrdinalIgnoreCase) ||
          HotReloadSession.IsAsset(path)) && session.IsWatched(path);
+
+    /// <summary>
+    /// Waits (up to about 2 seconds) until each file's size and write time hold still for 50 ms, and an empty source file
+    /// for a further 500 ms: a save is often a truncate followed by a write, and a busy machine can deliver the truncate
+    /// first. A file that really was emptied is processed after that.
+    /// </summary>
+    private static async Task WaitUntilWrittenAsync(IReadOnlyCollection<string> files, CancellationToken cancellationToken)
+    {
+        static (long Length, DateTime Written) Stamp(string path)
+        {
+            try
+            {
+                var info = new FileInfo(path);
+                return info.Exists ? (info.Length, info.LastWriteTimeUtc) : (-1, default);
+            }
+            catch (IOException)
+            {
+                return (-2, DateTime.UtcNow);
+            }
+        }
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        var stamps = files.ToDictionary(f => f, Stamp, StringComparer.OrdinalIgnoreCase);
+        var emptySince = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+        while (DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+            var settled = true;
+            foreach (var file in files)
+            {
+                var now = Stamp(file);
+                if (now != stamps[file])
+                {
+                    stamps[file] = now;
+                    settled = false;
+                }
+                if (now.Length == 0 && (file.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase)))
+                {
+                    var since = emptySince.TryGetValue(file, out var first) ? first : emptySince[file] = DateTime.UtcNow;
+                    settled &= DateTime.UtcNow - since >= TimeSpan.FromMilliseconds(500);
+                }
+            }
+            if (settled)
+            {
+                return;
+            }
+        }
+    }
 
     private static string Hash(string path)
     {
