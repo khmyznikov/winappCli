@@ -88,6 +88,74 @@ struct CachedFile
 std::map<std::wstring, CachedFile> g_files;
 SRWLOCK g_lock = SRWLOCK_INIT;
 
+// Not the app's own source, the same folders the CLI's comment resolver skips: build output, the XAML compiler's
+// copies of each page, restored packages and tool folders.
+bool IsSkippedSourceFolder(const wchar_t* name)
+{
+    for (const auto skipped : { L"bin", L"obj", L"Generated Files", L"packages", L"node_modules", L".git", L".vs" })
+        if (_wcsicmp(name, skipped) == 0) return true;
+    return false;
+}
+
+SRWLOCK g_indexLock = SRWLOCK_INIT;
+std::wstring g_indexRoot;
+std::vector<std::wstring> g_indexedXaml;   // root-relative, '/'-separated, lowercase
+
+// The .xaml files under the source root, listed once per root. Reparse points are not followed, so every entry stays
+// inside the root.
+void IndexXaml_nolock(const std::wstring& root)
+{
+    g_indexRoot = root;
+    g_indexedXaml.clear();
+    std::vector<std::wstring> pending{ L"" };
+    size_t visited = 0;
+    while (!pending.empty() && visited < 200000) {
+        const std::wstring relative = pending.back();
+        pending.pop_back();
+        WIN32_FIND_DATAW data{};
+        HANDLE find = FindFirstFileExW((root + L"\\" + relative + L"*").c_str(), FindExInfoBasic, &data,
+            FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
+        if (find == INVALID_HANDLE_VALUE) continue;
+        do {
+            ++visited;
+            const std::wstring name = data.cFileName;
+            if (name == L"." || name == L".." || (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) continue;
+            if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                if (!IsSkippedSourceFolder(name.c_str())) pending.push_back(relative + name + L"\\");
+            } else if (name.size() > 5 && _wcsicmp(name.c_str() + name.size() - 5, L".xaml") == 0) {
+                std::wstring entry = relative + name;
+                for (auto& c : entry) c = c == L'\\' ? L'/' : static_cast<wchar_t>(towlower(c));
+                g_indexedXaml.push_back(std::move(entry));
+            }
+        } while (FindNextFileW(find, &data));
+        FindClose(find);
+    }
+}
+
+// The one .xaml file under the root whose path ends with `relative`, as the CLI resolves a comment's file; empty when
+// none or several do.
+std::wstring FindXamlUnderRoot(const std::wstring& root, const std::wstring& relative)
+{
+    std::wstring key = relative;
+    for (auto& c : key) c = static_cast<wchar_t>(towlower(c));
+    if (key.size() <= 5 || key.compare(key.size() - 5, 5, L".xaml") != 0 || key.find(L"..") != std::wstring::npos) return L"";
+    const std::wstring suffix = L"/" + key;
+    std::wstring found;
+    AcquireSRWLockExclusive(&g_indexLock);
+    if (g_indexRoot != root) IndexXaml_nolock(root);
+    int matches = 0;
+    for (const auto& entry : g_indexedXaml) {
+        if (entry == key || (entry.size() > suffix.size() && entry.compare(entry.size() - suffix.size(), suffix.size(), suffix) == 0)) {
+            if (++matches > 1) break;
+            found = entry;
+        }
+    }
+    ReleaseSRWLockExclusive(&g_indexLock);
+    if (matches != 1) return L"";
+    std::wstring path;
+    return DevToolsSourcePath_ResolveExisting(root, L"ms-appx:///" + found, &path) ? path : L"";
+}
+
 // Adapt SourceInfo's app-relative spellings to the shared canonical source resolver.
 std::wstring UriToDiskPath(const std::wstring& uri)
 {
@@ -99,7 +167,7 @@ std::wstring UriToDiskPath(const std::wstring& uri)
     if (rel.empty()) return L"";
     std::replace(rel.begin(), rel.end(), L'\\', L'/');
     std::wstring path;
-    return DevToolsSourcePath_ResolveExisting(g_sourceRoot, kPrefix + rel, &path) ? path : L"";
+    return DevToolsSourcePath_ResolveExisting(g_sourceRoot, kPrefix + rel, &path) ? path : FindXamlUnderRoot(g_sourceRoot, rel);
 }
 
 unsigned long long LastWriteUnix(const std::wstring& path)
@@ -373,6 +441,10 @@ void DevToolsAuthored_Init(const std::wstring& sourceRoot, unsigned long long bu
     g_coordinateExclusions.clear();
     g_excludedSourcePaths.clear();
     ReleaseSRWLockExclusive(&g_lock);
+    AcquireSRWLockExclusive(&g_indexLock);
+    g_indexRoot.clear();
+    g_indexedXaml.clear();
+    ReleaseSRWLockExclusive(&g_indexLock);
 }
 
 bool DevToolsAuthored_HasSourceRoot()

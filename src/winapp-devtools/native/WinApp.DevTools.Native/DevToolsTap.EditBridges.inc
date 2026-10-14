@@ -596,16 +596,15 @@ static bool Route1Bind(InstanceHandle wire, const std::wstring& op, const std::w
 // the UI thread, so no RunOnUiThread hop.
 // UI thread only. Shows where the declaration opens in the authored file when the build proves it; the runtime's
 // own line points somewhere inside the tag and is kept only when no verified mapping exists.
+// The file and the declaration's confirmed line (DevToolsAuthored_DisplayLine), as `inspect` and `get-source` show them.
 static bool ReadDisplaySourceInfo(InstanceHandle ih, std::wstring& file, unsigned int& line, unsigned int& column)
 {
     if (!ReadElementSourceInfo(ih, file, line, column)) return false;
     std::wstring xaml;
     DevToolsAuthoredLocation location;
-    if (ReadElementAuthoredContext(ih, file, line, column, &xaml, &location) == DevToolsAuthoredState::Available &&
-        location.mapped) {
-        line = location.line;
-        column = location.column;
-    }
+    const auto state = ReadElementAuthoredContext(ih, file, line, column, &xaml, &location);
+    line = DevToolsAuthored_DisplayLine(state, location);
+    column = line ? location.column : 0;
     return true;
 }
 

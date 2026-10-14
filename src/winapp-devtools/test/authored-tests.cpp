@@ -767,6 +767,57 @@ static void Test_ExactCommentTextAndHistoricalLabels()
         "the off-screen footnote agrees in number");
 }
 
+// An app attached with the repository as its source root reports ms-appx:///TermControl.xaml for a file deep in the
+// repository. The CLI's comment resolver finds it by its path under the root, so the engine must too, or the comment
+// panel says "Not linked to source" for a comment `comments list` places.
+static void Test_SourceUnderTheRootIsFoundByItsPath()
+{
+    const auto root = MakeFixture();
+    const auto write = [](const std::wstring& path) {
+        std::ofstream output(path, std::ios::binary); output << "<UserControl>\r\n  <Grid/>\r\n</UserControl>\r\n";
+    };
+    for (const auto dir : { L"\\src", L"\\src\\Control", L"\\src\\Control\\obj", L"\\src\\Other", L"\\src\\Other\\Generated Files" })
+        CreateDirectoryW((root + dir).c_str(), nullptr);
+    write(root + L"\\src\\Control\\TermControl.xaml");
+    write(root + L"\\src\\Control\\obj\\TermControl.xaml");
+    write(root + L"\\src\\Other\\Generated Files\\TermControl.xaml");
+    write(root + L"\\src\\Control\\Shared.xaml");
+    write(root + L"\\src\\Other\\Shared.xaml");
+    DevToolsAuthored_Init(root, 0);
+
+    std::wstring text;
+    ACheck(DevToolsAuthored_IsProjectSource(L"ms-appx:///TermControl.xaml"),
+        "a file deep under the source root is found by its name, skipping build output and generated copies");
+    ACheck(DevToolsAuthored_ReadElement(L"ms-appx:///TermControl.xaml", 1, &text) == DevToolsAuthoredState::Available &&
+        text == L"<UserControl>", "its declarations are read from that file");
+    ACheck(DevToolsAuthored_IsProjectSource(L"ms-appx:///Control/TermControl.xaml"),
+        "a partial path matches the end of the file's path under the root");
+    ACheck(!DevToolsAuthored_IsProjectSource(L"ms-appx:///Shared.xaml"), "a name two project files share is not guessed");
+    ACheck(!DevToolsAuthored_IsProjectSource(L"ms-appx:///Missing.xaml"), "a file that isn't under the root is not linked");
+    ACheck(DevToolsAuthored_IsProjectSource(L"ms-appx:///MainWindow.xaml"), "a file at the root still resolves directly");
+
+    // Without a build map the runtime line is the compiled XAML's (here the start tag's last line), so the panel shows
+    // the file without a line, as inspect and get-source do.
+    { std::ofstream output(root + L"\\src\\Control\\Button.xaml", std::ios::binary);
+      output << "<UserControl>\r\n  <Button\r\n      x:Name=\"Go\"\r\n      Content=\"Go\" />\r\n</UserControl>\r\n"; }
+    DevToolsAuthored_Init(root, 0);
+    DevToolsAuthoredLocation location;
+    const auto state = DevToolsAuthored_ReadElement(L"ms-appx:///Button.xaml", 4, &text, 0, L"Button", L"Go", &location);
+    ACheck(state == DevToolsAuthoredState::Available && !location.mapped && DevToolsAuthored_DisplayLine(state, location) == 0,
+        "an unconfirmed runtime line is not shown");
+    location.mapped = true; location.line = 2;
+    ACheck(DevToolsAuthored_DisplayLine(DevToolsAuthoredState::Available, location) == 2, "a line the build map confirms is shown");
+    DeleteFileW((root + L"\\src\\Control\\Button.xaml").c_str());
+
+    DevToolsAuthored_Init(L"", 0);
+    for (const auto file : { L"\\src\\Control\\TermControl.xaml", L"\\src\\Control\\obj\\TermControl.xaml",
+            L"\\src\\Other\\Generated Files\\TermControl.xaml", L"\\src\\Control\\Shared.xaml", L"\\src\\Other\\Shared.xaml",
+            L"\\MainWindow.xaml" })
+        DeleteFileW((root + file).c_str());
+    for (const auto dir : { L"\\src\\Other\\Generated Files", L"\\src\\Other", L"\\src\\Control\\obj", L"\\src\\Control", L"\\src", L"" })
+        RemoveDirectoryW((root + dir).c_str());
+}
+
 int RunAuthoredTests()
 {
     std::printf("DevToolsAuthored tests -- one source read serves property values and full XAML\n");
@@ -778,6 +829,7 @@ int RunAuthoredTests()
     Test_CanonicalContainmentAndSpellings();
     Test_SourceQualifiedAnchors();
     Test_ExactCommentTextAndHistoricalLabels();
+    Test_SourceUnderTheRootIsFoundByItsPath();
     return g_authoredFailures;
 }
 

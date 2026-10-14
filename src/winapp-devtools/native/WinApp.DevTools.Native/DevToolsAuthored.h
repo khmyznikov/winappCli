@@ -47,6 +47,14 @@ DevToolsAuthoredState DevToolsAuthored_ReadElement(const std::wstring& fileUri, 
     unsigned int column = 0, const std::wstring& type = L"", const std::wstring& name = L"",
     DevToolsAuthoredLocation* authoredLocation = nullptr);
 
+// The declaration's line to show for an element, as `inspect` and `get-source` show it: only one the build map
+// confirms. An unconfirmed runtime line is the compiled XAML's and can point past the declaration. Zero when unknown.
+inline unsigned int DevToolsAuthored_DisplayLine(DevToolsAuthoredState state, const DevToolsAuthoredLocation& location)
+{
+    return (state == DevToolsAuthoredState::Available || state == DevToolsAuthoredState::Likely) && location.mapped
+        ? location.line : 0;
+}
+
 // The confirmed declaration for a runtime position: only a verified build map with an unchanged source file answers.
 // Reads no source text, so it is cheap enough to call for every element of a tree.
 bool DevToolsAuthored_Locate(const std::wstring& fileUri, unsigned int line, unsigned int column,

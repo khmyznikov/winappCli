@@ -250,17 +250,19 @@ internal sealed class CommentAnchorResolver(ILogger<CommentAnchorResolver>? logg
         {
             return null;
         }
-        if (fromUri is null && !relative.Contains('\\'))
-        {
-            var matches = Directory.EnumerateFiles(root, "*.xaml",
-                new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = false })
-                .Where(p => !IsSkipped(root, p) && Path.GetFileName(p).Equals(relative, StringComparison.OrdinalIgnoreCase))
-                .Take(2).ToArray();
-            return matches.Length == 1 ? matches[0] : null;
-        }
         var candidate = Path.GetFullPath(Path.Combine(root, relative));
-        return !PathSafety.HasReparsePointOnPath(candidate, Path.GetFullPath(root)) && File.Exists(candidate)
-            ? candidate : null;
+        if (!PathSafety.HasReparsePointOnPath(candidate, Path.GetFullPath(root)) && File.Exists(candidate))
+        {
+            return candidate;
+        }
+        // A path the app reports flattened (ms-appx:///TermControl.xaml for src\Control\TermControl.xaml) is the one
+        // project file whose path ends with it. The engine resolves it the same way.
+        var suffix = "\\" + relative;
+        var matches = Directory.EnumerateFiles(root, "*.xaml",
+            new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = false })
+            .Where(p => !IsSkipped(root, p) && p.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            .Take(2).ToArray();
+        return matches.Length == 1 ? matches[0] : null;
     }
 
     private static XElement? ParseCaptured(string declaration, XElement context)

@@ -66,6 +66,27 @@ public class CommentAnchorResolverTests
     }
 
     [TestMethod]
+    public void KnownSource_AFlattenedAppPath_IsTheOneProjectFileWhosePathEndsWithIt()
+    {
+        // An app attached with the repository as its source root reports ms-appx:///TermControl.xaml for a file deep in
+        // the repository; the engine resolves it the same way, so the panel and the saved comment agree.
+        var control = Directory.CreateDirectory(Path.Combine(_root, "src", "Control"));
+        Directory.CreateDirectory(Path.Combine(control.FullName, "obj"));
+        Directory.CreateDirectory(Path.Combine(_root, "src", "Other"));
+        File.WriteAllText(Path.Combine(control.FullName, "TermControl.xaml"), "<UserControl />");
+        File.WriteAllText(Path.Combine(control.FullName, "obj", "TermControl.xaml"), "<UserControl />");
+        File.WriteAllText(Path.Combine(control.FullName, "Shared.xaml"), "<UserControl />");
+        File.WriteAllText(Path.Combine(_root, "src", "Other", "Shared.xaml"), "<UserControl />");
+
+        string? Resolve(string uri) => CommentAnchorResolver.ResolveKnownSourcePath(_root, new CommentAnchor { SourceUri = uri });
+
+        Assert.AreEqual(Path.Combine(control.FullName, "TermControl.xaml"), Resolve("ms-appx:///TermControl.xaml"));
+        Assert.AreEqual(Path.Combine(control.FullName, "TermControl.xaml"), Resolve("ms-appx:///Control/TermControl.xaml"));
+        Assert.IsNull(Resolve("ms-appx:///Shared.xaml"), "a name two project files share is not guessed");
+        Assert.IsNull(Resolve("ms-appx:///Missing.xaml"));
+    }
+
+    [TestMethod]
     [DataRow("ms-appx:///Views/Page.xaml", @"Views\Page.xaml")]
     [DataRow("ms-appx:///Views/../Page.xaml", null)]
     [DataRow("ms-appx:///Views/%2e%2e/Page.xaml", null)]
