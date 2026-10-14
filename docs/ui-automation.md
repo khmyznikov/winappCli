@@ -646,9 +646,10 @@ Use `--action` when a test must perform a specific operation on exactly the sele
 element. It never tries another pattern or an invokable ancestor, even if the
 requested action fails. A control supporting both invocation and selection will
 be selected, not invoked, with `--action select`. With `--action`, a slug targets
-exactly one element; a plain-text or AutomationId selector that matches more than
-one element fails closed with a nonzero exit code rather than acting on the first
-match, so pass a slug from `inspect`/`search` when a name is ambiguous.
+exactly one element; a plain-text or AutomationId selector that still matches more
+than one element after the [exact-match preferences](#plain-text-search) fails closed
+with a nonzero exit code rather than acting on the first match, so pass a slug from
+`inspect`/`search` when a name is ambiguous.
 
 `--root`, `--type`, and `--class-name` narrow the match as described in
 [Scoped and typed queries](#scoped-and-typed-queries), with or without `--action`.
