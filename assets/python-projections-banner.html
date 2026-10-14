@@ -186,22 +186,24 @@
         <div class="card">
           <div class="titlebar">
             <span class="file-icon" aria-hidden="true">Py</span>
-            <span class="filename">ocr.py</span>
+            <span class="filename">rewrite.py</span>
             <span class="controls" aria-hidden="true"><span>-</span><span>&#9633;</span><span>&times;</span></span>
           </div>
-<pre><code><span class="comment"># Image in, text out</span>
+<pre><code><span class="comment"># A sentence, a formal tone</span>
 <span class="keyword">with await</span> (
-    <span class="type">TextRecognizer</span>.<span class="method">create_async</span>()
-) <span class="keyword">as</span> recognizer:
+    <span class="type">LanguageModel</span>.<span class="method">create_async</span>()
+) <span class="keyword">as</span> model:
+    rewriter = (
+        <span class="type">TextRewriter</span>
+        .<span class="method">create_instance</span>(model)
+    )
     result = <span class="keyword">await</span> (
-        recognizer
-        .<span class="method">recognize_text_from_image_async</span>(
-            buffer
+        rewriter.<span class="method">rewrite_async</span>(
+            text, <span class="type">TextRewriteTone</span>.Formal
         )
     )
 
-    <span class="keyword">for</span> line <span class="keyword">in</span> result.lines:
-        <span class="method">print</span>(line.text)</code></pre>
+    <span class="method">print</span>(result.text)</code></pre>
         </div>
         <p class="note">Windows capabilities, in your Python workflow.</p>
       </section>

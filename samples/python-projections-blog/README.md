@@ -10,9 +10,9 @@ Runnable companions to the [Python projection blog](../../ifdef-blog-python-proj
 
 The application does not need a per-API native extension build. CLI installation is separate from the project environment it manages.
 
-The three examples below are independent projects. Start each example from the repository root in a normal PowerShell session; its setup defines its own source paths and creates a new folder under your home directory. The CLI is installed once, but each folder has its own `.venv`, SDK pins, bindings configuration, and manifest.
+The notification and text-rewriting companions are independent projects. Start either from the repository root in a normal PowerShell session. Each setup defines its own source paths and creates a new folder under your home directory, with its own `.venv`, SDK pins, configuration, and manifest. The XAML showcase links to a separate dynwinrt sample.
 
-## 1. Notification without identity
+## 1. Windows notification without identity
 
 Use a non-elevated terminal. From the repository root, create and initialize a separate writable project before copying any scripts. Leave generated content outside this sample checkout:
 
@@ -28,29 +28,33 @@ winapp-py init . --use-defaults --add-python-bindings
 if ($LASTEXITCODE -ne 0) { throw "Python project initialization failed" }
 ```
 
-Initialization creates the project `.venv`, manifest, SDK pins and bindings configuration. The default generated package is `winapp_bindings`, installed editable from `.winapp\python\winapp_bindings`. Notification APIs are included in the default scope, so no image types or handwritten `[project]` metadata are needed. Keep the generated `types = []` for now; the sample `pyproject.toml` records these same default bindings settings.
+`winapp-py init` prepares the Windows SDK and Windows App SDK inputs and generates the default supported, non-UI Windows App SDK bindings.
 
-Copy `notification.py`, run initialization again, then run it without identity:
+Copy `notification.py`, then run it without identity:
 
 ```powershell
 Copy-Item -LiteralPath (Join-Path $sample "notification.py") -Destination .
-winapp-py init . --use-defaults --add-python-bindings
-if ($LASTEXITCODE -ne 0) { throw "Python project initialization failed" }
 winapp-py run .\notification.py
 ```
 
-`notification.py` runs unpackaged, without `--identity`. It loads the restored architecture's Bootstrap DLL and calls `init_winappsdk(2, 5)`, matching SDK 2.5.1. It calls `register()` to let Windows App SDK register the Python executable as a notification source with its default name and icon, submits a 65% progress notification, checks its native ID, and removes its tag after five seconds. `unregister()` releases the process's active notification registration; source information remains for later runs. The SDK context is released after apartment cleanup. This is display-only: notification click handling and startup from a notification are not implemented.
+`notification.py` sends a Windows notification and runs unpackaged, without `--identity`. It checks the assigned notification ID, unregisters the running process in `finally`, and releases native objects before the SDK context. It does not handle notification clicks or remove the notification after sending it. Use a non-elevated terminal; Windows settings can suppress a banner.
 
-## 2. WinUI counter without identity
+## 2. XAML WinUI showcase
 
-`counter.py` creates a native WinUI window with a button and a click count. WinUI itself does not require package identity: this example runs unpackaged, without `--identity`. It does not need an NPU or the `systemAIModels` capability. It uses explicit SDK bootstrap, an STA for the UI, and event/object cleanup. The `init_winappsdk(2, 5)` arguments match the tested SDK 2.5.1.
+The independent [WinUI Tic-Tac-Toe sample](https://github.com/microsoft/dynwinrt/tree/main/samples/python/winui-tic-tac-toe) loads a XAML board, connects its named controls to Python handlers, and uses a Mica backdrop. Follow that sample's own prerequisites, generation, and run commands; it has its own SDK pins and bindings package.
 
-From the repository root, create and initialize its own project:
+The article's GIF records actual game moves, an X win, and a reset from a cached copy of this existing XAML sample. It is not a recording of the new notification or text-rewriting programs.
+
+## 3. Text rewriting with identity
+
+This example needs Developer Mode and a supported Copilot+ PC. Follow the [Windows AI guide](https://learn.microsoft.com/en-us/windows/ai/apis/phi-silica) for model availability and hardware requirements.
+
+From the repository root, create and initialize its independent project:
 
 ```powershell
 $repo = (Get-Location).Path
 $sample = Join-Path $repo "samples\python-projections-blog"
-$project = Join-Path $HOME "python-winui-counter"
+$project = Join-Path $HOME "python-text-rewrite"
 if (Test-Path -LiteralPath $project) { throw "Choose a new project directory" }
 New-Item -ItemType Directory -Path $project | Out-Null
 Set-Location $project
@@ -58,84 +62,31 @@ winapp-py init . --use-defaults --add-python-bindings
 if ($LASTEXITCODE -ne 0) { throw "Python project initialization failed" }
 ```
 
-In this project's generated `pyproject.toml`, replace `types = []` in `[tool.winapp.python-bindings]` with these six WinUI types. Do not create a duplicate bindings table:
-
-```toml
-types = [
-    "Microsoft.UI.Xaml.Application",
-    "Microsoft.UI.Xaml.Window",
-    "Microsoft.UI.Xaml.Controls.Button",
-    "Microsoft.UI.Xaml.Controls.StackPanel",
-    "Microsoft.UI.Xaml.Controls.TextBlock",
-    "Microsoft.UI.Xaml.Automation.AutomationProperties",
-]
-```
-
-Copy `counter.py`, run initialization again, then run it without identity:
+`LanguageModel` and `TextRewriter` belong to the default scope. Keep the project's generated `package = "winapp_bindings"`, `scope = "default"`, and `types = []` settings; no additional types or a second initialization are needed.
 
 ```powershell
-Copy-Item -LiteralPath (Join-Path $sample "counter.py") -Destination .
-winapp-py init . --use-defaults --add-python-bindings
-if ($LASTEXITCODE -ne 0) { throw "Python project initialization failed" }
-winapp-py run .\counter.py
+Copy-Item -LiteralPath (Join-Path $sample "rewrite.py") -Destination .
 ```
 
-Click **Click me** and close the window when finished. WinUI hosting is experimental; this counter is not a complete GUI framework integration guide.
+Before running, make sure this project's `Package.appxmanifest` has the [article's Windows AI declarations](../../ifdef-blog-python-projections-draft.md#3-rewrite-text-with-on-device-ai): the `systemai` namespace and token in `IgnorableNamespaces`, `systemAIModels`, and the shown `MaxVersionTested` value.
 
-The ordinary counter command was verified on ARM64 at 200% display scaling: the real button was invoked twice, the label changed to `Clicks: 1` and `Clicks: 2`, and titlebar close ended the process with exit code 0. The [article screenshot](../../assets/python-winui-counter.png) comes from that unpackaged run, not a development-identity launch.
-
-## 3. NPU OCR with identity
-
-This example needs Developer Mode, a supported Copilot+ PC/NPU, and a ready Windows AI Text Recognition model. From the repository root, create and initialize a separate OCR project:
+Run with identity:
 
 ```powershell
-$repo = (Get-Location).Path
-$sample = Join-Path $repo "samples\python-projections-blog"
-$project = Join-Path $HOME "python-npu-ocr"
-if (Test-Path -LiteralPath $project) { throw "Choose a new project directory" }
-New-Item -ItemType Directory -Path $project | Out-Null
-Set-Location $project
-winapp-py init . --use-defaults --add-python-bindings
-if ($LASTEXITCODE -ne 0) { throw "Python project initialization failed" }
+winapp-py run --identity .\rewrite.py
 ```
 
-In the OCR project's generated `pyproject.toml`, replace `types = []` in `[tool.winapp.python-bindings]` with these three image and stream types:
+`rewrite.py` uses one short English sentence. It calls `LanguageModel.create_async`, `TextRewriter.create_instance`, and `rewrite_async(text, TextRewriteTone.Formal)`, then prints the rewritten sentence. Unsupported readiness states, failed preparation, unsuccessful results, and empty output raise explicit errors.
 
-```toml
-types = [
-    "Windows.Graphics.Imaging.BitmapDecoder",
-    "Windows.Storage.Streams.InMemoryRandomAccessStream",
-    "Windows.Storage.Streams.DataWriter",
-]
-```
+When the model is `NotReady`, the code calls `ensure_ready_async()` and requires `AIFeatureReadyResultState.Success` before continuing. This prepares required components and may download them.
 
-`TextRecognizer` and `ImageBuffer` are already included in the default scope. Keep the OCR project's `package = "winapp_bindings"` and `scope = "default"`; do not create a duplicate bindings table.
+To clear this project's development identity after testing, run `winapp-py identity clear` from `python-text-rewrite`. This does not uninstall an installed MSIX.
 
-```powershell
-Copy-Item -LiteralPath (Join-Path $sample "ocr.py") -Destination .
-winapp-py init . --use-defaults --add-python-bindings
-if ($LASTEXITCODE -ne 0) { throw "Python project initialization failed" }
-```
-
-After initialization, edit the OCR project's `Package.appxmanifest` following the [article's OCR capability steps](../../ifdef-blog-python-projections-draft.md#3-recognize-image-text-locally-with-the-npu): declare `systemAIModels`, retain the existing namespace tokens and capabilities, and set a recent desktop `MaxVersionTested`. The declaration does not prepare a missing model.
-
-Copy the article's input image as `sample.png`, then run with identity:
-
-```powershell
-Copy-Item -LiteralPath (Join-Path $repo "assets\python-npu-ocr-input-english.png") `
-    -Destination .\sample.png
-winapp-py run --identity .\ocr.py -- .\sample.png
-```
-
-`ocr.py` uses the NPU-backed Windows AI `TextRecognizer`, not the legacy `Windows.Media.Ocr` engine. It checks readiness, decodes the image into a BGRA8 bitmap, and prints the recognized lines as plain text. `recognize(path)` returns those lines joined into a string for use in your own application. The article shows the [input image and a recognized text excerpt](../../ifdef-blog-python-projections-draft.md#3-recognize-image-text-locally-with-the-npu); use a Unicode-capable terminal for non-ASCII output.
-
-The tested model was already `Ready`. If it is not ready on another device, the script raises explicitly; it does not download components or quietly switch engines. Call `ensure_ready_async()` only after consent to preparation, and check its status and error result.
-
-From `python-npu-ocr`, follow the [article's four packaging steps](../../ifdef-blog-python-projections-draft.md#package-and-share-the-ocr-app) to bundle, sign, install, and run the OCR command-line app.
+From `python-text-rewrite`, follow the [article's packaging steps](../../ifdef-blog-python-projections-draft.md#package-and-share-the-rewrite-app) to bundle, sign, install, and run this command-line application.
 
 ## Extra: AppInstance initialization check
 
-`app_instance.py` is an initialization check, not a replacement for `os.getpid()`. It can run in any initialized project above and verifies Windows App SDK usage in both execution modes. Without identity, it sets the architecture-specific Bootstrap DLL path and retains SDK initialization until after apartment cleanup. Its `2, 5` version must match the restored SDK. Copy it into the project you choose and run the following from that folder, using the `$sample` path defined in that project's setup.
+`app_instance.py` is an initialization check, not a replacement for `os.getpid()`. It can run in either local companion project above with `winapp_bindings` and SDK 2.5. Without identity, it sets the architecture-specific Bootstrap DLL path and retains SDK initialization until after apartment cleanup. Copy it into the project you choose and run the following from that folder, using the `$sample` path defined in that project's setup.
 
 ```powershell
 Copy-Item -LiteralPath (Join-Path $sample "app_instance.py") -Destination .
@@ -153,28 +104,30 @@ winapp-py generate --force
 
 ## Validation boundaries
 
-The revised init-first workflow and default-package imports have been checked statically; the complete sequence has not been replayed. The inline packaging steps have not been executed. The recorded native tests used a fresh project on a machine that already had Windows App Runtime, a NuGet SDK cache, and a ready NPU model, so this is not a clean-machine installation test. Before the AI capability edit, OCR failed with `CapabilityMissing`; afterward it returned the bilingual document's five lines and 36 word items.
+The synchronous notification revision has not been run natively. The text-rewriting model has not been invoked, and no readiness checks, model preparation, identity registration, or packaging have been performed for it. Its model, rewrite, and preparation calls were checked against the restored Windows App SDK 2.5.1 generated declarations and the published JavaScript example.
 
-The unpackaged notification program has been checked for syntax and registration/cleanup ordering with mocked APIs, but has not been run natively. Banner visibility also depends on Windows settings.
+The XAML GIF used an isolated copy of the existing sample and previously cached ARM64 runtime/projection wheels. Maximizing that owned window made the layout visible at the desktop's current scaling; UI Automation invoked five cells, observed `Player X wins!`, reset the board, and closed the window. The GIF contains seven cropped/downscaled real screenshots. The source checkout was not modified, and the capture involved no model calls, SDK downloads, or AI identity registration. This is media for the existing XAML sample, not a new validation of the text-rewriting program or the article's SDK 2.5 bindings.
 
-The OCR and AppInstance scripts were run on native ARM64/CPython 3.13.15 with the preview CLI and published DynWinRT 0.1.0rc23. NPU OCR output was checked against the test words and a generated bilingual document. The document yielded five lines and 36 words; the mixed-language `AI` was recognized as `Al`, illustrating that confidence is not guaranteed correctness. Native scores and polygon coordinates were checked. AppInstance returned the actual process PID in both execution modes.
+Earlier native evidence applies to the previous examples, not these revised scenarios. `ocr.py`, `counter.py`, and their image assets are retained as earlier companions. OCR and AppInstance were run on native ARM64/CPython 3.13.15 with the preview CLI and DynWinRT 0.1.0rc23; the old OCR document yielded five lines and 36 words, including an `AI`/`Al` recognition error. The old counter screenshot followed two button invocations and an exit-code-0 close. None of that is a text-rewriting result or evidence that the new notification script was run.
 
-For mypy, point it at the parent of the editable generated package:
+For mypy, run from the project you want to check and point it at the parent of the editable generated package:
 
 ```powershell
 $env:MYPYPATH = (Resolve-Path .\.winapp\python).Path
 python -m pip --python .\.venv\Scripts\python.exe install "mypy==1.20.2"
 .\.venv\Scripts\python.exe -m mypy --strict --follow-imports=silent `
-    .\notification.py .\ocr.py .\app_instance.py
+    .\notification.py
 ```
 
-This optional check installs mypy in the selected environment. It does not suppress missing generated imports or use casts. No Python toast click activation, arbitrary custom component deployment, or x64 execution is claimed by this validation. The optional counter's WinUI scope is separate from the main data API examples.
+Use `.\rewrite.py` instead in the text-rewriting project.
+
+This optional check installs mypy in the selected environment. It does not suppress missing generated imports or use casts. No notification-click activation, custom-component deployment, or native coverage of the revised examples is claimed here.
 
 The private identity environment installs declared application dependencies and the generated bindings; packages manually added to `.venv` are not automatically copied. Ordinary `run` requires an existing `.venv` and does not initialize Windows App SDK on a script's behalf.
 
 ## Preview tool installation and version reproduction
 
-This section is for obtaining the unreleased preview tool or reproducing the exact versions used during development. It is not part of the OCR runtime flow, and can be skipped when `winapp-py` is already installed.
+This section is for obtaining the unreleased preview tool or reproducing the versions used for the original recorded examples. It can be skipped when `winapp-py` is already installed.
 
 The tested wheel is `winapp_cli-0.7.2.dev63-py3-none-win_arm64.whl`, built from microsoft/winappCli#1062 at `da26b1e8c220458d08cca1800cee86848e4e42c5`. The live PR head changed to `20585326` during review; this validation concerns the installed build, not that newer source. Install the matching architecture's wheel into the Python environment chosen for the CLI, for example the normal Python installation:
 
