@@ -241,21 +241,13 @@ winapp-py package .\dist\PythonTextRewrite --manifest .\Package.appxmanifest `
 winapp-py cert install .\devcert.pfx
 ```
 
-**4. Install and run the app.**
+**4. Install the app.**
 
 Return to normal PowerShell to install the package:
 
 ```powershell
 Add-AppxPackage .\dist\PythonTextRewrite.msix
 ```
-
-To run the installed command-line app, enter its registered command in PowerShell:
-
-```powershell
-python-text-rewrite-demo.exe
-```
-
-This is the command-line alias registered in step 2, not the EXE in `dist`. The rewritten sentence appears in the current terminal.
 
 The development certificate is for local testing. Keep its PFX file private and out of source control. For distribution, use release signing, include bundled dependencies' license notices, and validate the final package on target devices.
 
