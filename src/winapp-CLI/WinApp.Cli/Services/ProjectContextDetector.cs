@@ -43,7 +43,8 @@ internal sealed class ProjectContextDetector : IProjectContextDetector
     }
 
     // A C++ WinUI 3 project (the Visual Studio templates and winapp's samples) sets UseWinUI; one that dropped the
-    // property still compiles XAML (an ApplicationDefinition or Page item) against the Windows App SDK it imports.
+    // property still compiles XAML (an ApplicationDefinition or Page item) against the Windows App SDK it imports,
+    // directly or through a shared .props file, with the package restored from packages.config.
     private static ProjectAppFramework DetectCppFramework(FileInfo projectFile)
     {
         try
@@ -56,7 +57,8 @@ internal sealed class ProjectContextDetector : IProjectContextDetector
             var document = XDocument.Load(projectFile.FullName);
             var elements = document.Descendants().ToList();
             var windowsAppSdk = elements.Any(element => element.Name.LocalName == "Import" &&
-                (element.Attribute("Project")?.Value ?? "").Contains("Microsoft.WindowsAppSDK", StringComparison.OrdinalIgnoreCase));
+                (element.Attribute("Project")?.Value ?? "").Contains("Microsoft.WindowsAppSDK", StringComparison.OrdinalIgnoreCase)) ||
+                PackagesConfigListsWindowsAppSdk(projectFile);
             var useWinUI = elements.Any(element => element.Parent?.Name.LocalName == "PropertyGroup" &&
                 element.Name.LocalName == "UseWinUI" && element.Value.Trim().Equals("true", StringComparison.OrdinalIgnoreCase));
             var xaml = elements.Any(element => element.Name.LocalName is "ApplicationDefinition" or "Page" &&
@@ -69,6 +71,14 @@ internal sealed class ProjectContextDetector : IProjectContextDetector
         {
             return ProjectAppFramework.Unknown;
         }
+    }
+
+    private static bool PackagesConfigListsWindowsAppSdk(FileInfo projectFile)
+    {
+        var config = new FileInfo(Path.Join(projectFile.DirectoryName, "packages.config"));
+        return config.Exists && CanReadMetadata(config) &&
+            XDocument.Load(config.FullName).Descendants("package").Any(package =>
+                (package.Attribute("id")?.Value ?? "").StartsWith("Microsoft.WindowsAppSDK", StringComparison.OrdinalIgnoreCase));
     }
 
     public ProjectContext DetectDirectory(
