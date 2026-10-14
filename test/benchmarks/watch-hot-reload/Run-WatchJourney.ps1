@@ -7,6 +7,12 @@
   Materializes the Todo app, starts 'winapp run --watch', applies each authored edit as one save, records what
   the watch reported for it and which process was running, and runs the journey's uiChecks against the live app
   at each checkpoint. The truth is: did every save land in the same process, and do the checks pass.
+
+  The parity gate (ParityGate.psm1) also checks that the hot-reloaded app matches a clean build of the same source: at
+  checkpoints marked "parity": true, and after the last save, it reads the app's XAML tree and property values through
+  DevTools, runs the journey's parity probes (clicks, typing) and reads again, then builds the source from scratch,
+  launches it, does the same, and fails on any difference. -Parity Auto (the default) runs it for journeys that
+  opt in ("parity": { "auto": true }); On runs it for every journey (after the last save at least); Off skips it.
 .EXAMPLE
   .\Run-WatchJourney.ps1 -Winapp ..\..\..\artifacts\cli\win-x64\winapp.exe -WinUIPackageSource <folder with a locally built Microsoft.WindowsAppSDK.WinUI .nupkg>
 #>
@@ -25,10 +31,13 @@ param(
     # Stop after this many saves (0 = all).
     [int]$MaxActions = 0,
     # Leave the app and the watch running after the last save (to inspect it).
-    [switch]$KeepRunning
+    [switch]$KeepRunning,
+    # Compare the hot-reloaded app with a clean build: Auto = journeys with "parity": { "auto": true }, On = every journey.
+    [ValidateSet('Auto', 'On', 'Off')][string]$Parity = 'Auto'
 )
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'WatchJourney.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'ParityGate.psm1') -Force
 $Winapp = (Resolve-Path $Winapp).Path
 $journey = Get-Content (Join-Path $PSScriptRoot "journeys\$JourneyName.json") -Raw | ConvertFrom-Json
 if (-not $Variant) { $Variant = @($journey.variants | Where-Object primary | ForEach-Object id) }
@@ -125,6 +134,7 @@ function Test-UiCheck($Check, [int]$ProcessId) {
             return [pscustomobject]@{ Ok = ($LASTEXITCODE -eq 0 -and $output -match "`"$target`""); Output = "devtools: $($output.Trim())" }
         }
         'invoke' { return Invoke-Ui (@('invoke', $target) + $app) }
+        'focus' { return Invoke-Ui (@('focus', $target) + $app) }
         'set-value' { return Invoke-Ui (@('set-value', $target, $value) + $app) }
         'text-equals' { return Invoke-Ui (@('wait-for', $target, '--value', $value) + $app + @('-t', '5000')) }
         'text-contains' { return Invoke-Ui (@('wait-for', $target, '--value', $value, '--contains') + $app + @('-t', '5000')) }
@@ -187,6 +197,10 @@ function Test-UiCheck($Check, [int]$ProcessId) {
 # Only this run's app: other runs of the same app may be on the machine.
 function Get-AppPid { (Get-Process TodoBench -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($appDir, [StringComparison]::OrdinalIgnoreCase) } | Sort-Object StartTime -Descending | Select-Object -First 1).Id }
 
+$parityOn = $Parity -eq 'On' -or ($Parity -eq 'Auto' -and $journey.parity.auto)
+$parityConfig = if ($journey.parity) { $journey.parity } else { [pscustomobject]@{} }
+$parityProbe = { param($Probe, [int]$ProcessId) Test-UiCheck $Probe $ProcessId }
+
 $summary = [System.Collections.Generic.List[object]]::new()
 foreach ($variantId in $Variant) {
     $appDir = Join-Path $runRoot "$variantId\app"
@@ -233,7 +247,11 @@ foreach ($variantId in $Variant) {
         $launchChecks += [pscustomobject]@{ Check = "launch $($journey.app.launchExpect)"; Ok = ($launchText -match $journey.app.launchExpect); Output = $launchText }
     }
     $rows = [System.Collections.Generic.List[object]]::new()
-    foreach ($step in (Get-JourneyPlan $journey $variantId)) {
+    # Text typed and boxes toggled by the journey's checks in the running app, latest per element (for the parity gate).
+    $inputsSoFar = [System.Collections.Generic.List[object]]::new()
+    $plan = Get-JourneyPlan $journey $variantId
+    $lastIndex = if ($MaxActions -gt 0) { [Math]::Min($MaxActions, $plan.Count) } else { $plan.Count }
+    foreach ($step in $plan) {
         if ($MaxActions -gt 0 -and $step.Index -gt $MaxActions) { break }
         $seen = [System.Collections.Generic.List[string]]::new()
         $null = Read-NewLines
@@ -251,6 +269,7 @@ foreach ($variantId in $Variant) {
         if ($outcome -eq 'restart') {
             if (-not $relaunched) { $null = Wait-Line '^\[watch\] ready' 600 $seen }
             $appPid = Get-AppPid
+            $inputsSoFar.Clear()
         }
         $checks = @($launchChecks)
         $launchChecks = @()
@@ -259,6 +278,11 @@ foreach ($variantId in $Variant) {
             foreach ($check in $step.Checkpoint.uiChecks) {
                 $result = Test-UiCheck $check ([int]$appPid)
                 $checks += [pscustomobject]@{ Check = "$($check.assert) $($check.target) $($check.value)".Trim(); Ok = $result.Ok; Output = $result.Output }
+                if ($check.assert -in 'set-value', 'toggle-on') {
+                    $target = $check.target
+                    $null = $inputsSoFar.RemoveAll([Predicate[object]] { param($i) $i.target -eq $target })
+                    $inputsSoFar.Add($check)
+                }
             }
         }
         $detail = (($seen | Where-Object { $_ -match '^\[watch\]|^  ' }) -join "`n")
@@ -269,10 +293,36 @@ foreach ($variantId in $Variant) {
         if ($step.Action.expect.detail) {
             $checks += [pscustomobject]@{ Check = "detail $($step.Action.expect.detail)"; Ok = ($detail -match $step.Action.expect.detail); Output = $detail }
         }
+        $paritySeconds = $null
+        if ($parityOn -and ($step.Checkpoint.parity -or $step.Index -eq $lastIndex)) {
+            $label = if ($step.Checkpoint.id) { [string]$step.Checkpoint.id } else { "save$($step.Index)" }
+            if ($outcome -eq 'error' -or -not $appPid) {
+                # The source doesn't build (or no app is running), so there is no clean build to compare with.
+                $checks += [pscustomobject]@{ Check = "parity $label"; Ok = $true; Output = "parity: skipped, the save left the app $(if ($outcome -eq 'error') { 'with a build error' } else { 'not running' })" }
+            } else {
+                # A checkpoint can carry its own parity settings ({ "probes": [...] }) over the journey's.
+                $config = $parityConfig.PSObject.Copy()
+                if ($step.Checkpoint.parity -is [pscustomobject]) {
+                    foreach ($p in $step.Checkpoint.parity.PSObject.Properties) { $config | Add-Member -NotePropertyName $p.Name -NotePropertyValue $p.Value -Force }
+                }
+                # What the user typed or toggled earlier in the journey is state, not markup: the clean build gets the same
+                # input before it is read (where the hot-reloaded app still shows it). Clicks are not replayed: their effect
+                # depends on the code they ran against.
+                if ($config.replayInputs -ne $false) {
+                    $replay = @($inputsSoFar | Where-Object { $_.target -notin @($config.probes | ForEach-Object target) })
+                    $config | Add-Member -NotePropertyName replay -NotePropertyValue $replay -Force
+                }
+                $parityResult = Invoke-ParityCheck -Winapp $Winapp -ProcessId ([int]$appPid) -AppDir $appDir -WorkDir (Join-Path $runRoot "$variantId\parity\$label") `
+                    -InvokeProbe $parityProbe -Config $config -RootNamespace $journey.app.rootNamespace -Configuration $journey.app.configuration -Packaging $Packaging
+                $paritySeconds = $parityResult.Seconds
+                $checks += [pscustomobject]@{ Check = "parity $label"; Ok = $parityResult.Ok; Output = $parityResult.Output }
+                Write-Host $parityResult.Output
+            }
+        }
         $row = [pscustomobject]@{
             Index = $step.Index; Action = $step.Action.id; Outcome = $outcome; Ms = $ms; Pid = $appPid
             SameProcess = ($appPid -eq $launchPid); Checkpoint = $step.Checkpoint.id
-            Checks = $checks; Detail = $detail
+            Checks = $checks; Detail = $detail; ParitySeconds = $paritySeconds
         }
         $rows.Add($row)
         $checkText = if ($checks) { ' checks ' + (($checks | ForEach-Object { if ($_.Ok) { 'ok' } else { "FAIL($($_.Check))" } }) -join ',') } else { '' }
@@ -287,6 +337,7 @@ foreach ($variantId in $Variant) {
         Restarts = @($rows | Where-Object Outcome -eq 'restart').Count
         Errors = @($rows | Where-Object Outcome -eq 'error').Count
         ChecksPassed = @($rows.Checks | Where-Object Ok).Count; Checks = @($rows.Checks).Count
+        Parity = $(if ($parityOn) { $p = @($rows.Checks | Where-Object { $_.Check -like 'parity *' }); "$(@($p | Where-Object Ok).Count)/$($p.Count)" } else { 'off' })
         SameProcess = -not ($rows | Where-Object { -not $_.SameProcess })
     })
 }

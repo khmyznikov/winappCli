@@ -9,6 +9,9 @@
     "value the markup itself changes still wins."
   ],
   "app": { "template": "app-template", "assetsFrom": "samples/winui-app/Assets", "projectFile": "TodoBench.csproj", "rootNamespace": "TodoBench" },
+  "parity": {
+    "ignore": ["*#CountText.Text"]
+  },
   "dimensions": [],
   "variants": [ { "id": "default", "primary": true, "summary": "The only ordering.", "choices": {} } ],
   "setup": [
