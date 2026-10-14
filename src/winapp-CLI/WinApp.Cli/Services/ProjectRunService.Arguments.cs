@@ -310,8 +310,7 @@ internal sealed partial class ProjectRunService
         string? csWinRTMetadataFolder = null,
         bool includeRuntimeIdentifier = true,
         bool includePlatform = true,
-        bool includePublishProfile = true,
-        IReadOnlyList<string>? properties = null)
+        bool includePublishProfile = true)
     {
         var rid = options.EffectiveRuntimeIdentifier;
 
@@ -355,7 +354,7 @@ internal sealed partial class ProjectRunService
             tokens.Add($"-p:CsWinRTWindowsMetadata={csWinRTMetadataFolder}");
         }
 
-        foreach (var name in properties ?? RequestedProperties)
+        foreach (var name in RequestedProperties)
         {
             tokens.Add($"--getProperty:{name}");
         }

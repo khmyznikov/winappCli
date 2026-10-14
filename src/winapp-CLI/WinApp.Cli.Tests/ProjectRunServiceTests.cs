@@ -435,87 +435,87 @@ public class ProjectRunServiceTests
         Assert.IsFalse(buildArgs.Contains("IncludePublishItemsOutputGroup"), "build pass must not set the publish-items flag");
     }
 
-    private FakeDotNetService ProjectExtensionsDotnet(string? extensionsPath, bool evaluateFails = false) => new()
-    {
-        RunDotnetCommandHandler = args =>
-        {
-            if (evaluateFails && args.Contains("--getProperty:MSBuildProjectExtensionsPath", StringComparison.Ordinal))
-            {
-                return (1, string.Empty, "error");
-            }
-
-            var json = PackagedPropertiesJson();
-            return (0, extensionsPath is null
-                ? json
-                : json.Replace("\"Properties\": {", $"\"Properties\": {{ \"MSBuildProjectExtensionsPath\": \"{extensionsPath.Replace("\\", "\\\\")}\",", StringComparison.Ordinal), string.Empty);
-        },
-    };
-
     [TestMethod]
-    public async Task BuildAndResolveAsync_RunBuild_WritesPackagingReferenceTargetsForTheAppOnly()
+    [DataRow(false, DisplayName = "Streamed build (agent/CI)")]
+    [DataRow(true, DisplayName = "--json build")]
+    public async Task BuildAndResolveAsync_RunBuild_ImportsPackagingReferenceTargetsThroughTheEnvironment(bool json)
     {
-        // MSBuild imports obj\<project file>.*.targets for that project only, so referenced projects and the
-        // build's own CustomAfterMicrosoftCommonTargets are untouched.
+        // The targets reach the build through CustomAfterDirectoryBuildTargets in the dotnet process environment,
+        // so the build arguments stay exactly as before and nothing is written into the project.
         var csproj = WriteFile("App.csproj", ExecutableCsproj);
-        var dotnet = ProjectExtensionsDotnet(Path.Join(_tempDir.FullName, "obj") + "\\");
+        var dotnet = new FakeDotNetService { RunDotnetCommandHandler = _ => (0, PackagedPropertiesJson(), string.Empty) };
         var service = NewServiceWith(dotnet, LogLevel.Information, out _);
 
-        await service.BuildAndResolveAsync(csproj, new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: []), CancellationToken.None);
+        await service.BuildAndResolveAsync(csproj, new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: [], Json: json), CancellationToken.None);
 
-        var targets = Path.Join(_tempDir.FullName, "obj", "App.csproj.winapp.g.targets");
-        Assert.AreEqual(ProjectRunService.PackagingReferenceTargets, File.ReadAllText(targets));
-        var build = dotnet.StreamingCalls.Single(a => a.StartsWith("build ", StringComparison.Ordinal));
-        StringAssert.Contains(build, "-r win-x64", "the build arguments are unchanged");
-        Assert.IsFalse(build.Contains("CustomAfterMicrosoftCommonTargets", StringComparison.Ordinal), build);
+        var index = dotnet.StreamingCalls.FindIndex(a => a.StartsWith("build ", StringComparison.Ordinal));
+        Assert.IsGreaterThanOrEqualTo(0, index);
+        var path = dotnet.StreamingEnvironments[index]![ProjectRunService.CustomAfterDirectoryBuildTargetsVariable].Split(';')[^1];
+        Assert.AreEqual(ProjectRunService.PackagingReferenceTargets, File.ReadAllText(path));
+        StringAssert.Contains(dotnet.StreamingCalls[index], "-r win-x64", "the build arguments are unchanged");
+        Assert.IsFalse(dotnet.StreamingCalls[index].Contains("CustomAfter", StringComparison.Ordinal), dotnet.StreamingCalls[index]);
+        Assert.IsFalse(Directory.EnumerateFiles(_tempDir.FullName, "*.targets", SearchOption.AllDirectories).Any(), "nothing is written into the project");
     }
 
     [TestMethod]
-    [DataRow("no-build", DisplayName = "--no-build builds nothing")]
-    [DataRow("evaluation-fails", DisplayName = "The app can't be evaluated")]
-    public async Task BuildAndResolveAsync_NoPackagingReferenceTargets_WhenNotBuildingOrUnknownPath(string scenario)
+    [DataRow(null, DisplayName = "Not set")]
+    [DataRow(@"C:\repo\eng\mine.targets", DisplayName = "Set by the user's environment")]
+    public void WithPackagingReferenceTargets_AppendsToAnInheritedValueAndKeepsOtherVariables(string? inherited)
     {
-        var csproj = WriteFile("App.csproj", ExecutableCsproj);
-        var dotnet = ProjectExtensionsDotnet(
-            scenario == "evaluation-fails" ? null : Path.Join(_tempDir.FullName, "obj") + "\\",
-            evaluateFails: scenario == "evaluation-fails");
-        var service = NewServiceWith(dotnet, LogLevel.Information, out _);
+        var directory = Path.Join(_tempDir.FullName, "msbuild");
+        var environment = new Dictionary<string, string> { ["PATH"] = @"C:\tools" };
 
-        await service.BuildAndResolveAsync(
-            csproj,
-            new ProjectRunOptions("Debug", "x64", null, NoBuild: scenario == "no-build", NoRestore: false, Properties: []),
-            CancellationToken.None);
+        var merged = ProjectRunService.WithPackagingReferenceTargets(environment, inherited, directory)!;
 
-        Assert.IsFalse(File.Exists(Path.Join(_tempDir.FullName, "obj", "App.csproj.winapp.g.targets")));
+        var path = ProjectRunService.EnsurePackagingReferenceTargetsFile(directory)!;
+        var expected = inherited is null ? path : $"{inherited};{path}";
+        Assert.AreEqual(expected, merged[ProjectRunService.CustomAfterDirectoryBuildTargetsVariable]);
+        Assert.AreEqual(@"C:\tools", merged["PATH"]);
+        Assert.AreEqual(expected, ProjectRunService.WithPackagingReferenceTargets(null, expected, directory)![ProjectRunService.CustomAfterDirectoryBuildTargetsVariable], "already listed once");
     }
 
     [TestMethod]
-    [DataRow(@"obj\", DisplayName = "Relative to the project")]
-    [DataRow(@"artifacts\obj\App\", DisplayName = "Artifacts layout")]
-    public void GetPackagingReferenceTargetsPath_ResolvesAgainstTheProject(string extensionsPath)
-    {
-        var csproj = new FileInfo(Path.Join(_tempDir.FullName, "App.csproj"));
-
-        var path = ProjectRunService.GetPackagingReferenceTargetsPath(csproj, extensionsPath);
-
-        Assert.AreEqual(Path.Join(_tempDir.FullName, extensionsPath, "App.csproj.winapp.g.targets"), path);
-    }
-
-    [TestMethod]
-    public void TryWritePackagingReferenceTargets_UnchangedContent_KeepsTheTimestamp()
+    public void EnsurePackagingReferenceTargetsFile_UnchangedContent_KeepsTheTimestamp()
     {
         // Rewriting an identical file would change its timestamp and invalidate incremental builds.
-        var path = Path.Join(_tempDir.FullName, "obj", "App.csproj.winapp.g.targets");
-        Assert.IsTrue(ProjectRunService.TryWritePackagingReferenceTargets(path));
+        var directory = Path.Join(_tempDir.FullName, "msbuild");
+        var path = ProjectRunService.EnsurePackagingReferenceTargetsFile(directory)!;
         var stamp = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         File.SetLastWriteTimeUtc(path, stamp);
 
-        Assert.IsTrue(ProjectRunService.TryWritePackagingReferenceTargets(path));
+        Assert.AreEqual(path, ProjectRunService.EnsurePackagingReferenceTargetsFile(directory));
         Assert.AreEqual(stamp, File.GetLastWriteTimeUtc(path));
 
         File.WriteAllText(path, "<Project />");
-        Assert.IsTrue(ProjectRunService.TryWritePackagingReferenceTargets(path));
-        Assert.AreEqual(ProjectRunService.PackagingReferenceTargets, File.ReadAllText(path), "an older version is replaced");
+        ProjectRunService.EnsurePackagingReferenceTargetsFile(directory);
+        Assert.AreEqual(ProjectRunService.PackagingReferenceTargets, File.ReadAllText(path), "a damaged file is rewritten");
     }
+
+    [TestMethod]
+    [DataRow("100%Dev", DisplayName = "'%' followed by hex digits")]
+    [DataRow("a;b", DisplayName = "';'")]
+    public void WithPackagingReferenceTargets_EscapesThePathForMSBuild(string folder)
+    {
+        // MSBuild decodes %XX in the value and splits on ';', so the path must be escaped or the import misses it.
+        var directory = Path.Join(_tempDir.FullName, folder);
+
+        var value = ProjectRunService.WithPackagingReferenceTargets(null, null, directory)![ProjectRunService.CustomAfterDirectoryBuildTargetsVariable];
+
+        var path = ProjectRunService.EnsurePackagingReferenceTargetsFile(directory)!;
+        Assert.AreEqual(path.Replace("%", "%25", StringComparison.Ordinal).Replace(";", "%3B", StringComparison.Ordinal), value);
+    }
+
+    [TestMethod]
+    public void WithPackagingReferenceTargets_UnwritableDirectory_LeavesTheEnvironmentAsIs()
+    {
+        // A file where the directory should be makes the write fail; the build then runs exactly as before.
+        var blocker = WriteFile("blocker", string.Empty);
+        var environment = new Dictionary<string, string> { ["PATH"] = @"C:\tools" };
+
+        Assert.AreSame(environment, ProjectRunService.WithPackagingReferenceTargets(environment, null, Path.Join(blocker.FullName, "msbuild")));
+    }
+
+
 
 
 

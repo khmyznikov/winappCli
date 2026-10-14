@@ -1,19 +1,25 @@
 // Copyright (c) Microsoft Corporation and Contributors. All rights reserved.
 // Licensed under the MIT License.
 
-using Microsoft.Extensions.Logging;
+using System.Security.Cryptography;
+using System.Text;
 using WinApp.Cli.Helpers;
-using WinApp.Cli.Models;
 
 namespace WinApp.Cli.Services;
 
 internal sealed partial class ProjectRunService
 {
     /// <summary>
-    /// MSBuild targets that <c>winapp run</c> writes next to the app's NuGet-generated files
-    /// (<c>obj\&lt;project file&gt;.winapp.g.targets</c>). MSBuild imports every
-    /// <c>$(MSBuildProjectExtensionsPath)$(MSBuildProjectFile).*.targets</c> file for that project only, so
-    /// referenced projects and the build's own properties are untouched.
+    /// The MSBuild property, set through the environment of the <c>dotnet</c> processes winapp starts, that
+    /// imports <see cref="PackagingReferenceTargets"/>. MSBuild imports <c>$(CustomAfterDirectoryBuildTargets)</c>
+    /// (a <c>;</c>-separated list) right after <c>Directory.Build.targets</c> in every project (MSBuild 17.8+,
+    /// .NET SDK 8.0.100+). An environment value has the lowest precedence, so a project that sets the property
+    /// keeps its own value.
+    /// </summary>
+    internal const string CustomAfterDirectoryBuildTargetsVariable = "CustomAfterDirectoryBuildTargets";
+
+    /// <summary>
+    /// MSBuild targets that make Windows App SDK packaging build each referenced project once.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -33,7 +39,7 @@ internal sealed partial class ProjectRunService
     /// </remarks>
     internal const string PackagingReferenceTargets = """
         <Project>
-          <!-- Written by `winapp run`; safe to delete. Makes Windows App SDK packaging build each referenced library once. -->
+          <!-- Imported by winapp's own builds through CustomAfterDirectoryBuildTargets. Makes Windows App SDK packaging build each referenced project once. -->
           <Target Name="WinappAlignPackagingReferences"
                   AfterTargets="PrepareProjectReferences"
                   Condition="'@(_MSBuildProjectReferenceExistent)' != ''">
@@ -59,106 +65,62 @@ internal sealed partial class ProjectRunService
         </Project>
         """;
 
-    internal const string PackagingReferenceTargetsSuffix = ".winapp.g.targets";
-
-    private const string ProjectExtensionsPathProperty = "MSBuildProjectExtensionsPath";
-
-    private static readonly string[] ProjectExtensionsProbeProperties = [ProjectExtensionsPathProperty, "MSBuildProjectFile"];
-
     /// <summary>
-    /// Writes <see cref="PackagingReferenceTargets"/> to the app's <c>$(MSBuildProjectExtensionsPath)</c> before a
-    /// <c>winapp run</c> build and returns its path. Returns <see langword="null"/>, and the build runs exactly as
-    /// before, when the app can't be evaluated or the file can't be written. <paramref name="evaluated"/> reuses an
-    /// earlier evaluation of the app, when one ran.
+    /// Returns <paramref name="environment"/> plus <see cref="CustomAfterDirectoryBuildTargetsVariable"/> naming
+    /// the <see cref="PackagingReferenceTargets"/> file, for a build or publish winapp starts. A value already in
+    /// winapp's environment is kept, with this file appended. Returns <paramref name="environment"/> unchanged,
+    /// and the build runs exactly as before, when the file can't be written.
     /// </summary>
-    private async Task<string?> EnsurePackagingReferenceTargetsAsync(
-        FileInfo csproj,
-        ProjectRunOptions options,
-        IReadOnlyDictionary<string, string>? evaluated,
-        DirectoryInfo workingDir,
-        string? csWinRTMetadataFolder,
-        CancellationToken cancellationToken)
+    internal static IReadOnlyDictionary<string, string>? WithPackagingReferenceTargets(
+        IReadOnlyDictionary<string, string>? environment,
+        string? inheritedValue = null,
+        string? targetsDirectory = null)
     {
-        // An earlier evaluation of the app used the same inputs, so its answer (even an empty one) is final.
-        var extensionsPath = evaluated is not null
-            ? GetProp(evaluated, ProjectExtensionsPathProperty)
-            : await TryEvaluateProjectExtensionsPathAsync(csproj, options, workingDir, csWinRTMetadataFolder, cancellationToken);
-        if (string.IsNullOrWhiteSpace(extensionsPath))
+        var path = EnsurePackagingReferenceTargetsFile(targetsDirectory ?? Path.Join(Path.GetTempPath(), "winapp", "msbuild"));
+        if (path is null)
         {
-            return null;
+            return environment;
         }
 
-        var path = GetPackagingReferenceTargetsPath(csproj, extensionsPath);
-        if (path is null || !TryWritePackagingReferenceTargets(path))
-        {
-            return null;
-        }
+        // MSBuild reads the value as escaped text and the import has no existence check, so a '%XX' sequence or ';'
+        // in the path (both legal on Windows) must be escaped, or every build fails with MSB4019.
+        var escapedPath = path.Replace("%", "%25", StringComparison.Ordinal).Replace(";", "%3B", StringComparison.Ordinal);
 
-        logger.LogDebug("{UISymbol} Packaging-reference targets: {Path}", UiSymbols.Note, path);
-        return path;
+        inheritedValue ??= Environment.GetEnvironmentVariable(CustomAfterDirectoryBuildTargetsVariable);
+        var existing = (inheritedValue ?? string.Empty)
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var value = existing.Contains(escapedPath, StringComparer.OrdinalIgnoreCase)
+            ? string.Join(';', existing)
+            : string.Join(';', [.. existing, escapedPath]);
+
+        var merged = environment is null
+            ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, string>(environment, StringComparer.OrdinalIgnoreCase);
+        merged[CustomAfterDirectoryBuildTargetsVariable] = value;
+        return merged;
     }
 
     /// <summary>
-    /// The file MSBuild imports for <paramref name="csproj"/> from <paramref name="extensionsPath"/> (the evaluated
-    /// <c>MSBuildProjectExtensionsPath</c>, absolute or relative to the project), or null for an invalid path.
+    /// Writes <see cref="PackagingReferenceTargets"/> to a content-named file in <paramref name="directory"/>,
+    /// only when it's missing or differs, so its timestamp stays stable across builds. Returns its path, or
+    /// null when it can't be written.
     /// </summary>
-    internal static string? GetPackagingReferenceTargetsPath(FileInfo csproj, string extensionsPath)
+    internal static string? EnsurePackagingReferenceTargetsFile(string directory)
     {
-        try
-        {
-            var directory = Path.GetFullPath(extensionsPath, csproj.DirectoryName ?? Directory.GetCurrentDirectory());
-            return Path.Join(directory, csproj.Name + PackagingReferenceTargetsSuffix);
-        }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
-        {
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Writes <see cref="PackagingReferenceTargets"/> to <paramref name="path"/> unless it already has that content,
-    /// so an unchanged file keeps its timestamp and doesn't invalidate incremental builds.
-    /// </summary>
-    internal static bool TryWritePackagingReferenceTargets(string path)
-    {
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(PackagingReferenceTargets)))[..12];
+        var path = Path.Join(directory, $"winapp-packaging-references-{hash}.targets");
         try
         {
             if (File.Exists(path) && File.ReadAllText(path) == PackagingReferenceTargets)
             {
-                return true;
+                return path;
             }
 
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            Directory.CreateDirectory(directory);
             AtomicFile.WriteAllText(path, PackagingReferenceTargets);
-            return true;
+            return path;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return false;
-        }
-    }
-
-    private async Task<string?> TryEvaluateProjectExtensionsPathAsync(
-        FileInfo csproj,
-        ProjectRunOptions options,
-        DirectoryInfo workingDir,
-        string? csWinRTMetadataFolder,
-        CancellationToken cancellationToken)
-    {
-        var args = BuildEvaluateArguments(csproj, options, csWinRTMetadataFolder, properties: ProjectExtensionsProbeProperties);
-        logger.LogDebug("{UISymbol} dotnet {Arguments}", UiSymbols.Note, RedactSecretsForDisplay(args));
-        try
-        {
-            var (exitCode, stdout, _) = await dotNetService.RunDotnetCommandAsync(workingDir, args, cancellationToken);
-            return exitCode == 0
-                ? GetProp(MsBuildPropertyReader.Parse(stdout, ProjectExtensionsProbeProperties), ProjectExtensionsPathProperty)
-                : null;
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
             return null;
         }

@@ -73,8 +73,6 @@ internal sealed partial class ProjectRunService(
         "WebPublishProfileFile",
         "PublishProfileImported",
         "_PublishProfileRootFolder",
-        // Where `winapp run` writes its packaging-reference targets (see EnsurePackagingReferenceTargetsAsync).
-        "MSBuildProjectExtensionsPath",
         "TargetFramework",
         "Platform",
         "RuntimeIdentifier",
@@ -229,22 +227,15 @@ internal sealed partial class ProjectRunService(
         // arch, so it can't desync a no-<Platforms> reference (MSB3030/PRI252). Threaded into every pass
         // below (restore/build/evaluate) via `options`, keeping them in lock-step.
         options = ResolvePlatformInjection(csproj, options, requireConcreteRid: aotPublish);
-        IReadOnlyDictionary<string, string>? evaluated = null;
         if (!aotPublish)
         {
-            (options, evaluated) = await ResolveRequiredPublishProfileAsync(
+            options = await ResolveRequiredPublishProfileAsync(
                 csproj,
                 options,
                 workingDir,
                 csWinRTMetadata,
                 cancellationToken);
         }
-
-        if (!publish && !aotPublish && !options.NoBuild)
-        {
-            await EnsurePackagingReferenceTargetsAsync(csproj, options, evaluated, workingDir, csWinRTMetadata, cancellationToken);
-        }
-
         var buildOptions = options;
 
         // A --no-restore build replays the warnings stored by a restore winapp never saw, and those can quote an
@@ -788,7 +779,7 @@ internal sealed partial class ProjectRunService(
         var shimFramework = await ResolveShimFrameworkAsync(csproj, options, workingDir, cancellationToken);
         var csWinRTMetadata = ResolveCsWinRTMetadataShim(options, shimFramework);
         options = ResolvePlatformInjection(csproj, options);
-        (options, _) = await ResolveRequiredPublishProfileAsync(
+        options = await ResolveRequiredPublishProfileAsync(
             csproj,
             options,
             workingDir,
@@ -916,6 +907,7 @@ internal sealed partial class ProjectRunService(
 
         var banner = $"Building {csproj.Name} ({options.Configuration} | {options.Architecture})...";
         var stopwatch = Stopwatch.StartNew();
+        var buildEnvironment = WithPackagingReferenceTargets(null);
 
         // --json/--quiet: stdout stays pure JSON, so route the invocation AND build output to stderr
         // (Console.Error is synchronized, so concurrent stdout/stderr callbacks are safe).
@@ -931,6 +923,7 @@ internal sealed partial class ProjectRunService(
                 workingDir, redirectedArgs,
                 onOutputLine: static line => Console.Error.WriteLine(NugetErrorMessage.Redact(line)),
                 onErrorLine: static line => Console.Error.WriteLine(NugetErrorMessage.Redact(line)),
+                environmentOverrides: buildEnvironment,
                 cancellationToken: cancellationToken);
         }
 
@@ -960,7 +953,7 @@ internal sealed partial class ProjectRunService(
             // Real interactive terminal: hand the console to dotnet (inherited stdio, no -tl:off) so its
             // native terminal logger renders the live build directly — single warnings, live progress.
             // winapp never sees the lines; the header above and ✓ Built below frame it.
-            streamedExit = await dotNetService.RunDotnetInheritedAsync(workingDir, buildArgs, cancellationToken: cancellationToken);
+            streamedExit = await dotNetService.RunDotnetInheritedAsync(workingDir, buildArgs, buildEnvironment, cancellationToken);
         }
         else
         {
@@ -969,7 +962,7 @@ internal sealed partial class ProjectRunService(
             var writeLive = CreateSynchronizedRedactedLineWriter();
 
             streamedExit = await dotNetService.RunDotnetStreamingAsync(
-                workingDir, buildArgs, writeLive, writeLive, cancellationToken: cancellationToken);
+                workingDir, buildArgs, writeLive, writeLive, buildEnvironment, cancellationToken);
         }
 
         if (streamedExit == 0)
