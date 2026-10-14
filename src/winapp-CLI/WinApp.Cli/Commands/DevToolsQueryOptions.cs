@@ -147,7 +147,8 @@ internal static class DevToolsQueryOptions
         var warnings = fields.Where(field => rows.GetArrayLength() > 0 && rows.EnumerateArray().All(row =>
             row.GetProperty("fields").EnumerateArray().Any(value =>
                 value.GetProperty("name").GetString() == field && value.GetProperty("valueState").GetString() == "unavailable")))
-            .Select(field => $"{field} is unavailable on every returned match.").ToArray();
+            .Select(field => $"{field} is unavailable on every returned match." +
+                (field.Contains('.') ? string.Empty : " If it is an attached property, name its owner too, for example Grid.Row.")).ToArray();
         if (json)
         {
             console.Profile.Out.Writer.WriteLine(DevToolsJson.Serialize(writer =>

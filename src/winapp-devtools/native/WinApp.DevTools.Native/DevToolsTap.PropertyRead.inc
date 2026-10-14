@@ -179,6 +179,16 @@ static HRESULT ReadInspectableValue(IInspectable* value, const std::wstring& nam
             return S_OK;
         }
     }
+    // A boxed enum is an IReference<Enum>; whether it also offers its number through IPropertyValue depends on who
+    // boxed it, so the enum's own interface is tried first.
+    if (!EnumTableFor(declaredType).empty()) {
+        std::wstring number;
+        if (ReadBoxedEnum(value, declaredType, &number)) {
+            *out = std::move(number);
+            if (effectiveType) *effectiveType = declaredType;
+            return S_OK;
+        }
+    }
     winrt::com_ptr<IInspectable> typed;
     HRESULT hr = value->QueryInterface(DevToolsIid<winrt::Windows::Foundation::IPropertyValue>(), typed.put_void());
     if (SUCCEEDED(hr) && typed) {
@@ -194,7 +204,14 @@ static HRESULT ReadInspectableValue(IInspectable* value, const std::wstring& nam
         case 8: { float f = 0; hr = p->GetSingle(&f); text = num(f); type = L"Single"; break; }
         case 4: { int32_t i = 0; hr = p->GetInt32(&i); text = std::to_wstring(i); type = L"Int32"; break; }
         case 6: { int64_t i = 0; hr = p->GetInt64(&i); text = std::to_wstring(i); type = L"Int64"; break; }
-        default: return S_FALSE;
+        default: {
+            // An enum boxes as its underlying integer: Int32, or UInt32 for a flags enum.
+            int32_t i = 0; uint32_t u = 0;
+            if (SUCCEEDED(p->GetInt32(&i))) { text = std::to_wstring(i); type = L"Int32"; }
+            else if (SUCCEEDED(p->GetUInt32(&u))) { text = std::to_wstring(u); type = L"UInt32"; }
+            else { Log(L"property.read %s: IPropertyValue type %d is not read", name.c_str(), ptype); return S_FALSE; }
+            break;
+        }
         }
         if (FAILED(hr)) return hr;
         *out = std::move(text);
@@ -240,6 +257,33 @@ static bool IsParsableValueType(const std::wstring& declaredType)
     if (type == L"String") return false;
     const auto& parsable = DevToolsRead_ParsableTypes();
     return std::find(parsable.begin(), parsable.end(), type) != parsable.end();
+}
+
+// UIElement.ActualSize and ActualOffset are not dependency properties: the chain lists them only as a null object.
+static bool ReadActualVector(InstanceHandle h, const std::wstring& name, std::wstring* out, std::wstring* type)
+{
+    if ((name != L"ActualSize" && name != L"ActualOffset") || !g_diag) return false;
+    winrt::com_ptr<IInspectable> element;
+    if (FAILED(g_diag->GetIInspectableFromHandle(h, element.put())) || !element) return false;
+    winrt::Windows::Foundation::IInspectable object{ nullptr };
+    winrt::copy_from_abi(object, element.get());
+    const auto ui = object.try_as<DevToolsX::UIElement>();
+    if (!ui) return false;
+    try {
+        if (name == L"ActualSize") {
+            const auto s = ui.ActualSize();
+            *out = TrimFieldNumbers(std::to_wstring(s.x) + L"," + std::to_wstring(s.y));
+            *type = L"Windows.Foundation.Numerics.Vector2";
+        } else {
+            const auto o = ui.ActualOffset();
+            *out = TrimFieldNumbers(std::to_wstring(o.x) + L"," + std::to_wstring(o.y) + L"," + std::to_wstring(o.z));
+            *type = L"Windows.Foundation.Numerics.Vector3";
+        }
+    } catch (const winrt::hresult_error& e) {
+        Log(L"property.read %s: hr=0x%08X", name.c_str(), e.code().value);
+        return false;
+    }
+    return true;
 }
 
 static bool ReadEvaluatedValue(InstanceHandle owner, const PropertyChainValue& row,
@@ -421,12 +465,29 @@ static HRESULT ReadCuratedProps(InstanceHandle h, std::vector<DevToolsReadProp>*
         unsigned int handleBits = 0;
         for (unsigned int i = 0; i < pc; i++) if (((long long)v[i].MetadataBits & 0x1) != 0) ++handleBits;
         NoteHandleBitCoverage(pc, handleBits);
+        // A requested name without its owner (HorizontalScrollBarVisibility) reads the one attached-style property
+        // it can only mean (ScrollViewer.HorizontalScrollBarVisibility), reported under the requested name.
+        std::map<std::wstring, std::wstring> ownerless;
+        if (projection) {
+            std::map<std::wstring, std::wstring> candidates;
+            std::set<std::wstring> ambiguous, names;
+            for (unsigned int i = 0; i < pc; i++) if (v[i].PropertyName) names.insert(v[i].PropertyName);
+            for (const auto& qualified : names) {
+                const size_t dot = qualified.find_last_of(L'.');
+                if (dot == std::wstring::npos) continue;
+                const std::wstring member = qualified.substr(dot + 1);
+                if (!projection->count(member) || names.count(member)) continue;
+                if (!candidates.emplace(member, qualified).second) ambiguous.insert(member);
+            }
+            for (const auto& [member, qualified] : candidates) if (!ambiguous.count(member)) ownerless[qualified] = member;
+        }
         std::set<std::wstring> taken;
         for (unsigned int i = 0; i < pc; i++) {
             if (!v[i].PropertyName) continue;
             std::wstring name = v[i].PropertyName;
             if (!taken.insert(name).second) continue;
-            if (projection && !projection->count(name)) continue;
+            const auto alias = ownerless.find(name);
+            if (projection && !projection->count(name) && alias == ownerless.end()) continue;
             DevToolsReadProp prop;
             prop.name = name;
             prop.type = PickValueType(v[i]);
@@ -470,6 +531,18 @@ static HRESULT ReadCuratedProps(InstanceHandle h, std::vector<DevToolsReadProp>*
                 }
             }
 
+            if (ReadActualVector(h, name, &prop.value, &prop.type)) prop.valueState.clear();
+
+            // An enum's chain text is empty for a local value and a bare number from a style, and its value type can
+            // read as the Int32 it boxes to. The declared type says which enum it is, and the live value its number.
+            if (!isHandle && !isNull && !EnumTableFor(declaredType).empty()) {
+                prop.type = declaredType;
+                if ((prop.valueState.empty() || prop.valueState == L"binding") && prop.value.empty()) {
+                    std::wstring live;
+                    if (ReadEvaluatedValue(h, v[i], name, declaredType, &live, nullptr)) prop.value = std::move(live);
+                }
+            }
+
             if (name == L"Text" && g_diag) {
                 IInspectable* element = nullptr;
                 HRESULT read = g_diag->GetIInspectableFromHandle(h, &element);
@@ -495,7 +568,7 @@ static HRESULT ReadCuratedProps(InstanceHandle h, std::vector<DevToolsReadProp>*
                 else if (prop.value == L"0" || _wcsicmp(prop.value.c_str(), L"false") == 0) prop.value = L"False";
             } else {
                 std::vector<std::wstring> members = EnumTableFor(prop.type);
-                if (!members.empty() && prop.valueState.empty()) {
+                if (!members.empty() && (prop.valueState.empty() || prop.valueState == L"binding")) {
                     std::wstring named = EnumNameForValue(prop.type, prop.value);
                     if (!named.empty()) prop.value = named;
                     prop.enumValues = members;
@@ -557,6 +630,7 @@ static HRESULT ReadCuratedProps(InstanceHandle h, std::vector<DevToolsReadProp>*
             }
 
             DevToolsRead_Redact(prop);
+            if (alias != ownerless.end()) prop.name = alias->second;
             out->push_back(std::move(prop));
         }
 
@@ -582,6 +656,7 @@ static HRESULT ReadCuratedProps(InstanceHandle h, std::vector<DevToolsReadProp>*
                 const bool isHandle = (bits & 0x1) != 0;
                 e.value   = (bits & 0x20) || (isHandle && raw == L"0") ? std::wstring()
                           : ResolveDisplayValue(name, PickValueType(v[i]), raw, isHandle);
+                if (!e.value.empty() && v[i].Type && !EnumTableFor(v[i].Type).empty()) e.value = EnumNameForValue(v[i].Type, e.value);
                 e.winner  = !v[i].Overridden;
                 unsigned int si = v[i].PropertyChainIndex;
                 if (s && si < sc) {

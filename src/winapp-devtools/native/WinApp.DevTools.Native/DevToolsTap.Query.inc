@@ -53,7 +53,7 @@ static std::wstring QueryValueJson(const DevToolsReadProp* property, const std::
             if (property->value == L"True" || property->value == L"true" || property->value == L"1") value = L"true";
             else if (property->value == L"False" || property->value == L"false" || property->value == L"0") value = L"false";
             else state = L"unresolved";
-        } else if (shortType == L"String" || !property->enumValues.empty())
+        } else if (shortType == L"String" || !property->enumValues.empty() || (!property->fields.empty() && !property->value.empty()))
             value = L"\"" + DevToolsJsonEscape(property->value) + L"\"";
         else state = DevToolsQuery::Numeric(type) ? L"unset" : L"object";
     }

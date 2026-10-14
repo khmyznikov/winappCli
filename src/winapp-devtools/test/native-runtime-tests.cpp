@@ -7,6 +7,7 @@
 #include <objidl.h>
 #include "../native/WinApp.DevTools.Native/DevToolsProjected.h"
 #include <winrt/Windows.Foundation.Numerics.h>
+#include <winrt/Windows.UI.Xaml.Controls.h>
 static HRESULT ObserveInputText(void*, HSTRING*);
 static HRESULT ObserveContent(void*, IInspectable**);
 static HRESULT ObservePlaceholder(void*, HSTRING*);
@@ -659,6 +660,50 @@ static void CheckEffectiveValues(const std::function<void(bool,const char*)>& ch
                 ("writable " + label + " reads back its live value when the runtime's text is empty").c_str());
         }
         check(tree.writes == 0, "effective value reads never mutate the app");
+        // An enum the diagnostics API does not list (the Microsoft.UI.Xaml.Controls ones, an app's own) is named from
+        // the .winmd that defines it, and is editable without --type. Windows.UI.Xaml.Controls.ScrollBarVisibility stands
+        // in for a Controls enum: it is not in this fake's GetEnums either, and its metadata ships with Windows.
+        {
+            namespace WUXC = winrt::Windows::UI::Xaml::Controls;
+            const std::wstring enumType = L"Windows.UI.Xaml.Controls.ScrollBarVisibility";
+            tree.name = L"VerticalScrollBarVisibility"; tree.type = enumType;
+            for (const bool asNumber : {false, true}) {
+                // Boxed as the enum, or as the bare Int32 a style hands back.
+                diag.value = asNumber ? winrt::box_value(int32_t{3}) : winrt::box_value(WUXC::ScrollBarVisibility::Visible);
+                row = read();
+                check(row.value == L"Visible" && row.type == enumType,
+                    "an enum GetEnums does not list reads as its member name, not empty or a type placeholder");
+                check(row.editKind == L"enum" && row.writeType == enumType && row.enumValues.size() == 4,
+                    "an enum outside the core namespace is editable by its full type name, so set-property needs no --type");
+            }
+            diag.value = winrt::box_value(int32_t{42});
+            check(read().value == L"42", "a value the enum does not name reads as its number, never as nothing");
+            std::wstring number;
+            check(ReadBoxedEnum(reinterpret_cast<IInspectable*>(winrt::get_abi(winrt::box_value(WUXC::ScrollBarVisibility::Hidden))),
+                    enumType, &number) && number == L"2",
+                "an IReference<Enum> without IPropertyValue reads through the interface ID computed from the enum's name");
+            DevToolsEnumTable flags;
+            check(LoadEnumFromMetadata(L"Windows.Storage.FileAttributes", &flags) && flags.isUnsigned &&
+                    std::find(flags.names.begin(), flags.names.end(), L"ReadOnly") != flags.names.end(),
+                "a flags enum's members and unsigned base type come from its metadata");
+            DevToolsEnumTable notEnum;
+            check(!LoadEnumFromMetadata(L"Windows.Foundation.Uri", &notEnum), "a class is not mistaken for an enum");
+            // `--fields HorizontalScrollBarVisibility` names an attached-style property without its owner.
+            tree.name = L"ScrollViewer.HorizontalScrollBarVisibility";
+            diag.value = winrt::box_value(int32_t{3});
+            const std::set<std::wstring> wanted{ L"HorizontalScrollBarVisibility" };
+            std::vector<DevToolsReadProp> fields;
+            check(SUCCEEDED(ReadCuratedProps(901, &fields, nullptr, nullptr, &wanted)) && fields.size() == 1 &&
+                    fields[0].name == L"HorizontalScrollBarVisibility" && fields[0].value == L"Visible",
+                "a field named without its owner reads the one attached-style property it can mean");
+            // search --fields prints what get-property prints: a structured value is its text, not a type placeholder.
+            DevToolsReadProp size;
+            size.name = L"ActualSize"; size.type = L"Windows.Foundation.Numerics.Vector2"; size.value = L"1264,906";
+            size.fields = DevToolsRead_FieldLabels(size.type);
+            const auto sizeJson = QueryValueJson(&size, size.name, L"");
+            check(sizeJson.find(L"\"value\":\"1264,906\"") != std::wstring::npos && sizeJson.find(L"\"valueState\":\"value\"") != std::wstring::npos,
+                "a field with a structured value reports it as text, as get-property does");
+        }
         g_diag = nullptr; g_vts3 = nullptr;
     }
     winrt::uninit_apartment();

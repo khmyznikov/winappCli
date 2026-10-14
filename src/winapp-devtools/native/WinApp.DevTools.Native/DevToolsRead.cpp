@@ -418,7 +418,11 @@ std::wstring DevToolsRead_DeriveWriteType(const std::wstring& declaredType, bool
     if (declaredType.empty()) return std::wstring();
     size_t dot = declaredType.find_last_of(L'.');
     std::wstring st = (dot == std::wstring::npos) ? declaredType : declaredType.substr(dot + 1);
-    if (isEnum) return st;
+    if (isEnum) {
+        // Core enums resolve by short name; Microsoft.UI.Xaml.Controls and app enums need the full name.
+        const bool core = declaredType.rfind(L"Microsoft.UI.Xaml.", 0) == 0 && dot == std::wstring(L"Microsoft.UI.Xaml").size();
+        return core || dot == std::wstring::npos ? st : declaredType;
+    }
     for (const auto& p : DevToolsRead_ParsableTypes())
         if (st == p) return st;
     if (st == L"Brush" || (st.size() > 5 && st.compare(st.size() - 5, 5, L"Brush") == 0))
