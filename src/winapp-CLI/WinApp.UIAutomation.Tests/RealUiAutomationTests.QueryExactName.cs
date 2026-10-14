@@ -9,6 +9,7 @@ namespace Microsoft.Windows.SDK.BuildTools.WinApp.UIAutomation.Tests;
 public partial class RealUiAutomationTests
 {
     private const string ExactNameQuery = "Allodia Mail & Calendar";
+    private static readonly string[] ExactNameListing = ["btnShared", "lblShared"];
 
     [TestMethod]
     [DataRow(false, false)]
@@ -38,7 +39,7 @@ public partial class RealUiAutomationTests
         Assert.IsNotNull(found);
         Assert.AreEqual("lblShared", found.AutomationId);
         var listed = await svc.SearchAsync(target, selector, 10, CancellationToken.None);
-        CollectionAssert.AreEquivalent(new[] { "btnShared", "lblShared" }, listed.Select(e => e.AutomationId).ToArray(),
+        CollectionAssert.AreEquivalent(ExactNameListing, listed.Select(e => e.AutomationId).ToArray(),
             "search keeps listing every substring match.");
     }
 
