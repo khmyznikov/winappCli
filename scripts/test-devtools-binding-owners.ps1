@@ -549,10 +549,14 @@ try {
         $null = Invoke-Cli @('ui', 'send-keys', 'esc', '-a', $app, '--via', 'send-input')
         Check ((Wait-Focused 'ShortcutOther') -eq 'ShortcutOther') 'Esc returns focus to the element the shortcut left'
         # A command run through UI Automation leaves keyboard focus where it was, so the app's own shortcuts still work.
+        # The Esc above closed the bar; hovering opens it the way a mouse user would, without moving keyboard focus.
         $null = Invoke-Cli @('ui', 'focus', 'ShortcutReturn', '-a', $app)
+        $null = Invoke-Cli @('ui', 'hover', 'DevToolsProtoRailL', '-a', $app)
+        $null = Invoke-Cli @('ui', 'hover', 'DevToolsProtoLayout', '-a', $app)
         $null = Invoke-Cli @('ui', 'invoke', 'DevToolsProtoLayout', '-a', $app)
         Check ((Wait-Focused 'ShortcutReturn') -eq 'ShortcutReturn') 'a toolbar command invoked through UI Automation returns focus to the app'
         $null = Invoke-Cli @('ui', 'invoke', 'DevToolsProtoLayout', '-a', $app)
+        $null = Invoke-Cli @('ui', 'hover', 'ShortcutReturn', '-a', $app)
 
         # A centered or margined window content starts away from the window origin; the highlight must still
         # land on the selected element.
