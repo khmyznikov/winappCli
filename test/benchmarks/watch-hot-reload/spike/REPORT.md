@@ -144,3 +144,47 @@ $env:WINAPP_HOT_RELOAD_REAL_COMPILER='1'; $env:WINAPP_HOT_RELOAD_SPIKE_LOG='C:\h
 Runs: `C:\hrspike\runs\20261014-145419` (default), `20261014-151323` (Proto A), `20261014-152333` (x:Name type
 change). Per-save before/after generated code and EnC results: `C:\hrspike\log-default`, `log-stable`,
 `log-nametype`. Roslyn EnC traces: `C:\hrspike\enclog-*`.
+
+## Parity gate (nmetulev-hr-parity-gate @ e56f4c59, rebased WinUI package c7cbf40ee)
+
+The gate compares the hot-reloaded page with a clean build of the same source. I merged it into the spike branch
+and ran it with `-Parity On`. In the gate's swap journey, every case after d1 restarts, because each case deletes the
+previous one (ENC0033/ENC0020, with or without Prototype A). A restart is a clean build, so those rows match
+trivially. To test each case live, I also ran each one as the first save after launch (`parity-dN-isolated`).
+
+| Case | Rewrite path (gate author) | Real compiler, in-place re-init | Real compiler, page re-created |
+|------|---------------------------|---------------------------------|--------------------------------|
+| d1 template x:Bind under `DataContext="{x:Bind Inner}"` | red: 'inner' vs 'item' | ✅ green, live, same process | ✅ green |
+| d2 template x:Bind to a public field | red: '' vs 'field' | ✅ green, live (isolated) | ✅ green |
+| d3 `x:Load="{x:Bind Vm.Flag, Mode=OneWay}"`, Flag false | red: present vs missing | ✅ green, live (isolated) | ✅ green |
+| d4 OneTime `{x:Bind Late}`, Late set after Loaded with no notification | red: 'loaded' vs 'ctor' | ❌ red, verbatim below | ✅ green, live, same process |
+| parity-xbind p1 | green | ✅ green | ✅ green |
+
+d4, in place (`C:\hrspike\runs\20261014-154731`):
+
+```
+parity: 3 difference(s) between hot reload and a clean build (6 elements, 3 readings; ...)
+  [initial] BindPage / StackPanel#Root/TextBlock#CaseLate / Text: hot reload 'loaded' vs clean build 'ctor'
+  [after set] BindPage / StackPanel#Root/TextBlock#CaseLate / Text: hot reload 'loaded' vs clean build 'ctor'
+  [after reset] BindPage / StackPanel#Root/TextBlock#CaseLate / Text: hot reload 'loaded' vs clean build 'ctor'
+```
+
+Why: the page is already loaded, so its Loading event never fires again. The re-init has to initialize the compiled
+bindings itself (the spike calls the new `Bindings.Update()`), and that reads `Late` after `Loaded` changed it. No
+in-place variant can match, because the value the clean build saw is gone. Skipping `Update()` doesn't help either:
+the binding would then never initialize.
+
+To match: re-create the page (a new instance, navigated in place of the old one, so its constructor, `Loading` and
+`Loaded` run in the clean-build order). The spike does this with `WINAPP_HOT_RELOAD_SPIKE_RECREATE=1` (the agent's
+existing Renavigate). d1–d4 and p1 were all green, live, in the same process
+(`C:\hrspike\runs\20261014-155250`, `-155400`, `-155452`, `-155540`, `-155628`). The cost is page state: fields,
+page-owned view models, typed text, scroll position and selection reset to what a fresh navigation gives. A window
+can't be re-created this way.
+
+Suggested product rule: re-create pages by default, because that is what a restart would show. Offer in-place re-init
+(keeps state) as the option for people who accept differences like d4.
+
+Prototype A on the swap journey: still 3 restarts. A replaced element gets a new append-only ID, and Roslyn reports
+the dropped `obj8` next to the new `obj13` as `ENC0020: Renaming field 'obj8'`, or as
+`ENC0033: Deleting class 'BindPage_obj1_BindingsTracking'`. Keeping retired members as tombstones (already in the
+compiler asks) would cover this.

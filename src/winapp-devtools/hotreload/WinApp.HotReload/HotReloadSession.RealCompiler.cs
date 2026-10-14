@@ -170,7 +170,8 @@ internal sealed partial class HotReloadSession
             _sources[UriFor(path)] = path;
             if (className is not null)
             {
-                request.RefreshTypes.Add(className);
+                // SPIKE: WINAPP_HOT_RELOAD_SPIKE_RECREATE=1 re-creates pages (new instance, state lost) instead of re-initializing them in place.
+                (Environment.GetEnvironmentVariable("WINAPP_HOT_RELOAD_SPIKE_RECREATE") == "1" ? request.RecreateTypes : request.RefreshTypes).Add(className);
             }
             report.AppendLine($"markup: {UriFor(path)} ({new FileInfo(xbf).Length} bytes .xbf){(className is null ? "" : $", {className} re-initialized")}");
         }
