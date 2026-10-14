@@ -26,6 +26,7 @@ namespace WinApp.DevTools.Managed.HotReload;
 internal static class XamlReload
 {
     private const string ReplayMethod = "__WinAppHotReload_Construct";
+    private const string ResetMethod = "__WinAppHotReload_Reset";
     private const string GeneratedNamePrefix = "__hr_";
     private const BindingFlags InstanceMembers = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
 
@@ -1369,6 +1370,11 @@ internal static class XamlReload
             // The constructor body runs again; subscriptions it makes to objects that outlive it would otherwise double.
             var events = replay is null ? null : new LiveObjects.EventSnapshot(component);
             var collections = replay is null ? [] : OwnCollections(component);
+            if (replay is not null)
+            {
+                // Empties the collections the constructor fills, so the replay doesn't add the same items again.
+                type.GetMethod(ResetMethod, InstanceMembers, Type.EmptyTypes)?.Invoke(component, null);
+            }
             (replay ?? type.GetMethod("InitializeComponent", InstanceMembers, Type.EmptyTypes))?.Invoke(component, null);
             events?.RemoveDuplicates();
             foreach (var (property, value) in collections)

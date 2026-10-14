@@ -177,6 +177,7 @@
           "        <TextBlock AutomationProperties.AutomationId=\"PickedSize\" Text=\"{x:Bind ((ComboBoxItem)Sizes.SelectedItem).Name, Mode=OneWay}\" />",
           "        <ComboBox x:Name=\"FontPicker\" ItemsSource=\"{x:Bind FontSizes}\" Loaded=\"FontPicker_Loaded\" />",
           "        <TextBlock x:Name=\"Sized\" Text=\"sized\" FontSize=\"{x:Bind (x:Double)FontPicker.SelectedValue, Mode=OneWay}\" />",
+          "        <ListView x:Name=\"BarList\" ItemsSource=\"{x:Bind Bars}\" />",
           "        <local:Echo>",
           "            <local:Echo.Values>",
           "                <local:EchoValue Value=\"{x:Bind Disable.IsChecked, Mode=OneWay}\" />",
@@ -204,6 +205,17 @@
           "    public OptionsPage()",
           "    {",
           "        InitializeComponent();",
+          "        Fill();",
+          "    }",
+          "",
+          "    // Like WinUI Gallery's ItemsRepeaterPage: a constructor helper fills a collection the page shows.",
+          "    public System.Collections.ObjectModel.ObservableCollection<string> Bars = new();",
+          "",
+          "    private void Fill()",
+          "    {",
+          "        Bars.Add(\"one\");",
+          "        Bars.Add(\"two\");",
+          "        Bars.Add(\"three\");",
           "    }",
           "",
           "    // Like WinUI Gallery's ComboBox page: sizes in a List<double>, the selection made once the box has loaded.",
@@ -680,6 +692,11 @@
                 "target": "Sized",
                 "assert": "property-equals",
                 "value": "FontSize=20"
+              },
+              {
+                "target": "BarList",
+                "assert": "child-count-equals",
+                "value": "3"
               }
             ]
           },
@@ -731,6 +748,11 @@
                 "target": "Sized",
                 "assert": "property-equals",
                 "value": "FontSize=20"
+              },
+              {
+                "target": "BarList",
+                "assert": "child-count-equals",
+                "value": "3"
               }
             ]
           },

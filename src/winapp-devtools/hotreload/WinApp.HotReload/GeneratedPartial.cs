@@ -69,6 +69,7 @@ internal sealed class XamlComponent(string xamlPath, string uri)
 internal static class GeneratedPartial
 {
     public const string ReplayMethod = "__WinAppHotReload_Construct";
+    public const string ResetMethod = "__WinAppHotReload_Reset";
     public const string InitPrefix = "__WinAppHotReload_Init_";
 
     /// <summary>A method that runs a static field's initializer once its type's static constructor already ran.</summary>
@@ -207,8 +208,100 @@ internal static class GeneratedPartial
             }
         }
         builder.AppendLine("    }");
+        // Collections the replayed constructor fills (BarItems.Add(...), there or in a method of the class it calls) go back
+        // to their initial value first (their initializer, or null), so it builds them as it did at launch instead of adding
+        // the same items again. A new object rather than a cleared one: the old one may still be shown by the UI the
+        // reload replaces, which a change would reach.
+        builder.Append("    internal void ").Append(ResetMethod).AppendLine("()");
+        builder.AppendLine("    {");
+        if (constructor is not null && canReplay && (constructor.Body is not null || constructor.ExpressionBody is not null))
+        {
+            var parts = userParts.ToList();
+            foreach (var filled in FilledCollections(constructor, parts, skipped))
+            {
+                builder.Append("        ").AppendLine(ResetStatement(filled, parts));
+            }
+        }
+        builder.AppendLine("    }");
         builder.AppendLine("}");
         return builder.ToString();
+    }
+
+    /// <summary>A statement that puts a member back to the value it had before the constructor ran.</summary>
+    internal static string ResetStatement(string name, IReadOnlyList<ClassDeclarationSyntax> parts)
+    {
+        foreach (var member in parts.SelectMany(p => p.Members))
+        {
+            switch (member)
+            {
+                case FieldDeclarationSyntax field when field.Declaration.Variables.FirstOrDefault(v => v.Identifier.ValueText == name) is { } variable:
+                {
+                    var value = variable.Initializer?.Value.ToString() ?? "default!";
+                    // A readonly field is set as its initializer sets it.
+                    return field.Modifiers.Any(SyntaxKind.ReadOnlyKeyword)
+                        ? $"global::System.Runtime.CompilerServices.Unsafe.AsRef(in this.{name}) = {value};"
+                        : $"this.{name} = {value};";
+                }
+                case PropertyDeclarationSyntax property when property.Identifier.ValueText == name &&
+                    property.AccessorList?.Accessors is { } accessors && accessors.All(a => a.Body is null && a.ExpressionBody is null):
+                {
+                    // An auto-property: through its setter, or its backing field when it has none.
+                    var value = property.Initializer?.Value.ToString() ?? "default!";
+                    return accessors.Any(a => a.IsKind(SyntaxKind.SetAccessorDeclaration))
+                        ? $"this.{name} = {value};"
+                        : $"{{ {property.Type} __value = {value}; GetType().GetField(\"<{name}>k__BackingField\", global::System.Reflection.BindingFlags.Instance | global::System.Reflection.BindingFlags.NonPublic)?.SetValue(this, __value); }}";
+                }
+            }
+        }
+        // A property with a body: what it returns is emptied instead.
+        return $"if ((object)this.{name} is global::System.Collections.IList {{ IsFixedSize: false }} __list_{name}) __list_{name}.Clear();";
+    }
+
+    private static readonly HashSet<string> AddMethods = new(StringComparer.Ordinal) { "Add", "AddRange", "Insert", "InsertRange" };
+
+    /// <summary>
+    /// Instance fields and readable properties of the class whose collection the constructor adds to (statements a replay
+    /// leaves out aside), directly or in methods of the class it calls (BarItems.Add in InitializeData()).
+    /// </summary>
+    public static List<string> FilledCollections(ConstructorDeclarationSyntax constructor, IReadOnlyList<ClassDeclarationSyntax> parts, IReadOnlySet<int> skipped)
+    {
+        var members = parts.SelectMany(p => p.Members).Where(m => !m.Modifiers.Any(SyntaxKind.StaticKeyword) && !m.Modifiers.Any(SyntaxKind.ConstKeyword))
+            .SelectMany(m => m switch
+            {
+                FieldDeclarationSyntax field => field.Declaration.Variables.Select(v => v.Identifier.ValueText),
+                PropertyDeclarationSyntax { ExpressionBody: not null } property => [property.Identifier.ValueText],
+                PropertyDeclarationSyntax { AccessorList: { } accessors } property when accessors.Accessors.Any(a => a.IsKind(SyntaxKind.GetAccessorDeclaration)) => [property.Identifier.ValueText],
+                _ => [],
+            }).ToHashSet(StringComparer.Ordinal);
+        var methods = parts.SelectMany(p => p.Members).OfType<MethodDeclarationSyntax>().Where(m => !m.Modifiers.Any(SyntaxKind.StaticKeyword)).ToList();
+        var result = new List<string>();
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        static string? Name(ExpressionSyntax expression) => expression switch
+        {
+            IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+            MemberAccessExpressionSyntax { Expression: ThisExpressionSyntax, Name: IdentifierNameSyntax identifier } => identifier.Identifier.ValueText,
+            _ => null,
+        };
+        void Scan(IEnumerable<SyntaxNode> nodes, int depth)
+        {
+            foreach (var call in nodes.SelectMany(n => n.DescendantNodesAndSelf()).OfType<InvocationExpressionSyntax>())
+            {
+                if (call.Expression is MemberAccessExpressionSyntax { Name.Identifier.ValueText: var method } access && AddMethods.Contains(method) &&
+                    Name(access.Expression) is { } target && members.Contains(target) && !result.Contains(target))
+                {
+                    result.Add(target);
+                }
+                else if (depth < 3 && Name(call.Expression) is { } callee && visited.Add(callee))
+                {
+                    Scan(methods.Where(m => m.Identifier.ValueText == callee).SelectMany(m => (IEnumerable<SyntaxNode>?)m.Body?.Statements ?? (m.ExpressionBody is { } e ? [e] : [])), depth + 1);
+                }
+            }
+        }
+        IEnumerable<SyntaxNode> replayed = constructor.Body is { } body
+            ? body.Statements.Where((_, i) => !skipped.Contains(i))
+            : constructor.ExpressionBody is { } expression ? [expression] : [];
+        Scan(replayed, 0);
+        return result;
     }
 
     /// <summary>Top-level statements of the constructor body (by index) that use one of its parameters.</summary>

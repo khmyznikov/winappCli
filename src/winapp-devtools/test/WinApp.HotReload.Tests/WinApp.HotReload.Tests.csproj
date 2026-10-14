@@ -8,5 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\hotreload\WinApp.HotReload\WinApp.HotReload.csproj" />
+    <!-- The helper uses the SDK's Roslyn at run time; the tests parse C# with their own. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.6.0" />
   </ItemGroup>
 </Project>
