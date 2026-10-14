@@ -5,13 +5,11 @@ import argparse
 from contextlib import nullcontext, redirect_stdout
 import io
 from importlib.metadata import version
-import json
 import os
 from pathlib import Path
 import platform
 import subprocess
 import sys
-import tempfile
 
 from packaging.version import Version
 
@@ -28,6 +26,7 @@ from .dependencies import (
 from .errors import WinappError
 from .generate import generate
 from .identity import clear_identity, run_with_identity
+from .init_workspace import find_init_workspaces, resolve_init_workspace, validate_init_workspace
 from .metadata import load_inventory, packages_hash
 from .paths import local_path
 from .progress import Workflow
@@ -353,6 +352,8 @@ def _native_boolean(arguments: list[str], *names: str) -> bool:
         if argument == "--":
             break
         name, separator, value = argument.partition("=")
+        if not separator and argument.startswith("-"):
+            name, separator, value = argument.partition(":")
         if name not in names:
             continue
         if not separator:
@@ -410,53 +411,62 @@ def _initialize(native_args: list[str], override: str | None) -> int:
     native_args, add = _init_arguments(native_args)
     working_directory = Path.cwd()
     native = find_native_cli(override)
-    with tempfile.TemporaryDirectory(prefix="winapp-python-init-") as temporary:
-        result_path = Path(temporary) / "result.json"
-        result = forward_native(native, native_args, working_directory, init_result=result_path)
-        if result:
-            return result
-        if not result_path.is_file():
-            if any(argument in HELP_FLAGS | {"--cli-schema", "--version"} for argument in native_args):
-                if any(argument in HELP_FLAGS for argument in native_args):
-                    print(
-                        "\nPython wrapper option:\n"
-                        "  --add-python-bindings  Enable bindings and project dependency setup during non-interactive init.",
-                        flush=True,
-                    )
-                return 0
-            raise WinappError(
-                "Native init completed without reporting its selected project. "
-                "Use a native CLI built with this Python wrapper; no Python bindings were generated."
+    result = forward_native(native, native_args, working_directory)
+    if result:
+        return result
+    if any(argument in HELP_FLAGS | {"--cli-schema", "--version"} for argument in native_args):
+        if any(argument in HELP_FLAGS for argument in native_args):
+            print(
+                "\nPython wrapper option:\n"
+                "  --add-python-bindings  Enable bindings and project dependency setup during non-interactive init.\n"
+                "  Without a directory, interactive init asks you to confirm the bindings target after SDK setup.",
+                flush=True,
             )
-        try:
-            context = json.loads(result_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, UnicodeError) as error:
-            raise WinappError("Native init returned invalid workspace information; no Python bindings were generated.") from error
-    if (
-        not isinstance(context, dict) or context.get("schema") != 1
-        or context.get("mode") not in {"sdk", "none", "config-only", "sparse", "unmanaged"}
-        or any(not isinstance(context.get(key), str) or not Path(context[key]).is_absolute()
-               for key in ("project", "config_directory"))
-        or (context.get("metadata_directory") is not None
-            and (not isinstance(context["metadata_directory"], str)
-                 or not Path(context["metadata_directory"]).is_absolute()))
-    ):
-        raise WinappError("Native init returned invalid workspace information; no Python bindings were generated.")
-    quiet = _native_boolean(native_args, "--quiet", "-q")
-    if context["mode"] not in {"sdk", "config-only"}:
-        if add:
-            raise WinappError(f"--add-python-bindings could not configure bindings: native init used {context['mode']} mode.")
-        if not quiet:
-            print(f"Python bindings were not generated: native init used {context['mode']} mode.", flush=True)
         return 0
-    project = local_path(Path(context["project"]))
-    if (
-        local_path(Path(context["config_directory"])) != project
-        or (context["mode"] == "sdk" and (
-            context["metadata_directory"] is None
-            or local_path(Path(context["metadata_directory"])) != project / ".winapp"
-        ))
-    ):
+    quiet = _native_boolean(native_args, "--quiet", "-q")
+    noninteractive = not sys.stdin.isatty() or bool(os.environ.get("CI"))
+    workspace = resolve_init_workspace(native_args, working_directory, noninteractive=noninteractive)
+    if workspace.skip_bindings:
+        if add:
+            raise WinappError("--add-python-bindings needs configured SDK metadata; this init mode skips bindings.")
+        if not quiet:
+            print("Python bindings were not generated: this init mode skips bindings.", flush=True)
+        return 0
+    project = workspace.project
+    confirmed = False
+    if project is None:
+        if noninteractive or quiet:
+            raise WinappError("The bindings target cannot be confirmed. Specify a directory or use --use-defaults.")
+        candidates = find_init_workspaces(working_directory, config_only=workspace.config_only)
+        if not candidates:
+            raise WinappError(
+                "Native init completed, but no usable project-local SDK configuration was found. "
+                "Run 'winapp-py init <project-directory> --use-defaults --add-python-bindings'."
+            )
+        print("SDK artifacts identify possible bindings targets, not the project selected by native.", flush=True)
+        if len(candidates) == 1:
+            project = candidates[0]
+            confirmed = _confirmation(f"Configure Python bindings in {project}?")
+        else:
+            for index, candidate in enumerate(candidates, 1):
+                print(f"  {index}. {candidate.relative_to(working_directory) or '.'}", flush=True)
+            print("  0. Leave Python bindings unchanged", flush=True)
+            while True:
+                try:
+                    answer = input("Select the Python bindings target (0 to skip): ").strip()
+                except EOFError as error:
+                    raise WinappError("Input ended during bindings target selection; no Python files were changed.") from error
+                if answer.isdecimal() and 0 <= int(answer) <= len(candidates):
+                    selected = int(answer)
+                    if selected == 0:
+                        return 0
+                    project = candidates[selected - 1]
+                    confirmed = _confirmation(f"Configure Python bindings in {project}?")
+                    break
+                print("Enter one of the listed numbers.", flush=True)
+        if not confirmed:
+            return 0
+    if workspace.config_directory is not None and workspace.config_directory != project:
         if add:
             raise WinappError("--add-python-bindings needs project-local winapp.yaml and .winapp metadata.")
         if not quiet:
@@ -465,13 +475,14 @@ def _initialize(native_args: list[str], override: str | None) -> int:
                 "project-local winapp.yaml and .winapp metadata.", flush=True,
             )
         return 0
-    enabled, reset = _bindings_decision(project, native_args, add)
+    enabled, reset = _bindings_decision(project, native_args, add or confirmed)
     if not enabled:
         return 0
+    validate_init_workspace(project, config_only=workspace.config_only)
     with open(os.devnull, "w", encoding="utf-8") if quiet else nullcontext() as output:
         with redirect_stdout(output) if quiet else nullcontext():
             _configure_after_init(
-                project, reset=reset, config_only=context["mode"] == "config-only",
+                project, reset=reset, config_only=workspace.config_only,
                 verbose=_native_boolean(native_args, "--verbose", "-v"),
             )
     return 0

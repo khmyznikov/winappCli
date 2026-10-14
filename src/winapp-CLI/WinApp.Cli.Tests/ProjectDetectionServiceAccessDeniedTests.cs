@@ -204,7 +204,7 @@ public class ProjectDetectionServiceAccessDeniedTests
     [DataRow("pyproject.toml", "[project]\nname=\"python-app\"\n")]
     [DataRow("setup.cfg", "[metadata]\nname=python-app\n")]
     [DataRow("setup.py", "raise Exception()\n")]
-    public void DetectProjectAt_PythonMetadataReadDenied_IsNotDetected(string filename, string contents)
+    public void DetectProjectAt_PythonMarkerReadDenied_StillProvidesAFileHint(string filename, string contents)
     {
         var projectDir = Path.Combine(_tempDir, "python-app");
         Directory.CreateDirectory(projectDir);
@@ -215,7 +215,7 @@ public class ProjectDetectionServiceAccessDeniedTests
             Assert.Inconclusive("Deny ACL had no effect (test likely running elevated).");
         }
 
-        Assert.IsNull(_sut.DetectProjectAt(new DirectoryInfo(projectDir)));
+        Assert.AreEqual("Possible Python", _sut.DetectProjectAt(new DirectoryInfo(projectDir))?.TypeLabel);
     }
 
     [TestMethod]

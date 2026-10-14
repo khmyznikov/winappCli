@@ -94,14 +94,12 @@ class IdentityEnvironmentTests(ProjectTest):
 
     def test_python_home_and_path_are_only_removed_from_child_copy(self):
         original = {"PYTHONHOME": "other", "PYTHONPATH": "other-modules",
-                    "VIRTUAL_ENV": "original", "PATH": "user-path", "MYAPP_OPTION": "keep",
-                    "WINAPP_PY_INIT_RESULT": "inherited.json"}
+                    "VIRTUAL_ENV": "original", "PATH": "user-path", "MYAPP_OPTION": "keep"}
         with patch.dict(os.environ, original, clear=True):
             child = environment.application_environment(self.project / "identity")
             self.assertEqual(dict(os.environ), original)
         self.assertNotIn("PYTHONHOME", child)
         self.assertNotIn("PYTHONPATH", child)
-        self.assertNotIn("WINAPP_PY_INIT_RESULT", child)
         self.assertEqual(child["MYAPP_OPTION"], "keep")
         self.assertEqual(child["VIRTUAL_ENV"], str(self.project / "identity"))
         self.assertTrue(child["PATH"].startswith(str(self.project / "identity" / "Scripts")))

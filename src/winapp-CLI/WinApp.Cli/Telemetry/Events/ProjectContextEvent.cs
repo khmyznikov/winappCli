@@ -97,7 +97,6 @@ internal sealed class ProjectContextEvent : EventBase
         WinApp.Cli.Services.ProjectFamily.Dart => "dart",
         WinApp.Cli.Services.ProjectFamily.Hybrid => "hybrid",
         WinApp.Cli.Services.ProjectFamily.Mixed => "mixed",
-        WinApp.Cli.Services.ProjectFamily.Python => "python",
         _ => "unknown",
     };
 

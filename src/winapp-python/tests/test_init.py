@@ -32,16 +32,7 @@ class NativeInitTests(ProjectTest):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def context(self, *, project=None, mode="sdk", config=None, metadata=None):
-        project = self.project if project is None else project
-        return {
-            "schema": 1, "project": str(project), "mode": mode,
-            "config_directory": str(project if config is None else config),
-            "metadata_directory": str(project / ".winapp" if metadata is None else metadata),
-        }
-
-    def native(self, executable, arguments, working_directory, *, init_result):
-        init_result.write_text(json.dumps(self.context()), encoding="utf-8")
+    def native(self, executable, arguments, working_directory):
         return 0
 
     def invoke(self, *arguments):
@@ -83,7 +74,7 @@ class NativeInitTests(ProjectTest):
             patch("builtins.input", side_effect=["invalid", ""]) as prompt,
             patch("winapp_cli.cli._configure_after_init") as setup,
         ):
-            self.assertEqual(self.invoke(), 0)
+            self.assertEqual(self.invoke(str(self.project)), 0)
         self.assertEqual(prompt.call_count, 2)
         setup.assert_called_once()
 
@@ -152,10 +143,7 @@ class NativeInitTests(ProjectTest):
         before = source.read_bytes()
         expected = self.config()
 
-        def native(executable, arguments, working_directory, *, init_result):
-            context = self.context(mode="config-only")
-            context["metadata_directory"] = None
-            init_result.write_text(json.dumps(context), encoding="utf-8")
+        def native(executable, arguments, working_directory):
             return 0
 
         with (
@@ -173,7 +161,7 @@ class NativeInitTests(ProjectTest):
             patch("builtins.input", return_value="yes") as prompt,
             patch("winapp_cli.cli._configure_after_init") as setup,
         ):
-            self.assertEqual(self.invoke(), 0)
+            self.assertEqual(self.invoke(str(self.project)), 0)
         prompt.assert_called_once()
         self.assertTrue(setup.call_args.kwargs["reset"])
 
@@ -189,10 +177,10 @@ class NativeInitTests(ProjectTest):
                     patch("builtins.input", return_value="n") as prompt,
                     patch("winapp_cli.cli._configure_after_init") as setup,
                 ):
-                    self.assertEqual(self.invoke(*flags), 0)
+                    self.assertEqual(self.invoke(str(self.project), *flags), 0)
                 prompt.assert_called_once()
                 setup.assert_called_once_with(self.project, reset=False, config_only=False, verbose=False)
-                self.assertEqual(native.call_args.args[1], ["init", *flags])
+                self.assertEqual(native.call_args.args[1], ["init", str(self.project), *flags])
 
     def test_equals_true_uses_defaults_without_prompting(self):
         for flag in ("--use-defaults=true", "--no-prompt=TRUE"):
@@ -258,20 +246,113 @@ class NativeInitTests(ProjectTest):
         setup.assert_not_called()
 
     def test_setup_uses_the_native_selected_project_not_the_callers_cwd(self):
-        selected = self.root / "native-selected project"
+        selected = self.project / "native-selected project"
         selected.mkdir()
+        (selected / "winapp.yaml").write_bytes((self.project / "winapp.yaml").read_bytes())
+        (selected / ".winapp").mkdir()
+        (selected / ".winapp" / "winmds.lock.json").write_text(json.dumps(self.inventory), encoding="utf-8")
 
-        def native(executable, arguments, working_directory, *, init_result):
+        def native(executable, arguments, working_directory):
             self.assertEqual(working_directory, self.project)
-            init_result.write_text(json.dumps(self.context(project=selected)), encoding="utf-8")
             return 0
 
         with (
+            patch("winapp_cli.cli.sys.stdin.isatty", return_value=True),
             patch("winapp_cli.cli.forward_native", side_effect=native),
+            patch("builtins.input", side_effect=["2", "yes"]),
             patch("winapp_cli.cli._configure_after_init") as setup,
         ):
-            self.assertEqual(self.invoke("--add-python-bindings"), 0)
+            self.assertEqual(self.invoke(), 0)
         self.assertEqual(setup.call_args.args[0], selected)
+
+    def test_interactive_artifacts_are_only_candidates_and_need_confirmation(self):
+        for answer, expected_calls in (("no", 0), ("yes", 1)):
+            with (
+                self.subTest(answer=answer),
+                patch("winapp_cli.cli.sys.stdin.isatty", return_value=True),
+                patch("winapp_cli.cli.forward_native", side_effect=self.native),
+                patch("builtins.input", return_value=answer) as prompt,
+                patch("winapp_cli.cli._configure_after_init") as setup,
+            ):
+                self.assertEqual(self.invoke(), 0)
+                prompt.assert_called_once()
+                self.assertIn(str(self.project), prompt.call_args.args[0])
+                self.assertEqual(setup.call_count, expected_calls)
+
+    def test_multiple_candidates_can_be_declined_without_modifying_projects(self):
+        child = self.project / "other"
+        child.mkdir()
+        (child / "winapp.yaml").write_bytes((self.project / "winapp.yaml").read_bytes())
+        (child / ".winapp").mkdir()
+        (child / ".winapp" / "winmds.lock.json").write_text(json.dumps(self.inventory), encoding="utf-8")
+        with (
+            patch("winapp_cli.cli.sys.stdin.isatty", return_value=True),
+            patch("winapp_cli.cli.forward_native", side_effect=self.native),
+            patch("builtins.input", side_effect=["invalid", "0"]),
+            patch("winapp_cli.cli._configure_after_init") as setup,
+        ):
+            self.assertEqual(self.invoke(), 0)
+        setup.assert_not_called()
+        self.assertIn("Enter one of the listed numbers", self.stdout.getvalue())
+
+    def test_eof_during_artifact_confirmation_is_an_explicit_error(self):
+        with (
+            patch("winapp_cli.cli.sys.stdin.isatty", return_value=True),
+            patch("winapp_cli.cli.forward_native", side_effect=self.native),
+            patch("builtins.input", side_effect=EOFError),
+            patch("winapp_cli.cli._configure_after_init") as setup,
+        ):
+            self.assertEqual(self.invoke(), 1)
+        setup.assert_not_called()
+        self.assertIn("Input ended", self.stderr.getvalue())
+
+    def test_no_ready_artifacts_do_not_enable_bindings_from_a_stale_configuration(self):
+        (self.project / ".winapp" / "winmds.lock.json").unlink()
+        with (
+            patch("winapp_cli.cli.sys.stdin.isatty", return_value=True),
+            patch("winapp_cli.cli.forward_native", side_effect=self.native),
+            patch("builtins.input") as prompt,
+            patch("winapp_cli.cli._configure_after_init") as setup,
+        ):
+            self.assertEqual(self.invoke(), 1)
+        prompt.assert_not_called()
+        setup.assert_not_called()
+        self.assertIn("no usable project-local SDK", self.stderr.getvalue())
+
+    def test_config_only_interactive_target_requires_confirmation_even_without_new_files(self):
+        (self.project / ".winapp" / "winmds.lock.json").unlink()
+        with (
+            patch("winapp_cli.cli.sys.stdin.isatty", return_value=True),
+            patch("winapp_cli.cli.forward_native", side_effect=self.native),
+            patch("builtins.input", return_value="yes") as prompt,
+            patch("winapp_cli.cli._configure_after_init") as setup,
+        ):
+            self.assertEqual(self.invoke("--config-only"), 0)
+        prompt.assert_called_once()
+        self.assertTrue(setup.call_args.kwargs["config_only"])
+
+    def test_quiet_ambiguous_target_does_not_guess_or_prompt(self):
+        with (
+            patch("winapp_cli.cli.sys.stdin.isatty", return_value=True),
+            patch("winapp_cli.cli.forward_native", side_effect=self.native),
+            patch("builtins.input") as prompt,
+            patch("winapp_cli.cli._configure_after_init") as setup,
+        ):
+            self.assertEqual(self.invoke("--quiet"), 1)
+        prompt.assert_not_called()
+        setup.assert_not_called()
+        self.assertIn("Specify a directory", self.stderr.getvalue())
+
+    def test_explicit_directory_with_colon_defaults_does_not_prompt_or_reset(self):
+        with (
+            patch("winapp_cli.cli.sys.stdin.isatty", return_value=True),
+            patch("winapp_cli.cli.forward_native", side_effect=self.native),
+            patch("builtins.input") as prompt,
+            patch("winapp_cli.cli._configure_after_init") as setup,
+        ):
+            self.assertEqual(self.invoke(str(self.project), "--use-defaults:true"), 0)
+        prompt.assert_not_called()
+        self.assertFalse(setup.call_args.kwargs["reset"])
 
     def test_help_and_schema_do_not_generate_and_help_exposes_the_wrapper_flag(self):
         for flag in ("--help", "-h", "-?", "/?", "--cli-schema", "--version"):
@@ -301,24 +382,18 @@ class NativeInitTests(ProjectTest):
                 setup.assert_not_called()
 
     def test_native_non_sdk_modes_skip_and_explicit_requests_fail_loudly(self):
-        for mode in ("none", "sparse", "unmanaged"):
-            with self.subTest(mode=mode):
-                def native(executable, arguments, working_directory, *, init_result):
-                    init_result.write_text(json.dumps(self.context(mode=mode)), encoding="utf-8")
-                    return 0
+        for flags in (["--setup-sdks", "none"], ["--sparse"], ["--ignore-config"]):
+            with self.subTest(flags=flags):
                 with (
-                    patch("winapp_cli.cli.forward_native", side_effect=native),
+                    patch("winapp_cli.cli.forward_native", side_effect=self.native),
                     patch("winapp_cli.cli._configure_after_init") as setup,
                 ):
-                    self.assertEqual(self.invoke(), 0)
-                    self.assertEqual(self.invoke("--add-python-bindings"), 1)
+                    self.assertEqual(self.invoke(*flags), 0)
+                    self.assertEqual(self.invoke(*flags, "--add-python-bindings"), 1)
                 setup.assert_not_called()
 
     def test_config_only_registers_without_running_generation(self):
-        def native(executable, arguments, working_directory, *, init_result):
-            context = self.context(mode="config-only")
-            context["metadata_directory"] = None
-            init_result.write_text(json.dumps(context), encoding="utf-8")
+        def native(executable, arguments, working_directory):
             return 0
         with (
             patch("winapp_cli.cli.forward_native", side_effect=native),
@@ -328,23 +403,21 @@ class NativeInitTests(ProjectTest):
         self.assertTrue(setup.call_args.kwargs["config_only"])
 
     def test_external_sdk_layout_is_not_guessed_or_written_into(self):
-        def native(executable, arguments, working_directory, *, init_result):
-            init_result.write_text(json.dumps(self.context(config=self.root / "external")), encoding="utf-8")
+        def native(executable, arguments, working_directory):
             return 0
         with (
             patch("winapp_cli.cli.forward_native", side_effect=native),
             patch("winapp_cli.cli._configure_after_init") as setup,
         ):
             self.assertEqual(self.invoke("--config-dir", str(self.root / "external")), 0)
-            self.assertEqual(self.invoke("--add-python-bindings"), 1)
+            self.assertEqual(self.invoke("--config-dir", str(self.root / "external"), "--add-python-bindings"), 1)
         setup.assert_not_called()
 
-    def test_missing_and_invalid_native_context_are_errors(self):
-        for data in (None, "not JSON", "[]", '{"schema":1,"mode":"sdk","project":null}'):
+    def test_invalid_sdk_inventory_does_not_change_python_files(self):
+        for data in ("not JSON", "[]", '{"schema":1}'):
             with self.subTest(data=data):
-                def native(executable, arguments, working_directory, *, init_result):
-                    if data is not None:
-                        init_result.write_text(data, encoding="utf-8")
+                def native(executable, arguments, working_directory):
+                    (self.project / ".winapp" / "winmds.lock.json").write_text(data, encoding="utf-8")
                     return 0
                 with (
                     patch("winapp_cli.cli.forward_native", side_effect=native),
@@ -448,10 +521,7 @@ class NativeInitTests(ProjectTest):
         application.write_text("dynwinrt==0.1.0rc20\n", encoding="utf-8")
         before = {path: path.read_bytes() for path in (source, application, self.project / "requirements-dev.txt")}
 
-        def native(executable, arguments, working_directory, *, init_result):
-            context = self.context(mode="config-only")
-            context["metadata_directory"] = None
-            init_result.write_text(json.dumps(context), encoding="utf-8")
+        def native(executable, arguments, working_directory):
             return 0
 
         with (
@@ -468,10 +538,7 @@ class NativeInitTests(ProjectTest):
     def test_config_only_registers_dependencies_after_codegen_without_generation(self):
         order = []
 
-        def native(executable, arguments, working_directory, *, init_result):
-            context = self.context(mode="config-only")
-            context["metadata_directory"] = None
-            init_result.write_text(json.dumps(context), encoding="utf-8")
+        def native(executable, arguments, working_directory):
             return 0
 
         with (

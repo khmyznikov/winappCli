@@ -192,11 +192,6 @@ internal sealed class ProjectContextDetector : IProjectContextDetector
             return DetectCppProject(directory);
         }
 
-        if (nodeContext is null && PythonProjectMetadata.FindMarker(directory, includeScriptProjects: false) is not null)
-        {
-            return Known(ProjectFamily.Python, ProjectAppFramework.Unknown);
-        }
-
         return nodeContext;
     }
 

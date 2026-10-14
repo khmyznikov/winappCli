@@ -34,6 +34,8 @@ winapp-py init --use-defaults --add-python-bindings
 
 The command creates or reuses a normal project `.venv`, records the generator version in project configuration, generates bindings and installs declared dependencies there. `--use-defaults` preserves existing binding selections and recorded versions; resetting API selections requires interactive confirmation. Application dependencies are separate from the tool's installation environment. See the guide's [DynWinRT and application dependency handling](https://github.com/microsoft/WinAppCli/blob/main/docs/guides/python.md#dependency-declarations) for version upgrades.
 
+Pass a project directory to target it explicitly. Interactive init without a directory asks you to confirm the bindings target from usable SDK configurations after native setup; see [initialize the project](https://github.com/microsoft/WinAppCli/blob/main/docs/guides/python.md#2-initialize-the-project).
+
 ### Commands overview
 
 **Project setup and bindings:**

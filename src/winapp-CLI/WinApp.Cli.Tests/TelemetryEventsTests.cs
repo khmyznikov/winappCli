@@ -149,23 +149,6 @@ public sealed class TelemetryEventsTests
     }
 
     [TestMethod]
-    public void ProjectContextEvent_PythonUsesOnlyTheNormalizedFamily()
-    {
-        var telemetryEvent = new ProjectContextEvent(
-            "init",
-            new ProjectContext(
-                ProjectFamily.Python,
-                ProjectAppFramework.Unknown,
-                ProjectTargetKind.SourceProject,
-                ProjectContextSource.ExactMarker,
-                ProjectContextConfidence.High));
-
-        Assert.AreEqual("python", telemetryEvent.ProjectFamily);
-        Assert.AreEqual("unknown", telemetryEvent.AppFramework);
-        Assert.AreEqual("exact-marker", telemetryEvent.DetectionSource);
-    }
-
-    [TestMethod]
     public void TimeTakenEvent_StoresDurationAndSanitizesName()
     {
         var telemetryEvent = new TimeTakenEvent("deploy-secret", 987);

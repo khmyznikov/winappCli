@@ -67,6 +67,18 @@ winapp-py init --use-defaults --add-python-bindings
 
 This prepares SDKs, Windows App Runtime, the manifest and icons, generates bindings, and installs declared dependencies into `.venv`. Continue when it reports **Python bindings ready**.
 
+To initialize a project from its parent directory, specify its path:
+
+```powershell
+winapp-py init .\python-app --use-defaults --add-python-bindings
+```
+
+Without a directory, `--use-defaults` targets the current directory. Interactive `winapp-py init` can instead let you select a project. After native setup, the Python wrapper lists directories with usable SDK configuration and asks you to confirm the bindings target before changing Python files. These are candidates, including previously prepared projects, not proof of which directory was selected earlier. Enter `0` to skip when several candidates are listed, or decline the confirmation for a single candidate.
+
+If no usable target is found, rerun with its explicit directory. For `--config-only`, the target needs a valid local `winapp.yaml`; bindings generation is deferred until `restore`. Normal generation also needs a matching `.winapp\winmds.lock.json`. `--sparse`, `--setup-sdks none` and `--ignore-config` do not enable Python bindings.
+
+For native project hints and subdirectory searching, see the [`init` reference](../usage.md#init).
+
 ## 3. Add the File Picker
 
 Create `app.py`:

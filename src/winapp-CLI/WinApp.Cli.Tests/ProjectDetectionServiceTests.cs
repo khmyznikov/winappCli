@@ -323,7 +323,7 @@ public class ProjectDetectionServiceTests
         Assert.IsNotNull(result);
         Assert.AreEqual(DetectedProjectType.Python, result.Type);
         Assert.AreEqual(filename, result.ProjectFileName);
-        Assert.AreEqual($"Python project (./{filename})", result.ToDisplayString());
+        Assert.AreEqual($"Possible Python project (./{filename})", result.ToDisplayString());
     }
 
     [TestMethod]
@@ -337,10 +337,12 @@ public class ProjectDetectionServiceTests
     [DataRow("[project]\nname = \"python-app\"\nname = \"other\"\n")]
     [DataRow("[[project]]\nname = \"python-app\"\n")]
     [DataRow("[tool]\nproject = { name = \"python-app\" }\n")]
-    public void DetectProject_Python_DoesNotTreatArbitraryOrMalformedTomlAsAProject(string contents)
+    public void DetectProject_Python_OnlyHintsAtMarkerPresenceWithoutParsingContents(string contents)
     {
         CreateFile("pyproject.toml", contents);
-        Assert.IsNull(ProjectDetectionService.DetectProject(Root, Root));
+        var result = ProjectDetectionService.DetectProject(Root, Root);
+        Assert.IsNotNull(result);
+        Assert.AreEqual("Possible Python", result.TypeLabel);
     }
 
     [TestMethod]
@@ -364,11 +366,11 @@ public class ProjectDetectionServiceTests
     }
 
     [TestMethod]
-    public void DetectProject_Python_IgnoresFormatterSetupConfigurationAndOversizedMetadata()
+    public void DetectProject_Python_DoesNotNeedToReadLargeOrToolOnlyMarkers()
     {
         CreateFile("setup.cfg", "[flake8]\nmax-line-length = 100\n");
         CreateFile("pyproject.toml", "[project]\nname=\"app\"\n#" + new string('x', 512 * 1024));
-        Assert.IsNull(ProjectDetectionService.DetectProject(Root, Root));
+        Assert.AreEqual("pyproject.toml", ProjectDetectionService.DetectProject(Root, Root)?.ProjectFileName);
     }
 
     [TestMethod]
@@ -386,16 +388,32 @@ public class ProjectDetectionServiceTests
     }
 
     [TestMethod]
-    public async Task DetectProjects_Python_PrunesProjectsAndSkipsCustomNamedVirtualEnvironments()
+    public async Task DetectProjects_PythonHintsDoNotPruneAndSkipCustomNamedVirtualEnvironments()
     {
         CreateFile(Path.Combine("environment", "pyvenv.cfg"), "home = Python\n");
         CreateFile(Path.Combine("environment", "Lib", "site-packages", "library", "setup.py"), "raise Exception()\n");
         CreateFile(Path.Combine("python-app", "pyproject.toml"), "[project]\nname=\"python-app\"\n");
         CreateFile(Path.Combine("python-app", "nested", "setup.py"), "raise Exception()\n");
         var results = await _sut.DetectProjectsAsync(Root, 5, null, CancellationToken.None);
-        Assert.HasCount(1, results);
+        Assert.HasCount(2, results);
         Assert.AreEqual(DetectedProjectType.Python, results[0].Type);
         Assert.AreEqual("python-app", results[0].DisplayPath);
+        Assert.AreEqual("python-app/nested", results[1].DisplayPath);
+    }
+
+    [TestMethod]
+    public async Task DetectProjects_PythonRootHintDoesNotHideNestedApplications()
+    {
+        CreateFile("pyproject.toml", "[tool.ruff]\nline-length=100\n");
+        CreateFile(Path.Join("desktop", "package.json"), """{"dependencies":{"electron":"1.0"}}""");
+        CreateFile(Path.Join("service", "Service.csproj"),
+            "<Project><PropertyGroup><OutputType>Exe</OutputType></PropertyGroup></Project>");
+        var results = await _sut.DetectProjectsAsync(Root, 10, null, CancellationToken.None);
+        Assert.HasCount(3, results);
+        Assert.AreEqual(DetectedProjectType.Python, results[0].Type);
+        CollectionAssert.AreEquivalent(
+            new[] { DetectedProjectType.Python, DetectedProjectType.Electron, DetectedProjectType.Dotnet },
+            results.Select(project => project.Type).ToArray());
     }
 
     [TestMethod]
@@ -573,7 +591,7 @@ public class ProjectDetectionServiceTests
         Assert.AreEqual(".NET", new DetectedProject(DetectedProjectType.Dotnet, Root, ".", "MyApp.csproj").TypeLabel);
         Assert.AreEqual("Rust", new DetectedProject(DetectedProjectType.Rust, Root, ".", "Cargo.toml").TypeLabel);
         Assert.AreEqual("C++", new DetectedProject(DetectedProjectType.CPP, Root, ".", "CMakeLists.txt").TypeLabel);
-        Assert.AreEqual("Python", new DetectedProject(DetectedProjectType.Python, Root, ".", "pyproject.toml").TypeLabel);
+        Assert.AreEqual("Possible Python", new DetectedProject(DetectedProjectType.Python, Root, ".", "pyproject.toml").TypeLabel);
     }
 
     // --- Edge cases ---

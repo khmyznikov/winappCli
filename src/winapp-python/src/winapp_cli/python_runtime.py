@@ -72,7 +72,7 @@ class Distribution:
 
 def clean_python_environment() -> dict[str, str]:
     environment = dict(os.environ)
-    for name in ("PYTHONHOME", "PYTHONPATH", "__PYVENV_LAUNCHER__", "WINAPP_PY_INIT_RESULT"):
+    for name in ("PYTHONHOME", "PYTHONPATH", "__PYVENV_LAUNCHER__"):
         environment.pop(name, None)
     return environment
 

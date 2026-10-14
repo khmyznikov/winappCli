@@ -23,7 +23,6 @@ internal class WorkspaceSetupOptions
     public bool RequireExistingConfig { get; set; }
     public bool ForceLatestBuildTools { get; set; }
     public bool ConfigOnly { get; set; }
-    public DirectoryInfo? MetadataDirectory { get; set; }
 }
 
 /// <summary>
@@ -202,7 +201,6 @@ internal class WorkspaceSetupService(
                 // Step 3: Initialize workspace
                 globalWinappDir = winappDirectoryService.GetGlobalWinappDirectory();
                 localWinappDir = winappDirectoryService.GetLocalWinappDirectory(options.BaseDirectory);
-                options.MetadataDirectory = localWinappDir;
 
                 // Setup-specific startup messages
                 if (!options.RequireExistingConfig)

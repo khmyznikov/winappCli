@@ -124,14 +124,14 @@ public sealed class ProjectContextDetectorTests
     }
 
     [TestMethod]
-    public void DetectDirectory_Python_UsesOnlyRecognizedProjectMetadata()
+    public void DetectDirectory_PythonMarkers_DoNotClaimAValidatedTelemetryFamily()
     {
         var python = CreateDirectory("python");
         File.WriteAllText(Path.Join(python.FullName, "pyproject.toml"), "[project]\nname=\"python-app\"\n");
         var context = _detector.DetectDirectory(python);
-        Assert.AreEqual(ProjectFamily.Python, context.Family);
+        Assert.AreEqual(ProjectFamily.Unknown, context.Family);
         Assert.AreEqual(ProjectAppFramework.Unknown, context.Framework);
-        Assert.AreEqual(ProjectContextConfidence.High, context.Confidence);
+        Assert.AreEqual(ProjectContextConfidence.None, context.Confidence);
         var formatter = CreateDirectory("formatter");
         File.WriteAllText(Path.Join(formatter.FullName, "pyproject.toml"), "[tool.ruff]\nline-length=100\n");
         Assert.IsFalse(_detector.DetectDirectory(formatter).IsKnown);

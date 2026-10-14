@@ -94,9 +94,9 @@ with zipfile.ZipFile(wheel) as archive:
         "[project]`nname = 'python-detection-project'`nversion = '0.0.0'`n")
     $detectedOutput = & $cli init $detectionProject --config-only
     if ($LASTEXITCODE -ne 0 -or
-        @($detectedOutput | Where-Object { $_ -like '*Python project detected*' }).Count -ne 1 -or
+        @($detectedOutput | Where-Object { $_ -like '*Possible Python project detected*' }).Count -ne 1 -or
         @($detectedOutput | Where-Object { $_ -like '*No known project type*' }).Count -ne 0) {
-        throw "Bundled native CLI did not recognize the Python project: $detectedOutput"
+        throw "Bundled native CLI did not show the file-only Python hint: $detectedOutput"
     }
 
     $sdkProject = Join-Path $temporary 'sdk-project'

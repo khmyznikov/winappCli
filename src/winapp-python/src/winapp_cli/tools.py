@@ -14,7 +14,6 @@ from .native import bundled_cli
 
 def _child_environment(environment: dict[str, str] | None = None) -> dict[str, str]:
     result = dict(os.environ if environment is None else environment)
-    result.pop("WINAPP_PY_INIT_RESULT", None)
     result["WINAPP_CLI_CALLER"] = "python"
     return result
 
@@ -106,12 +105,8 @@ def find_native_cli(override: str | None) -> Path:
     return executable
 
 
-def forward_native(
-    executable: Path, args: list[str], project: Path, *, init_result: Path | None = None,
-) -> int:
+def forward_native(executable: Path, args: list[str], project: Path) -> int:
     environment = _child_environment()
-    if init_result is not None:
-        environment["WINAPP_PY_INIT_RESULT"] = str(init_result)
     try:
         return subprocess.run(
             [str(executable), *args], cwd=project, check=False,

@@ -160,34 +160,29 @@ class ToolTests(ProjectTest):
 
     def test_init_forwarding_inherits_stdio_and_does_not_inject_command_options(self):
         arguments = ["init", "some project", "--setup-sdks", "preview", "--use-defaults"]
-        result_path = self.root / "result.json"
         with patch("winapp_cli.tools.subprocess.run", return_value=subprocess.CompletedProcess([], 0)) as launch:
-            self.assertEqual(forward_native(self.native, arguments, self.project, init_result=result_path), 0)
+            self.assertEqual(forward_native(self.native, arguments, self.project), 0)
         self.assertEqual(launch.call_args.args[0], [str(self.native), *arguments])
-        self.assertEqual(launch.call_args.kwargs["env"]["WINAPP_PY_INIT_RESULT"], str(result_path))
+        self.assertEqual(launch.call_args.kwargs["env"]["WINAPP_CLI_CALLER"], "python")
         self.assertNotIn("stdout", launch.call_args.kwargs)
         self.assertNotIn("stderr", launch.call_args.kwargs)
         self.assertNotIn("stdin", launch.call_args.kwargs)
         self.assertNotIn("capture_output", launch.call_args.kwargs)
 
-    def test_init_report_is_scoped_to_initialization_and_does_not_leak_to_other_tools(self):
+    def test_native_caller_is_set_without_mutating_the_parent_environment(self):
         with (
-            patch.dict(os.environ, {"WINAPP_PY_INIT_RESULT": "inherited.json"}),
+            patch.dict(os.environ, {"WINAPP_CLI_CALLER": "parent"}),
             patch("winapp_cli.tools.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")) as launch,
         ):
             run_tool(["winapp.exe", "restore", str(self.project)], self.project)
             self.assertEqual(launch.call_args.kwargs["env"]["WINAPP_CLI_CALLER"], "python")
-            self.assertNotIn("WINAPP_PY_INIT_RESULT", launch.call_args.kwargs["env"])
-            self.assertEqual(os.environ["WINAPP_PY_INIT_RESULT"], "inherited.json")
+            self.assertEqual(os.environ["WINAPP_CLI_CALLER"], "parent")
 
             run_tool(["codegen.exe", "capabilities"], self.project)
-            self.assertNotIn("WINAPP_PY_INIT_RESULT", launch.call_args.kwargs["env"])
             run_tool(["pip.exe", "install"], self.project, environment=dict(os.environ))
-            self.assertNotIn("WINAPP_PY_INIT_RESULT", launch.call_args.kwargs["env"])
 
             forward_native(self.native, ["init", "--use-defaults"], self.project)
-            self.assertNotIn("WINAPP_PY_INIT_RESULT", launch.call_args.kwargs["env"])
-            self.assertEqual(os.environ["WINAPP_PY_INIT_RESULT"], "inherited.json")
+            self.assertEqual(os.environ["WINAPP_CLI_CALLER"], "parent")
 
 
 class CliTests(ProjectTest):

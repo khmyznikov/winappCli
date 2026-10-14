@@ -41,7 +41,7 @@ internal enum DetectedProjectType
     CPP,
 
     /// <summary>
-    /// Python project metadata or requirements with a root-level script
+    /// Possible Python project indicated by marker files, without parsing their contents
     /// </summary>
     Python
 }

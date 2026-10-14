@@ -93,8 +93,10 @@ internal sealed class ProjectDetectionService(
                 results.Add(detected);
                 progress?.Report(detected);
                 logger.LogDebug("Detected {Type} project at {Path}", detected.TypeLabel, detected.DisplayPath);
-                // Prune: don't search subdirectories of a detected project
-                continue;
+                if (detected.Type != DetectedProjectType.Python)
+                {
+                    continue;
+                }
             }
 
             // Enqueue subdirectories for further searching
@@ -155,10 +157,23 @@ internal sealed class ProjectDetectionService(
             return new DetectedProject(DetectedProjectType.CPP, directory, displayPath, "CMakeLists.txt");
         }
 
-        var pythonMarker = PythonProjectMetadata.FindMarker(directory);
-        if (pythonMarker is not null)
+        if (directory.Exists && directory.Attributes.HasFlag(FileAttributes.ReparsePoint))
         {
-            return new DetectedProject(DetectedProjectType.Python, directory, displayPath, pythonMarker);
+            return null;
+        }
+        foreach (var marker in new[] { "pyproject.toml", "setup.cfg", "setup.py" })
+        {
+            var file = new FileInfo(Path.Join(directory.FullName, marker));
+            if (file.Exists && !file.Attributes.HasFlag(FileAttributes.ReparsePoint))
+            {
+                return new DetectedProject(DetectedProjectType.Python, directory, displayPath, marker);
+            }
+        }
+        if (File.Exists(Path.Join(directory.FullName, "requirements.txt"))
+            && directory.EnumerateFiles("*.py", SearchOption.TopDirectoryOnly)
+                .Any(file => !file.Attributes.HasFlag(FileAttributes.ReparsePoint)))
+        {
+            return new DetectedProject(DetectedProjectType.Python, directory, displayPath, "requirements.txt");
         }
 
         return null;
