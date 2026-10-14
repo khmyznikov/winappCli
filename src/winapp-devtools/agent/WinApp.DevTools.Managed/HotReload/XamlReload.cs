@@ -32,8 +32,11 @@ internal static class XamlReload
 
     private static readonly Dictionary<string, ComponentManifest> Manifests = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>SPIKE (S1/S2): markup comes from the real XAML compiler's .xbf, wired by the compiled code alone.</summary>
-    private static readonly bool RealCompilerSpike = Environment.GetEnvironmentVariable("WINAPP_HOT_RELOAD_REAL_COMPILER") == "1";
+    /// <summary>
+    /// The compiler pipeline: markup is the XAML compiler's own .xbf and the compiled code wires it (InitializeComponent,
+    /// Connect, x:Bind). Nothing is rewritten, and the reflection metadata provider isn't used. Set by every request.
+    /// </summary>
+    internal static bool Compiler { get; set; }
     private static readonly List<WeakReference<Window>> KnownWindows = [];
     private static readonly ConditionalWeakTable<object, Dictionary<string, Delegate>> RootHandlers = new();
     private static XamlHotReloadService? s_service;
@@ -96,9 +99,9 @@ internal static class XamlReload
         s_service = service;
         Hook.Attached = OnHook;
         service.AdviseComponentLoaded(OnLoaded);
-        if (RealCompilerSpike)
+        if (Compiler)
         {
-            // SPIKE: types come only from the app's own compiled metadata provider (updated by edit and continue).
+            // Types come only from the app's own compiled metadata provider, which code updates keep current.
             return null;
         }
         s_provider = new ReflectionMetadataProvider();
@@ -194,12 +197,16 @@ internal static class XamlReload
     }
 
     /// <summary>Runs on the UI thread after an edit-and-continue delta (if any) was applied.</summary>
-    public static void Apply(HotReloadRequest request, List<string> messages, List<string> errors, List<string> notes)
+    public static void Apply(HotReloadRequest request, List<string> messages, List<string> errors, List<string> notes, List<string> restarts)
     {
         s_messages = messages;
         s_errors = errors;
         s_notes = notes;
+        s_restarts = restarts;
         s_deferredBinds = [];
+        s_settled = [];
+        s_savedFiles = request.SavedFiles;
+        s_pageUpdate = Compiler ? PageUpdateStrategies.Get(request.PageUpdate) : null;
         CodeAddedItems.LaunchItems(request.LaunchItems);
         try
         {
@@ -244,13 +251,12 @@ internal static class XamlReload
                 }
                 if (markup.Xbf is { } xbf)
                 {
-                    // SPIKE: the XAML compiler's own .xbf; the page's compiled InitializeComponent and Connect do the rest.
+                    // The XAML compiler's own .xbf: the compiled InitializeComponent and Connect do the rest.
                     Manifests.Remove(markup.Uri);
                     if (markup.Manifest.ClassName.Length > 0)
                     {
                         ClassUris[markup.Manifest.ClassName] = markup.Uri;
                     }
-                    s_service!.RemoveComponentMarkup(markup.Uri);
                     var binaryResult = s_service!.SetComponentMarkup(markup.Uri, binary: true, xbf);
                     if (binaryResult < 0)
                     {
@@ -327,6 +333,59 @@ internal static class XamlReload
             s_messages = null;
             s_errors = null;
             s_notes = null;
+            s_restarts = null;
+            s_pageUpdate = null;
+        }
+    }
+
+    private static List<string>? s_restarts;
+    private static IReadOnlyList<string> s_savedFiles = [];
+    private static IPageUpdateStrategy? s_pageUpdate;
+
+    /// <summary>During an update: work page update strategies asked to run once the pages have settled (PageUpdate.WhenSettled).</summary>
+    private static List<Func<Task>>? s_settled;
+
+    /// <summary>
+    /// After the update's deferred x:Bind pass: runs the work strategies registered with PageUpdate.WhenSettled on the UI
+    /// thread, and waits for it (at most 10 s) so what it reports belongs to this save.
+    /// </summary>
+    public static async Task RunSettledAsync(List<string> errors, List<string> notes)
+    {
+        var work = s_settled;
+        s_settled = null;
+        if (work is not { Count: > 0 } || FindDispatcher() is not { } dispatcher)
+        {
+            return;
+        }
+        var started = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Low priority: after the layout and the deferred evaluations already queued.
+        if (!dispatcher.TryEnqueue(DispatcherQueuePriority.Low, () =>
+        {
+            started.SetResult(Task.WhenAll(work.Select(async run =>
+            {
+                try
+                {
+                    await run().ConfigureAwait(true);
+                }
+                catch (Exception ex)
+                {
+                    lock (errors)
+                    {
+                        errors.Add("updating the page failed: " + ex.GetBaseException().Message);
+                    }
+                }
+            })));
+        }))
+        {
+            return;
+        }
+        var all = await started.Task.ConfigureAwait(false);
+        if (await Task.WhenAny(all, Task.Delay(TimeSpan.FromSeconds(10))).ConfigureAwait(false) != all)
+        {
+            lock (notes)
+            {
+                notes.Add("the page update didn't finish within 10 s; what it reports later isn't shown");
+            }
         }
     }
 
@@ -593,11 +652,7 @@ internal static class XamlReload
                     var (frame, page) = entry;
                     var state = TakeState(page, page.Content);
                     var type = page.GetType().FullName!;
-                    if (allPages || recreate.Contains(type))
-                    {
-                        Renavigate(frame, page);
-                    }
-                    else
+                    void InPlace()
                     {
                         // A page's own frames (a gallery page showing its sample in one) keep their pages, which the
                         // page navigated them to in OnNavigatedTo, not in its markup.
@@ -622,8 +677,30 @@ internal static class XamlReload
                                 }
                             }
                         }
+                        UiState.RestoreWhenLoaded(page.Content as FrameworkElement, state, s_dispatcher);
                     }
-                    UiState.RestoreWhenLoaded((frame.Content as Page)?.Content as FrameworkElement, state, s_dispatcher);
+                    if (allPages || recreate.Contains(type))
+                    {
+                        Renavigate(frame, page);
+                        UiState.RestoreWhenLoaded((frame.Content as Page)?.Content as FrameworkElement, state, s_dispatcher);
+                    }
+                    else if (Compiler && s_pageUpdate is { } strategy && replay.Contains(type))
+                    {
+                        var update = new PageUpdate(page, frame, ClassUris.GetValueOrDefault(type) ?? "", s_savedFiles, InPlace, () => Recreate(frame, page),
+                            s_notes ?? [], s_restarts ?? [], s_settled ?? []);
+                        try
+                        {
+                            strategy.Update(update);
+                        }
+                        catch (Exception ex)
+                        {
+                            ReportError($"{page.GetType().Name}: updating the page failed: {ex.GetBaseException().Message}");
+                        }
+                    }
+                    else
+                    {
+                        InPlace();
+                    }
                 }
                 foreach (var element in others)
                 {
@@ -798,41 +875,42 @@ internal static class XamlReload
     }
 
     /// <summary>
-    /// SPIKE: simulates a reset hook the XAML compiler could generate (a MetadataUpdateHandler): the app's XamlTypeInfo
-    /// provider builds its type tables once, so a type added by an update isn't found, and an inserted type shifts the
-    /// indexes the updated CreateXamlType uses. A new provider builds them again with the updated code.
+    /// After a code update on the compiler pipeline: the app's generated XamlTypeInfo provider builds its type tables once,
+    /// so a type the update added isn't found, and an inserted type shifts the indexes the updated code uses. A new
+    /// provider builds them again from the updated code.
     /// </summary>
-    public static void SpikeResetTypeInfo()
+    public static void ResetTypeInfo()
     {
-        if (RealCompilerSpike && Application.Current is { } app && app.GetType().GetField("__appProvider", InstanceMembers) is { } field)
+        if (Compiler && Application.Current is { } app && app.GetType().GetField("__appProvider", InstanceMembers) is { } field)
         {
             field.SetValue(app, null);
-            HotReloadAgent.Log("spike: reset the app's XamlTypeInfo provider");
         }
     }
 
     /// <summary>
-    /// SPIKE: before a delta, stops the compiled x:Bind of the components about to be re-initialized, while their code still
-    /// matches their fields (after the delta, an old Bindings object runs the new code against fields it never set).
+    /// Before a code update on the compiler pipeline: stops the compiled x:Bind of the live components of these classes
+    /// while their code still matches their fields. After the update, an old Bindings object would run the new code
+    /// against fields it never set, and stay subscribed to the view model next to the new one.
     /// </summary>
-    public static void SpikeStopTracking(IReadOnlyCollection<string> types)
+    public static void StopTracking(IReadOnlyCollection<string> types)
     {
-        if (!RealCompilerSpike || types.Count == 0)
+        if (!Compiler || types.Count == 0)
         {
             return;
         }
+        var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
         void Stop(object component)
         {
-            if (types.Contains(component.GetType().FullName!) && component.GetType().GetField("Bindings", InstanceMembers)?.GetValue(component) is { } bindings)
+            if (seen.Add(component) && types.Contains(component.GetType().FullName!) &&
+                component.GetType().GetField("Bindings", InstanceMembers)?.GetValue(component) is { } bindings)
             {
                 try
                 {
                     bindings.GetType().GetMethod("StopTracking")?.Invoke(bindings, null);
-                    HotReloadAgent.Log($"spike: stopped tracking {component.GetType().Name} {bindings.GetType().Name}#{System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(bindings)}");
                 }
                 catch (Exception ex)
                 {
-                    HotReloadAgent.Log($"spike: StopTracking failed: {ex.GetBaseException().Message}");
+                    HotReloadAgent.Log($"{component.GetType().Name}: stopping its x:Bind failed: {ex.GetBaseException().Message}");
                 }
             }
         }
@@ -843,9 +921,9 @@ internal static class XamlReload
                 return;
             }
             Stop(element);
-            for (var i = 0; i < Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(element); i++)
+            for (var i = 0; i < VisualTreeHelper.GetChildrenCount(element); i++)
             {
-                Walk(Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(element, i));
+                Walk(VisualTreeHelper.GetChild(element, i));
             }
         }
         foreach (var window in LiveWindows())
@@ -862,16 +940,6 @@ internal static class XamlReload
         {
             var bindings = component.GetType().GetField("Bindings", InstanceMembers)?.GetValue(component);
             bindings?.GetType().GetMethod("Update")?.Invoke(bindings, null);
-            if (RealCompilerSpike)
-            {
-                HotReloadAgent.Log($"spike: {component.GetType().Name}.Bindings field={(component.GetType().GetField("Bindings", InstanceMembers) is not null)} value={bindings?.GetType().FullName ?? "null"}");
-                foreach (var property in component.GetType().GetProperties(InstanceMembers).Where(p => typeof(System.ComponentModel.INotifyPropertyChanged).IsAssignableFrom(p.PropertyType) && p.GetIndexParameters().Length == 0))
-                {
-                    var source = property.GetValue(component);
-                    var handlers = source is null ? null : LiveObjects.Fields(source.GetType()).FirstOrDefault(f => f.Name == "PropertyChanged")?.GetValue(source) as Delegate;
-                    HotReloadAgent.Log($"spike: {component.GetType().Name}.{property.Name}.PropertyChanged has {handlers?.GetInvocationList().Length ?? 0} handler(s): {string.Join(", ", handlers?.GetInvocationList().Select(d => d.Target?.GetType().Name + "#" + System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(d.Target!)) ?? [])}");
-                }
-            }
         }
         catch (Exception ex)
         {
@@ -1232,6 +1300,24 @@ internal static class XamlReload
     /// Re-creates the frame's current page with its original navigation parameter: step to a placeholder so the
     /// current entry lands on the back stack, then go back to it. The frame's stacks end up as they were.
     /// </summary>
+    /// <summary>
+    /// For page update strategies: a new instance of the page navigated in place of the old one. A cached page
+    /// (NavigationCacheMode) would come back as the same instance, so the old one leaves the cache first.
+    /// Returns the page the frame shows afterwards (the old one when re-creating it failed).
+    /// </summary>
+    private static Page Recreate(Frame frame, Page page)
+    {
+        try
+        {
+            page.NavigationCacheMode = NavigationCacheMode.Disabled;
+        }
+        catch (COMException)
+        {
+        }
+        Renavigate(frame, page);
+        return frame.Content as Page ?? page;
+    }
+
     private static void Renavigate(Frame frame, Page page)
     {
         HotReloadAgent.Log($"renavigate {page.GetType().FullName}");
@@ -1629,13 +1715,18 @@ internal static class XamlReload
             {
                 Wire(component, manifest);
             }
-            else if (RealCompilerSpike && (component as FrameworkElement ?? ContentRoot(component) as FrameworkElement) is { } spikeRoot && s_dispatcher is { } spikeDispatcher)
+            else if (Compiler && (component is Window || component is FrameworkElement { IsLoaded: true }))
             {
-                // SPIKE: re-initialized in place, so the root's Loading (which runs the compiled Bindings.Initialize) won't fire.
-                HotReloadAgent.Log($"spike: {component.GetType().Name} root loaded={spikeRoot.IsLoaded}");
-                if (spikeRoot.IsLoaded)
+                // Re-initialized in place: the compiled x:Bind starts on the page's Loading or the window's Activated,
+                // which already happened, so start it here once the constructor has finished (within the update when
+                // there is one, so problems are reported with it).
+                if (s_deferredBinds is { } deferred)
                 {
-                    spikeDispatcher.TryEnqueue(DispatcherQueuePriority.Low, () => UpdateCompiledBindings(component));
+                    deferred.Add(() => UpdateCompiledBindings(component));
+                }
+                else
+                {
+                    s_dispatcher?.TryEnqueue(DispatcherQueuePriority.Low, () => UpdateCompiledBindings(component));
                 }
             }
             CodeAddedItems.RecordMarkup(component);

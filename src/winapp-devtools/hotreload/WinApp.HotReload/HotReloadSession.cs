@@ -118,10 +118,11 @@ internal sealed partial class HotReloadSession
         var info = CreateProjectInfo(workspace, options.ProjectFile, cscArgs);
         info = info.WithCompilationOutputInfo(info.CompilationOutputInfo.WithAssemblyPath(SnapshotBaseline(info.CompilationOutputInfo.AssemblyPath!, options.PipeName)));
         info = info.WithDocuments(info.Documents.Select(document => AsBuilt(document, options.CscArgsFile, projectDirectory)));
-        if (RealCompiler)
+        if (UseCompiler)
         {
-            // SPIKE: the per-save builds overwrite obj; the baseline keeps the text the running binary was built from.
-            info = info.WithDocuments(info.Documents.Select(document => document.FilePath is { } p && IsGenerated(p) ? Pinned(document) : document));
+            // The XAML compiler's output replaces the generated documents; the baseline keeps the text the running binary
+            // was built from, which a build may overwrite in obj.
+            info = info.WithDocuments(info.Documents.Select(Pinned));
         }
         var solution = workspace.AddProject(info).Solution;
         var capabilities = (hello.Capabilities ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries).ToImmutableArray();
@@ -132,7 +133,11 @@ internal sealed partial class HotReloadSession
 
         session = new HotReloadSession(options, agent, workspace, info.Id, solution, enc, hello.BaseDirectory ?? "", cscArgs) { _xamlReload = hello.XamlReload, XamlReloadUnavailable = hello.XamlReloadUnavailable };
         await session.LoadComponentsAsync(cancellationToken).ConfigureAwait(false);
-        if (!RealCompiler)
+        if (UseCompiler)
+        {
+            session.StartXamlCompiler();
+        }
+        else
         {
             session._warmUp = Task.Run(() => session.WarmUpAsync(cancellationToken), cancellationToken);
         }
@@ -154,6 +159,7 @@ internal sealed partial class HotReloadSession
             if (File.Exists(Path.ChangeExtension(assembly, ".pdb")))
             {
                 File.Copy(Path.ChangeExtension(assembly, ".pdb"), Path.ChangeExtension(copy, ".pdb"), overwrite: true);
+                PointToOwnPdb(copy);
             }
             return copy;
         }
@@ -161,6 +167,41 @@ internal sealed partial class HotReloadSession
         {
             return assembly;
         }
+    }
+
+    /// <summary>
+    /// Edit and continue opens the baseline's PDB at the path the assembly records (obj\...\App.pdb) before it looks next
+    /// to the assembly, and a build while the app runs overwrites that one. The copy records the copied PDB instead
+    /// (or, when that path is longer than the room the build left, a path that doesn't exist, which falls back to it).
+    /// </summary>
+    private static void PointToOwnPdb(string assemblyCopy)
+    {
+        var bytes = File.ReadAllBytes(assemblyCopy);
+        using (var reader = new System.Reflection.PortableExecutable.PEReader(new MemoryStream(bytes)))
+        {
+            foreach (var entry in reader.ReadDebugDirectory().Where(e => e.Type == System.Reflection.PortableExecutable.DebugDirectoryEntryType.CodeView))
+            {
+                // "RSDS", GUID, age, then the path (UTF-8, NUL-terminated) in the rest of the entry.
+                const int header = 4 + 16 + 4;
+                var room = entry.DataSize - header - 1;
+                if (entry.DataPointer <= 0 || room <= 0)
+                {
+                    continue;
+                }
+                var own = Encoding.UTF8.GetBytes(Path.ChangeExtension(assemblyCopy, ".pdb"));
+                if (own.Length > room)
+                {
+                    own = Encoding.UTF8.GetBytes(Path.Combine(Path.GetPathRoot(assemblyCopy)!, "~winapp-moved", Path.GetFileNameWithoutExtension(assemblyCopy) + ".pdb"));
+                }
+                if (own.Length > room)
+                {
+                    continue;
+                }
+                Array.Clear(bytes, entry.DataPointer + header, entry.DataSize - header);
+                own.CopyTo(bytes, entry.DataPointer + header);
+            }
+        }
+        File.WriteAllBytes(assemblyCopy, bytes);
     }
 
     /// <summary>The compiler arguments of the build that produced the running binaries.</summary>
@@ -469,10 +510,6 @@ internal sealed partial class HotReloadSession
     {
         await _warmUp.ConfigureAwait(false);
         _phase.Restart();
-        if (RealCompiler && !paths.Any(IsBuildFile) && paths.All(p => p.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) || p.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase)))
-        {
-            return await ProcessRealCompilerAsync(paths, cancellationToken).ConfigureAwait(false);
-        }
         var batch = paths.Select(Relative).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         if (paths.FirstOrDefault(p => p.EndsWith(".appxmanifest", StringComparison.OrdinalIgnoreCase)) is { } manifest)
         {
@@ -634,12 +671,16 @@ internal sealed partial class HotReloadSession
         }
 
         Phase("files and references");
-        var resolver = new CompilationTypeResolver((await Project.GetCompilationAsync(cancellationToken).ConfigureAwait(false))!);
+        if (UseCompiler && libraryPaths.FirstOrDefault(p => p.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase)) is { } libraryXaml)
+        {
+            return new SaveResult(Outcome.Restart, $"{Relative(libraryXaml)}: XAML in a referenced library takes effect when the app restarts");
+        }
+        var resolver = UseCompiler ? null : new CompilationTypeResolver((await Project.GetCompilationAsync(cancellationToken).ConfigureAwait(false))!);
         var resources = new List<MarkupPayload>();
         var libraryTypes = new List<string>();
-        foreach (var path in libraryPaths.Where(p => _libraries.ContainsKey(NestedProjectDirectory(p)!)))
+        foreach (var path in libraryPaths.Where(p => !UseCompiler && _libraries.ContainsKey(NestedProjectDirectory(p)!)))
         {
-            var (payload, error) = await LibraryMarkupAsync(path, NestedProjectDirectory(path)!, resolver, cancellationToken).ConfigureAwait(false);
+            var (payload, error) = await LibraryMarkupAsync(path, NestedProjectDirectory(path)!, resolver!, cancellationToken).ConfigureAwait(false);
             if (error is not null)
             {
                 return error;
@@ -653,9 +694,14 @@ internal sealed partial class HotReloadSession
                 }
             }
         }
-        foreach (var path in paths.Where(p => p.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase) && File.Exists(p)))
+        var savedXaml = paths.Where(p => p.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase) && File.Exists(p)).ToList();
+        if (UseCompiler && paths.FirstOrDefault(p => p.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase) && !File.Exists(p) && _xamlInputs.Contains(p)) is { } removedXaml)
         {
-            var (payload, error, transformed) = await MarkupForAsync(path, UriFor(path), resolver, cancellationToken).ConfigureAwait(false);
+            return new SaveResult(Outcome.Restart, $"{Relative(removedXaml)} was deleted: removing a XAML file takes effect when the app is rebuilt");
+        }
+        foreach (var path in UseCompiler ? [] : savedXaml)
+        {
+            var (payload, error, transformed) = await MarkupForAsync(path, UriFor(path), resolver!, cancellationToken).ConfigureAwait(false);
             if (error is not null)
             {
                 return error;
@@ -690,11 +736,11 @@ internal sealed partial class HotReloadSession
         {
             return new SaveResult(Outcome.Error, usage);
         }
-        if (await DeletedMarkupUsageAsync(paths, cancellationToken).ConfigureAwait(false) is { } markupUsage)
+        if (!UseCompiler && await DeletedMarkupUsageAsync(paths, cancellationToken).ConfigureAwait(false) is { } markupUsage)
         {
             return new SaveResult(Outcome.Error, markupUsage);
         }
-        if (await RemovedMemberNamesAsync(cancellationToken).ConfigureAwait(false) is { Count: > 0 } removedNames &&
+        if (!UseCompiler && await RemovedMemberNamesAsync(cancellationToken).ConfigureAwait(false) is { Count: > 0 } removedNames &&
             await StaleBindingsAsync(removedNames, cancellationToken).ConfigureAwait(false) is { } stale)
         {
             return new SaveResult(Outcome.Error, stale);
@@ -709,10 +755,25 @@ internal sealed partial class HotReloadSession
             }
         }
         Phase("static initializers");
-        var problems = await UpdateGeneratedCodeAsync(cancellationToken).ConfigureAwait(false);
-        if (problems.Count > 0)
+        XamlCompiled? compiled = null;
+        if (UseCompiler)
         {
-            return new SaveResult(Outcome.Error, string.Join(Environment.NewLine + "  ", problems));
+            // The XAML compiler's own output: what a build of the saved files would compile, nothing rewritten.
+            var codeChanged = paths.Any(p => p.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) && IsSource(p));
+            (compiled, var stopped) = await CompileXamlAsync(savedXaml, codeChanged, cancellationToken).ConfigureAwait(false);
+            if (stopped is not null)
+            {
+                Discard();
+                return stopped;
+            }
+        }
+        else
+        {
+            var problems = await UpdateGeneratedCodeAsync(cancellationToken).ConfigureAwait(false);
+            if (problems.Count > 0)
+            {
+                return new SaveResult(Outcome.Error, string.Join(Environment.NewLine + "  ", problems));
+            }
         }
 
         // Removed fields and properties stay declared up front: the compiler can't remove them from a loaded type, and
@@ -780,7 +841,7 @@ internal sealed partial class HotReloadSession
         if (result.RudeEdits.Count > 0 || result.NeedsRestart)
         {
             Discard();
-            var reason = result.RudeEdits.FirstOrDefault() is { } rude ? Format(rude) : "the change can't be applied to the running app";
+            var reason = result.RudeEdits.Count > 0 ? (UseCompiler ? RudeEditReason(result.RudeEdits) : Format(result.RudeEdits[0])) : "the change can't be applied to the running app";
             return new SaveResult(Outcome.Restart, reason);
         }
         if (_components.Values.FirstOrDefault(c => c.Pending && c.Latest is { Warnings.Count: > 0 }) is { } unsupported)
@@ -819,6 +880,13 @@ internal sealed partial class HotReloadSession
         await AddStructuralRefreshAsync(request, cancellationToken).ConfigureAwait(false);
         Phase("structural refresh");
         request.Markup.AddRange(resources);
+        if (compiled is not null)
+        {
+            request.Markup.AddRange(compiled.Markup);
+            request.RefreshTypes.AddRange(compiled.Classes.Where(c => !request.RefreshTypes.Contains(c)));
+            notes.AddRange(await ConstructorNotesAsync(cancellationToken).ConfigureAwait(false));
+        }
+        request.SavedFiles = batch;
         applied.AddRange(paths.Concat(assets).Concat(libraryPaths.Where(p => _libraries.ContainsKey(NestedProjectDirectory(p)!))).Select(Relative).Distinct(StringComparer.OrdinalIgnoreCase));
 
         if (request.Deltas.Count == 0 && request.Markup.Count == 0 && request.RefreshTypes.Count == 0 && request.RecreateTypes.Count == 0 && !request.RefreshAllPages && request.Assemblies.Count == 0 && request.Assets.Count == 0)
@@ -849,6 +917,11 @@ internal sealed partial class HotReloadSession
         _newAssemblies.Clear();
         _changedAssets.Clear();
         _pendingInitializers.Clear();
+        if (response.Restarts.Count > 0)
+        {
+            // Applied, but the page update strategy found the app won't show it as a restart would.
+            return new SaveResult(Outcome.Restart, string.Join(Environment.NewLine + "  ", response.Restarts.Select(SourcePaths)));
+        }
         if (response.Errors.Count > 0)
         {
             // Code changes are in; the markup that failed is sent again with the next save. Files of this save that
@@ -1023,6 +1096,61 @@ internal sealed partial class HotReloadSession
                     if (starts && _notedStarts.Add($"{component.ClassName}|{invocation}"))
                     {
                         notes.Add($"{Relative(invocation.SyntaxTree.FilePath)}({line}): {type.Name}'s constructor runs again on each reload, so {text} there starts another each time it runs");
+                    }
+                }
+            }
+        }
+        return notes;
+    }
+
+    /// <summary>
+    /// A reload runs InitializeComponent again, not the constructor: a changed constructor of a XAML class shows on
+    /// instances created from now on (a page re-created by the "recreate" strategy is one).
+    /// </summary>
+    private async Task<List<string>> ConstructorNotesAsync(CancellationToken cancellationToken)
+    {
+        var notes = new List<string>();
+        var oldProject = _committed.GetProject(_projectId)!;
+        var compilation = (await Project.GetCompilationAsync(cancellationToken).ConfigureAwait(false))!;
+        foreach (var id in Project.GetChanges(oldProject).GetChangedDocuments())
+        {
+            var document = _solution.GetDocument(id)!;
+            if (document.FilePath is not { } path || !IsSource(path) || await oldProject.GetDocument(id)!.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false) is not { } oldRoot)
+            {
+                continue;
+            }
+            var tree = (await document.GetSyntaxTreeAsync(cancellationToken).ConfigureAwait(false))!;
+            var model = compilation.GetSemanticModel(tree);
+            foreach (var type in tree.GetRoot(cancellationToken).DescendantNodes().OfType<ClassDeclarationSyntax>())
+            {
+                if (model.GetDeclaredSymbol(type, cancellationToken) is not { } symbol || symbol.GetMembers("InitializeComponent").IsEmpty)
+                {
+                    continue;
+                }
+                var kind = "instances";
+                for (var t = symbol.BaseType; t is not null; t = t.BaseType)
+                {
+                    kind = t.ToDisplayString() switch
+                    {
+                        "Microsoft.UI.Xaml.Controls.Page" => "pages",
+                        "Microsoft.UI.Xaml.Window" => "windows",
+                        "Microsoft.UI.Xaml.Application" => "",
+                        _ => kind,
+                    };
+                }
+                if (kind.Length == 0 || (kind == "pages" && PageUpdateName == "recreate"))
+                {
+                    continue;
+                }
+                var oldType = oldRoot.DescendantNodes().OfType<ClassDeclarationSyntax>().FirstOrDefault(c => c.Identifier.ValueText == type.Identifier.ValueText);
+                foreach (var constructor in type.Members.OfType<ConstructorDeclarationSyntax>().Where(c => !c.Modifiers.Any(SyntaxKind.StaticKeyword)))
+                {
+                    var before = oldType?.Members.OfType<ConstructorDeclarationSyntax>().FirstOrDefault(c => !c.Modifiers.Any(SyntaxKind.StaticKeyword) &&
+                        c.ParameterList.IsEquivalentTo(constructor.ParameterList));
+                    if (before is null || !before.IsEquivalentTo(constructor))
+                    {
+                        notes.Add($"{type.Identifier.ValueText}'s constructor ran when it was created and a reload doesn't run it again: this change shows on {kind} created from now on");
+                        break;
                     }
                 }
             }

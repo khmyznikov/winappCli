@@ -30,6 +30,8 @@ internal sealed class AgentClient(NamedPipeClientStream pipe, string token) : ID
     public async Task<HotReloadResponse> SendAsync(HotReloadRequest request, CancellationToken cancellationToken)
     {
         request.Token = token;
+        request.Pipeline = HotReloadSession.PipelineName;
+        request.PageUpdate = HotReloadSession.PageUpdateName;
         await HotReloadFrames.WriteAsync(pipe, request, cancellationToken).ConfigureAwait(false);
         return await HotReloadFrames.ReadAsync<HotReloadResponse>(pipe, cancellationToken).ConfigureAwait(false)
             ?? throw new EndOfStreamException("The app closed the hot reload connection.");

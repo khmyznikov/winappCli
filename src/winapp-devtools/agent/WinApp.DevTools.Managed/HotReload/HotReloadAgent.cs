@@ -130,6 +130,11 @@ internal static class HotReloadAgent
     {
         try
         {
+            XamlReload.Compiler = request.Pipeline == "compiler";
+            if (XamlReload.Compiler && PageUpdateStrategies.Get(request.PageUpdate) is null)
+            {
+                return new HotReloadResponse { Error = $"unknown page update strategy '{request.PageUpdate}' (WINAPP_HOT_RELOAD_PAGE_UPDATE): use {string.Join(", ", PageUpdateStrategies.Names.Order())}" };
+            }
             return request.Op switch
             {
                 "hello" => await XamlReload.InitializeAsync().ConfigureAwait(false) is { } error
@@ -161,6 +166,7 @@ internal static class HotReloadAgent
                 XamlReload.ApplyDeferredBindings(response.Messages, response.Errors, response.Notes);
                 return true;
             }).ConfigureAwait(false);
+            await XamlReload.RunSettledAsync(response.Errors, response.Notes).ConfigureAwait(false);
         }
         return response;
     }
@@ -172,7 +178,7 @@ internal static class HotReloadAgent
     {
         var response = new HotReloadResponse { Ok = true };
         var updatedTypes = new List<Type>();
-        XamlReload.SpikeStopTracking([.. request.RefreshTypes, .. request.RecreateTypes]);
+        XamlReload.StopTracking([.. request.RefreshTypes, .. request.RecreateTypes]);
         foreach (var delta in request.Deltas)
         {
             var assembly = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(a => !a.IsDynamic && a.ManifestModule.ModuleVersionId == delta.ModuleId);
@@ -197,7 +203,7 @@ internal static class HotReloadAgent
         }
         if (request.Deltas.Count > 0)
         {
-            XamlReload.SpikeResetTypeInfo();
+            XamlReload.ResetTypeInfo();
             InvokeUpdateHandlers([.. updatedTypes]);
         }
         foreach (var initializer in request.Initializers)
@@ -213,7 +219,7 @@ internal static class HotReloadAgent
                 response.Messages.Add($"{typeName}: initializing a new static field failed: {ex.GetBaseException().Message}");
             }
         }
-        XamlReload.Apply(request, response.Messages, response.Errors, response.Notes);
+        XamlReload.Apply(request, response.Messages, response.Errors, response.Notes, response.Restarts);
         return response;
     }
 

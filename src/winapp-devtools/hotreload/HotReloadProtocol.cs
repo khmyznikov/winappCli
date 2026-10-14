@@ -38,6 +38,15 @@ internal sealed class HotReloadRequest
     /// for instances loaded before the agent was there, the rest were added by code.
     /// </summary>
     public Dictionary<string, Dictionary<string, int>> LaunchItems { get; set; } = [];
+    /// <summary>
+    /// "rewrite" (winapp rewrites the XAML and wires it up) or "compiler" (the XAML compiler's own code and .xbf).
+    /// Sent with every request, hello included; WINAPP_HOT_RELOAD_PIPELINE in the helper.
+    /// </summary>
+    public string Pipeline { get; set; } = "";
+    /// <summary>How live pages show a save on the compiler pipeline (WINAPP_HOT_RELOAD_PAGE_UPDATE): inplace, recreate, shadow.</summary>
+    public string PageUpdate { get; set; } = "";
+    /// <summary>The files of this save, relative to the project (for the page update strategy).</summary>
+    public List<string> SavedFiles { get; set; } = [];
 }
 
 internal sealed class DeltaPayload
@@ -154,6 +163,8 @@ internal sealed class HotReloadResponse
     public List<string> Errors { get; set; } = [];
     /// <summary>What an applied update didn't keep (items code added to a collection a replayed constructor fills).</summary>
     public List<string> Notes { get; set; } = [];
+    /// <summary>Why the update was applied but the app must restart to show it correctly (a page update strategy said so).</summary>
+    public List<string> Restarts { get; set; } = [];
 }
 
 internal static class HotReloadFrames
