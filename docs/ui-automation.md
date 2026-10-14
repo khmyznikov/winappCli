@@ -116,8 +116,8 @@ When filters are present, every command except `search` fails with
 `ambiguous_selector` if more than one element remains; narrow the filters or use
 a unique slug. Commands that act on the element count matches in every window
 they search, so a matching control in an owned dialog also makes the selector
-ambiguous. Exact AutomationId matches retain precedence over substring
-matches, within the filtered scope. Omitting all three options preserves the
+ambiguous. Exact AutomationId matches, then exact Name matches, retain precedence
+over substring matches, within the filtered scope. Omitting all three options preserves the
 existing query behavior.
 
 ## Coordinating concurrent UI workflows
@@ -377,7 +377,13 @@ winapp ui search "Save" -a notepad          # find elements containing "Save"
 winapp ui search "error" -a myapp           # case-insensitive match
 ```
 
-When a text search matches multiple elements (e.g., SettingsExpander where Group, Button, and Text all share the same name), the CLI automatically picks the only invokable element. If multiple are invokable, it lists all matches with slugs.
+When a text search matches multiple elements, commands that act on one element choose in this order:
+
+1. An element whose AutomationId is exactly the text.
+2. An element whose Name is exactly the text, ignoring case. `winapp ui click "Mail" -a myapp` clicks the element named `Mail`, not one named `Welcome to Mail`.
+3. The only invokable element (for example, in a SettingsExpander where Group, Button, and Text share the same name).
+
+If several elements are still left, the command lists them with slugs; re-run with one. `search` always lists every match.
 
 For non-invokable search results (e.g., a TextBlock inside a Button), the search
 automatically surfaces the nearest **invokable ancestor** — the parent element you can use with `invoke`.
@@ -998,8 +1004,9 @@ UiInvokeActionResult result = await ui.InvokeAsync(target, selected, UiInvokeAct
 ```
 
 `requireUnique: true` rejects ambiguous text instead of choosing an invokable
-match. Exact AutomationId matches take precedence over name or AutomationId
-substrings; a unique name can still select a control whose AutomationId is shared.
+match. Exact AutomationId matches take precedence, then exact (case-insensitive)
+Name matches, then name or AutomationId substrings; a unique name can still select
+a control whose AutomationId is shared.
 For an app-scoped target, that check covers all of its app/owned windows. Use
 `-w <HWND>` (or an explicit-window library target) to restrict the selection scope.
 

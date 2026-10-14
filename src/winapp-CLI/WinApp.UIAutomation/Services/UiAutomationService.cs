@@ -576,7 +576,7 @@ internal sealed partial class UiAutomationService : IUiAutomation
         ct.ThrowIfCancellationRequested();
         if (requireUnique && (selector.HasConstraints || selector.IsSlug))
         {
-            var constrainedMatches = SearchConstrained(uiTarget, selector, 2, requireUnique: true, ct: ct);
+            var constrainedMatches = SearchConstrained(uiTarget, selector, 2, requireUnique: true, preferExactName: true, ct: ct);
             return Task.FromResult(constrainedMatches.FirstOrDefault());
         }
         if (!requireUnique)
@@ -634,6 +634,7 @@ internal sealed partial class UiAutomationService : IUiAutomation
         IUIAutomationElement root, UiTarget? uiTarget, string query, bool allowSubstring, CancellationToken ct)
     {
         var exactMatches = new List<(IUIAutomationElement Element, long Hwnd)>();
+        var exactNameMatches = new List<(IUIAutomationElement Element, long Hwnd)>();
         var substringMatches = new List<(IUIAutomationElement Element, long Hwnd)>();
         CollectQueryMatches(root, uiTarget?.WindowHandle ?? 0);
         if (uiTarget is { IsExplicitWindow: false })
@@ -649,7 +650,8 @@ internal sealed partial class UiAutomationService : IUiAutomation
             }
         }
         ct.ThrowIfCancellationRequested();
-        return exactMatches.Count > 0 ? exactMatches : substringMatches;
+        return exactMatches.Count > 0 ? exactMatches
+            : exactNameMatches.Count > 0 ? exactNameMatches : substringMatches;
 
         void CollectQueryMatches(IUIAutomationElement windowRoot, long hwnd)
         {
@@ -659,6 +661,7 @@ internal sealed partial class UiAutomationService : IUiAutomation
                 var automationId = GetBstr(() => candidate.get_CurrentAutomationId());
                 var name = allowSubstring ? GetBstr(() => candidate.get_CurrentName()) : string.Empty;
                 var destination = automationId == query ? exactMatches
+                    : allowSubstring && IsExactNameMatch(name, query) ? exactNameMatches
                     : allowSubstring && (automationId.Contains(query, StringComparison.OrdinalIgnoreCase) ||
                       name.Contains(query, StringComparison.OrdinalIgnoreCase)) ? substringMatches : null;
                 if (destination is null) { continue; }
@@ -678,7 +681,7 @@ internal sealed partial class UiAutomationService : IUiAutomation
         ct.ThrowIfCancellationRequested();
         if (selector.HasConstraints)
         {
-            var constrainedMatches = SearchConstrained(uiTarget, selector, 2, ct: ct);
+            var constrainedMatches = SearchConstrained(uiTarget, selector, 2, preferExactName: true, ct: ct);
             if (constrainedMatches.Length > 1)
             {
                 throw new UiAmbiguousSelectorException(
@@ -768,6 +771,7 @@ internal sealed partial class UiAutomationService : IUiAutomation
             return Task.FromResult<UiElement?>(exactResult);
         }
 
+        matches = PreferExactNameMatches(matches, selector.Query!);
         if (matches.Count > 1)
         {
             // When multiple elements match, prefer the invokable one (e.g., Button over Group/Text
@@ -1936,6 +1940,7 @@ internal sealed partial class UiAutomationService : IUiAutomation
                 {
                     var matches = FindQueryMatches(windowRoot, selector, int.MaxValue, ct);
                     var recoveredExactMatch = FindExactAutomationIdMatch(matches, selector.Query);
+                    matches = PreferExactNameMatches(matches, selector.Query);
                     if (recoveredExactMatch is not null)
                     {
                         var nextId = 0;
@@ -2384,6 +2389,22 @@ internal sealed partial class UiAutomationService : IUiAutomation
             .ToList();
         return exactMatches.Count > 0 ? exactMatches : matches;
     }
+
+    /// <summary>When a text query matches several elements, keeps only those whose Name equals
+    /// the query (ignoring case), if any. Callers apply this after the exact-AutomationId preference.</summary>
+    private static List<IUIAutomationElement> PreferExactNameMatches(
+        List<IUIAutomationElement> matches,
+        string query)
+    {
+        if (matches.Count <= 1) { return matches; }
+        var exactMatches = matches
+            .Where(match => IsExactNameMatch(SafeGetBstr(() => match.get_CurrentName()), query))
+            .ToList();
+        return exactMatches.Count > 0 ? exactMatches : matches;
+    }
+
+    private static bool IsExactNameMatch(string? name, string query) =>
+        string.Equals(name, query, StringComparison.OrdinalIgnoreCase);
 
     private static IUIAutomationElement? FindExactAutomationIdMatch(
         IEnumerable<IUIAutomationElement> matches,

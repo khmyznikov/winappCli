@@ -148,19 +148,21 @@ for supported actions, scope, idempotent toggles, and failure recovery, and the
 
 ### Disambiguate duplicate elements
 ```powershell
-# When text search matches multiple elements, the error shows slugs for each — pick the right one
-winapp ui invoke Submit -a myapp
-# → Selector matched 3 elements:
-#   [0] Button "Submit Order" → btn-submitorder-a1b2
-#   [1] Button "Submit" → btn-submit-c3d4
-# Use the slug: winapp ui invoke btn-submit-c3d4 -a myapp
+# Text matches by substring, but an element named exactly the text wins
+winapp ui invoke Submit -a myapp      # acts on Button "Submit", not Button "Submit Order"
+# When several elements share that name, the error shows slugs for each — pick the right one
+winapp ui invoke Save -a myapp
+# → Selector matched 2 elements:
+#   [0] Button "Save" → btn-save-a1b2
+#   [1] Button "Save" → btn-save-c3d4
+# Use the slug: winapp ui invoke btn-save-c3d4 -a myapp
 ```
 
 ## Key concepts
 - **Selector brackets**: `inspect` and `search` output shows selectors in `[brackets]` — use the bracketed value with other `ui` commands. Selectors are either AutomationId (stable, developer-set) or generated slug (e.g., `btn-name-hash`).
 - **AutomationId selectors**: When an element has a unique AutomationId, it becomes the selector directly (e.g., `[MinimizeButton]`). These survive layout changes and localization — preferred for stable targeting.
 - **Slug selectors**: When no unique AutomationId exists, a generated slug is used (e.g., `[btn-close-a2b3]`). Format: `prefix-name-hash`. May go stale after UI changes.
-- **Plain text search**: `search` and `invoke` accept plain text — `search Minimize` finds elements with "Minimize" in their Name or AutomationId (substring, case-insensitive). No special syntax needed.
+- **Plain text search**: `search` and `invoke` accept plain text — `search Minimize` finds elements with "Minimize" in their Name or AutomationId (substring, case-insensitive). No special syntax needed. Commands that act on one element prefer an exact AutomationId match, then an element whose Name is exactly the text (ignoring case); `search` still lists every match.
 - **`--interactive` flag**: Filters to elements you can invoke, click, or set-value (including text documents) with auto-depth 8 — the fastest way to see what you can act on
 - **Invokable ancestor surfacing**: When a search result isn't invokable, the nearest invokable parent is shown with its selector
 - **`;` chaining**: Chain commands with `;` to run multiple operations in one call, reducing agent round-trips
