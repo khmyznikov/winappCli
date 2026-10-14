@@ -54,8 +54,11 @@ existing app is explicit and headless by default:
 
 ```powershell
 winapp devtools list --include-available
-winapp devtools attach --pid <pid>
+winapp devtools attach --pid <pid> --source-root <project folder>
 ```
+
+`--source-root` gives the app the project folder its in-app comments are saved in; an
+app started without `winapp run` has none. `list` and `attach` only take WinUI 3 apps.
 
 Late attach cannot provide startup-only binding hooks or missing XAML source
 information. Obtain permission before launching, injecting into, or mutating

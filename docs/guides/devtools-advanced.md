@@ -39,15 +39,20 @@ Late attachment has the limits below and no host comment mapping.
 
 ```powershell
 winapp devtools list --include-available
-winapp devtools attach --pid 12345
+winapp devtools attach --pid 12345 --overlay --source-root C:\src\MyApp
 winapp devtools inspect -a 12345 --all
 ```
 
-`list` doesn't inject anything. `attach` loads DevTools into the process without
-restarting it, headless unless you add `--overlay` (toolbar) or `--show-window`
-(inspector). It stays until the app exits. Other commands never inject on their own:
-attach first, or add `--attach`. `-a` takes a PID, process name or window title; `-w`
-takes a window handle.
+`list` doesn't inject anything, and lists only WinUI 3 apps (not WinUI 2 apps or
+Windows itself); `attach` refuses the same processes. `attach` loads DevTools into the
+process without restarting it, headless unless you add `--overlay` (toolbar) or
+`--show-window` (inspector). It stays until the app exits. Other commands never inject on
+their own: attach first, or add `--attach`. `-a` takes a PID, process name or window
+title; `-w` takes a window handle.
+
+Comments left in the app are saved in its project folder. An app started without
+`winapp run` has none, so pass `--source-root <project folder>`; without it, comment
+mode tells you to re-attach with one.
 
 Late attachment can't add the .NET startup hook or source information recorded at
 launch, so binding operations and source locations need an app started by `winapp run`.

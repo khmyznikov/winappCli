@@ -31,7 +31,7 @@ public class DevToolsTargetResolverTests
         var sessions = NoSessions();
         var service = new FakeAttach();
         var resolver = new DevToolsTargetResolver(sessions, service,
-            () => attached ? [process.Id] : [], context);
+            () => attached ? [process.Id] : [], context, whyNotAttachable: _ => null);
         var result = await resolver.ResolveAsync(pid, null, default, attachIfNeeded: allowAttach);
         Assert.AreEqual(succeeds, result.Ok);
         Assert.AreEqual(succeeds, service.WasCalled);
@@ -47,7 +47,7 @@ public class DevToolsTargetResolverTests
     {
         var session = new FakeSessions(new UiTarget { ProcessId = 4242, ProcessName = "myapp" });
         var attach = new FakeAttach();
-        var resolver = new DevToolsTargetResolver(session, attach, () => []);
+        var resolver = new DevToolsTargetResolver(session, attach, () => [], whyNotAttachable: _ => null);
 
         var target = await resolver.ResolveAsync("myapp", null, CancellationToken.None, attachIfNeeded: true);
 
@@ -63,7 +63,7 @@ public class DevToolsTargetResolverTests
     public async Task ExplicitWindow_IsForwardedAsTheHwnd()
     {
         var session = new FakeSessions(new UiTarget { ProcessId = 99, ProcessName = "myapp" });
-        var resolver = new DevToolsTargetResolver(session, new FakeAttach(), () => [99]);
+        var resolver = new DevToolsTargetResolver(session, new FakeAttach(), () => [99], whyNotAttachable: _ => null);
 
         var target = await resolver.ResolveAsync(null, 657922, CancellationToken.None);
 
@@ -77,7 +77,7 @@ public class DevToolsTargetResolverTests
     {
         var session = new FakeSessions(new UiTarget { ProcessId = 4242, ProcessName = "myapp" });
         var attach = new FakeAttach();
-        var resolver = new DevToolsTargetResolver(session, attach, () => []);
+        var resolver = new DevToolsTargetResolver(session, attach, () => [], whyNotAttachable: _ => null);
 
         var target = await resolver.ResolveAsync("myapp", null, CancellationToken.None, attachIfNeeded: true);
 
@@ -92,7 +92,7 @@ public class DevToolsTargetResolverTests
     public async Task FailedAttach_ReportsTheReasonRatherThanThrowing()
     {
         var session = new FakeSessions(new UiTarget { ProcessId = 4242, ProcessName = "notwinui" });
-        var resolver = new DevToolsTargetResolver(session, new FakeAttach("the agent did not come up"), () => []);
+        var resolver = new DevToolsTargetResolver(session, new FakeAttach("the agent did not come up"), () => [], whyNotAttachable: _ => null);
 
         var target = await resolver.ResolveAsync("notwinui", null, CancellationToken.None, attachIfNeeded: true);
 
@@ -108,7 +108,7 @@ public class DevToolsTargetResolverTests
         var resolver = new DevToolsTargetResolver(
             new FakeSessions(new InvalidOperationException("No window matched 'ghost'.")),
             new FakeAttach(),
-            () => []);
+            () => [], whyNotAttachable: _ => null);
 
         var target = await resolver.ResolveAsync("ghost", null, CancellationToken.None);
 
@@ -120,7 +120,7 @@ public class DevToolsTargetResolverTests
     public async Task NoTarget_WithExactlyOneAttachedApp_UsesIt()
     {
         // One attached app needs no explicit target.
-        var resolver = new DevToolsTargetResolver(NoSessions(), new FakeAttach(), () => [4242]);
+        var resolver = new DevToolsTargetResolver(NoSessions(), new FakeAttach(), () => [4242], whyNotAttachable: _ => null);
 
         var target = await resolver.ResolveAsync(null, null, CancellationToken.None);
 
@@ -132,7 +132,7 @@ public class DevToolsTargetResolverTests
     [TestMethod]
     public async Task NoTarget_WithNothingAttached_SaysHowToGetOne()
     {
-        var resolver = new DevToolsTargetResolver(NoSessions(), new FakeAttach(), () => []);
+        var resolver = new DevToolsTargetResolver(NoSessions(), new FakeAttach(), () => [], whyNotAttachable: _ => null);
 
         var target = await resolver.ResolveAsync(null, null, CancellationToken.None);
 
@@ -147,7 +147,7 @@ public class DevToolsTargetResolverTests
     public async Task NoTarget_WithSeveralAttached_ListsThemRatherThanGuessing()
     {
         // Picking one silently would send a later `set-property` into whichever app happened to sort first.
-        var resolver = new DevToolsTargetResolver(NoSessions(), new FakeAttach(), () => [111, 222, 333]);
+        var resolver = new DevToolsTargetResolver(NoSessions(), new FakeAttach(), () => [111, 222, 333], whyNotAttachable: _ => null);
 
         var target = await resolver.ResolveAsync(null, null, CancellationToken.None);
 
@@ -166,7 +166,7 @@ public class DevToolsTargetResolverTests
         // and is irreversible for that process's lifetime. Without the opt-in, nothing may be loaded.
         var session = new FakeSessions(new UiTarget { ProcessId = 4242, ProcessName = "notepad" });
         var attach = new FakeAttach();
-        var resolver = new DevToolsTargetResolver(session, attach, () => []);
+        var resolver = new DevToolsTargetResolver(session, attach, () => [], whyNotAttachable: _ => null);
 
         var target = await resolver.ResolveAsync("notepad", null, CancellationToken.None);
 
@@ -180,7 +180,7 @@ public class DevToolsTargetResolverTests
     public async Task NotAttached_RefusalNamesTheExactPidAndHowToProceed()
     {
         var session = new FakeSessions(new UiTarget { ProcessId = 4242, ProcessName = "notepad" });
-        var resolver = new DevToolsTargetResolver(session, new FakeAttach(), () => []);
+        var resolver = new DevToolsTargetResolver(session, new FakeAttach(), () => [], whyNotAttachable: _ => null);
 
         var target = await resolver.ResolveAsync("notepad", null, CancellationToken.None, attachIfNeeded: false);
 
@@ -197,7 +197,7 @@ public class DevToolsTargetResolverTests
         // reachable with no extra flag, because there is nothing left to inject.
         var session = new FakeSessions(new UiTarget { ProcessId = 4242, ProcessName = "myapp" });
         var attach = new FakeAttach();
-        var resolver = new DevToolsTargetResolver(session, attach, () => [4242]);
+        var resolver = new DevToolsTargetResolver(session, attach, () => [4242], whyNotAttachable: _ => null);
 
         var target = await resolver.ResolveAsync("myapp", null, CancellationToken.None, attachIfNeeded: false);
 
@@ -212,7 +212,7 @@ public class DevToolsTargetResolverTests
     {
         var session = new FakeSessions(new UiTarget { ProcessId = 4242, ProcessName = "myapp" });
         var attach = new FakeAttach();
-        var resolver = new DevToolsTargetResolver(session, attach, () => []);
+        var resolver = new DevToolsTargetResolver(session, attach, () => [], whyNotAttachable: _ => null);
 
         var target = await resolver.ResolveAsync("myapp", null, CancellationToken.None, attachIfNeeded: true);
 
@@ -228,7 +228,7 @@ public class DevToolsTargetResolverTests
     {
         var session = new FakeSessions(new UiTarget { ProcessId = 4242, ProcessName = "myapp" });
         var attach = new FakeAttach();
-        var resolver = new DevToolsTargetResolver(session, attach, () => []);
+        var resolver = new DevToolsTargetResolver(session, attach, () => [], whyNotAttachable: _ => null);
 
         var target = await resolver.ResolveAsync("myapp", null, CancellationToken.None);
 
@@ -265,7 +265,23 @@ public class DevToolsTargetResolverTests
         }
     }
 
-    private sealed class FakeAttach(string? error = null) : IDevToolsService
+    [TestMethod]
+    public async Task TargetThatIsNotAWinUi3App_IsRefusedBeforeAnythingIsLoaded()
+    {
+        var session = new FakeSessions(new UiTarget { ProcessId = 4242, ProcessName = "explorer" });
+        var attach = new FakeAttach();
+        var resolver = new DevToolsTargetResolver(session, attach, () => [],
+            whyNotAttachable: pid => $"explorer (PID {pid}) is part of Windows. DevTools attaches only to WinUI 3 apps.");
+
+        var target = await resolver.ResolveAsync("explorer", null, CancellationToken.None, attachIfNeeded: true);
+
+        Assert.IsFalse(target.Ok);
+        StringAssert.Contains(target.Error!, "is part of Windows");
+        StringAssert.Contains(target.Error!, "Nothing was loaded into that process.");
+        Assert.IsFalse(attach.WasCalled);
+    }
+
+    internal sealed class FakeAttach(string? error = null) : IDevToolsService
     {
         public DevToolsAccess? RequestedAccess { get; private set; }
 

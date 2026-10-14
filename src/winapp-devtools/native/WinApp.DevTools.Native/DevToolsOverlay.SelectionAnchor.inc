@@ -438,6 +438,9 @@ static void ShowSelectionAnchor(IInspectable* el, bool fromUserPick)
         if (g_cardScope) g_cardScope(0);
         g_selUi = cui;
     }
+    // Say it before anything is typed: without a project folder the comment can't be saved.
+    if (g_selComment && !CommentsHaveProjectFolder())
+        GuestCommentSetStatus(g_selUi, L"DevToolsGuestCommentStatus", DevToolsCommentText::NoProjectFolderStatus(GetCurrentProcessId()));
     if (g_selPopup) {
         HostLiftPopup(g_selPopup, g_selectionPopup.get());
         void* popup = nullptr;

@@ -181,6 +181,11 @@ static bool LaunchWinapp(const std::wstring& args, const wchar_t* what, GuestCom
         guest->authority = authority;
         guestToken = DevToolsOverlay_GuestCommentToken(guest->operation, guest->revision);
     }
+    if (!authority && !CommentsHaveProjectFolder()) {
+        g_guestCommentWrite = std::move(*guest);
+        GuestCommentComplete(1, false, L"no-project-folder");
+        DevToolsOverlayLog(L"overlay.comment %s: no project folder", what); return false;
+    }
     wchar_t root[1024];
     DWORD rn = GetEnvironmentVariableW(L"WINAPP_DEVTOOLS_SOURCE_ROOT", root, _countof(root));
     const auto cmd = DevToolsCommentText::WriterCommand(exe, args,
@@ -434,6 +439,16 @@ static bool DiscardFailedSelectionCommentDraft()
     return true;
 }
 
+// Where the writer saves: the project folder the launch or `attach --source-root` gave, or the folder a run without a
+// project was started from. A guest app saves on the host.
+static bool CommentsHaveProjectFolder()
+{
+    if (g_guestCommentAuthority.load()) return true;
+    for (const wchar_t* name : { L"WINAPP_DEVTOOLS_SOURCE_ROOT", L"WINAPP_DEVTOOLS_COMMENT_ROOT" })
+        if (GetEnvironmentVariableW(name, nullptr, 0) > 1) return true;
+    return false;
+}
+
 static void GuestCommentSetStatus(IInspectable* root, const wchar_t* name, const std::wstring& text)
 {
     if (!root) return;
@@ -586,7 +601,8 @@ static void GuestCommentComplete(DWORD exitCode, bool acknowledged, const wchar_
     const bool newerDraft = write.editor == GuestCommentEditor::Selection &&
         !DevToolsCommentText::Unchanged(write.draft, write.submitted);
     write.failed = !saved || exitCode == 0x57410002 || newerDraft;
-    write.status = !saved ? DevToolsCommentText::WriterFailureStatus(exitCode, stage, write.authority != nullptr) :
+    write.status = !saved && stage && wcscmp(stage, L"no-project-folder") == 0 ? DevToolsCommentText::NoProjectFolderStatus(GetCurrentProcessId()) :
+        !saved ? DevToolsCommentText::WriterFailureStatus(exitCode, stage, write.authority != nullptr) :
         exitCode == 0x57410001 ? L"Saved on the host, but markers could not refresh. Refresh comments before editing again." :
         exitCode == 0x57410002 ? (write.authority ?
             L"The earlier save reached the host, which now has a newer edit. Draft retained; refresh before editing." :

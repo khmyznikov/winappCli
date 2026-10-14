@@ -148,14 +148,89 @@ public class DevToolsAttachListCommandTests : BaseCommandTests
         Assert.IsTrue(command.Parse(["--include-available"]).GetValue(DevToolsListCommand.IncludeAvailableOption));
     }
 
+    // WinUI 2 apps and the Windows shell load a Microsoft.UI.Xaml.dll too, so the file name alone offered explorer and
+    // Store apps as "ready to attach".
     [TestMethod]
-    public void List_WinUiCandidateDetection_UsesRuntimeModuleNotProcessName()
+    [DataRow(@"C:\Apps\Gallery\Gallery.exe", "Microsoft.UI.Xaml.dll,Microsoft.Internal.FrameworkUdk.dll", null)]
+    [DataRow(@"C:\Apps\Selfcontained\App.exe", "Microsoft.UI.Xaml.dll,Microsoft.WindowsAppRuntime.dll", null)]
+    [DataRow(@"C:\Windows\explorer.exe", "Microsoft.UI.Xaml.dll,Microsoft.Internal.FrameworkUdk.dll", "is part of Windows")]
+    [DataRow(@"C:\Windows\SystemApps\LockApp\LockApp.exe", "Microsoft.UI.Xaml.dll", "is part of Windows")]
+    [DataRow(@"C:\Program Files\WindowsApps\Store.App\App.exe", "Windows.UI.Xaml.dll,Microsoft.UI.Xaml.dll", "uses WinUI 2")]
+    [DataRow(@"C:\Apps\Wpf\Wpf.exe", "PresentationFramework.dll", "has not loaded WinUI 3")]
+    public void AttachTarget_IsOnlyAWinUi3AppFromTheWindowsAppSdk(string exe, string modules, string? refusal)
     {
-        Assert.IsTrue(DevToolsListCommand.Handler.IsWinUiModule("Microsoft.UI.Xaml.dll"));
-        Assert.IsTrue(DevToolsListCommand.Handler.IsWinUiModule("microsoft.ui.xaml.DLL"));
-        Assert.IsFalse(DevToolsListCommand.Handler.IsWinUiModule("WinUI-looking-process.exe"));
-        Assert.IsFalse(DevToolsListCommand.Handler.IsWinUiModule("PresentationFramework.dll"));
-        Assert.IsFalse(DevToolsListCommand.Handler.IsWinUiModule(null));
+        var why = DevToolsAttachTarget.WhyNot(42, "App", exe, modules.Split(','), @"C:\Windows");
+        if (refusal is null)
+        {
+            Assert.IsNull(why);
+        }
+        else
+        {
+            StringAssert.Contains(why, refusal);
+            StringAssert.Contains(why, "App (PID 42)");
+        }
+    }
+
+    // An app attached after launch has no project folder, so a comment left in it has nowhere to be saved.
+    [TestMethod]
+    [DoNotParallelize]
+    public async Task Attach_SourceRoot_GivesTheAttachedAppItsProjectFolder()
+    {
+        var root = Directory.CreateTempSubdirectory("winapp-attach-root-");
+        try
+        {
+            using var agent = new FakeDevToolsProtocolAgent()
+                .Answer("DevTools.negotiate", $$"""{"protocol":"winapp-devtools","protocolVersion":"0","processId":{{Environment.ProcessId}},"mutation":true,"posture":"mutation"}""")
+                .Answer("Internal.setSourceRoot", "null")
+                .Answer("Internal.setComments", """{"total":0,"placed":0}""");
+            var handler = new DevToolsAttachCommand.Handler(new DevToolsTargetResolverTests.FakeAttach(),
+                GetRequiredService<WinApp.Cli.Services.IStatusService>(), TestAnsiConsole,
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<DevToolsAttachCommand>.Instance, _targetResolver,
+                new WinApp.Cli.Services.DevTools.Comments.CommentPusher(new WinApp.Cli.Services.DevTools.Comments.CommentStore()),
+                whyNotAttachable: _ => null);
+            var command = GetRequiredService<DevToolsAttachCommand>();
+
+            var exit = await handler.InvokeAsync(command.Parse(
+                ["--pid", agent.Pid.ToString(System.Globalization.CultureInfo.InvariantCulture), "--source-root", root.FullName, "--json"]));
+
+            Assert.AreEqual(0, exit, TestAnsiConsole.Output);
+            using var request = JsonDocument.Parse(agent.ReceivedRequests.Single(r => r.Contains("Internal.setSourceRoot", StringComparison.Ordinal)));
+            Assert.AreEqual(root.FullName, request.RootElement.GetProperty("params").GetProperty("path").GetString());
+            Assert.IsTrue(agent.Received.Contains("Internal.setComments"), "comments saved there show as markers right away");
+        }
+        finally { root.Delete(recursive: true); }
+    }
+
+    [TestMethod]
+    public async Task Attach_MissingSourceRoot_FailsBeforeLoadingAnything()
+    {
+        var devTools = new DevToolsTargetResolverTests.FakeAttach();
+        var handler = new DevToolsAttachCommand.Handler(devTools, GetRequiredService<WinApp.Cli.Services.IStatusService>(),
+            TestAnsiConsole, Microsoft.Extensions.Logging.Abstractions.NullLogger<DevToolsAttachCommand>.Instance, _targetResolver);
+        var missing = Path.Join(Path.GetTempPath(), "winapp-no-such-root-" + Guid.NewGuid().ToString("N"));
+
+        var exit = await handler.InvokeAsync(GetRequiredService<DevToolsAttachCommand>().Parse(["--pid", "42", "--source-root", missing, "--json"]));
+
+        Assert.AreEqual(1, exit);
+        StringAssert.Contains(TestAnsiConsole.Output, "The source root");
+        Assert.IsFalse(devTools.WasCalled);
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    public async Task Attach_RefusesAProcessThatIsNotAWinUi3App_BeforeLoadingAnything()
+    {
+        var devTools = new DevToolsTargetResolverTests.FakeAttach();
+        var handler = new DevToolsAttachCommand.Handler(devTools, GetRequiredService<WinApp.Cli.Services.IStatusService>(),
+            TestAnsiConsole, Microsoft.Extensions.Logging.Abstractions.NullLogger<DevToolsAttachCommand>.Instance, _targetResolver);
+        var command = GetRequiredService<DevToolsAttachCommand>();
+
+        var exit = await handler.InvokeAsync(command.Parse(["--pid", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture), "--json"]));
+
+        Assert.AreEqual(1, exit);
+        StringAssert.Contains(TestAnsiConsole.Output, "has not loaded WinUI 3");
+        StringAssert.Contains(TestAnsiConsole.Output, "Nothing was loaded into that process.");
+        Assert.IsFalse(devTools.WasCalled, "a test host is not a WinUI 3 app, so nothing is injected");
     }
 
     [TestMethod]

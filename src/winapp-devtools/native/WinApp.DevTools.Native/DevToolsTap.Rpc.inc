@@ -2,6 +2,18 @@
 // Licensed under the MIT License.
 // Part of DevToolsTap.cpp; included into that translation unit, not compiled on its own.
 
+// When the app's executable was last written, so a source file newer than the build can be told apart.
+static unsigned long long ExecutableBuildTime()
+{
+    wchar_t exe[MAX_PATH] = L"";
+    WIN32_FILE_ATTRIBUTE_DATA fad{};
+    if (!GetModuleFileNameW(nullptr, exe, _countof(exe)) || !GetFileAttributesExW(exe, GetFileExInfoStandard, &fad)) return 0;
+    ULARGE_INTEGER li{};
+    li.LowPart = fad.ftLastWriteTime.dwLowDateTime;
+    li.HighPart = fad.ftLastWriteTime.dwHighDateTime;
+    return li.QuadPart > 116444736000000000ULL ? (li.QuadPart - 116444736000000000ULL) / 10000000ULL : 0;
+}
+
 // Parts of one comment push, keyed by the batch the CLI names, so pushes from two CLIs cannot mix. Bounded in batches
 // and in size: a part that is out of order, or a set past the limit, drops its batch.
 struct TapCommentPushStage { std::wstring batch; long long next = 0, parts = 0; std::wstring data; };
@@ -673,6 +685,29 @@ static std::wstring HandleRpc(DevToolsConn* conn, const DevToolsRpcRequest& req)
         std::wstring commentRoot = (n > 0 && n < _countof(comments)) ? std::wstring(comments, n) : std::wstring();
         return DevToolsRpcResult(id, L"{\"sourceRoot\":\"" + DevToolsJsonEscape(value) + L"\"" +
             (commentRoot.empty() ? L"" : L",\"commentRoot\":\"" + DevToolsJsonEscape(commentRoot) + L"\"") + L"}");
+    }
+    if (m == L"Internal.setSourceRoot") {
+        // An app DevTools attached to after launch has no project folder, so in-app comments have nowhere to go.
+        // `devtools attach --source-root` gives it one. A root the launch already set is kept: it also carries the
+        // build's source coordinates.
+        const std::wstring requested = p.GetString(L"path");
+        const DWORD attributes = requested.empty() ? INVALID_FILE_ATTRIBUTES : GetFileAttributesW(requested.c_str());
+        if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY))
+            return DevToolsRpcError(id, DevToolsErr::InvalidParams, L"The source root is not a folder: " + requested, L"bad-args");
+        wchar_t current[1024]{};
+        const DWORD n = GetEnvironmentVariableW(L"WINAPP_DEVTOOLS_SOURCE_ROOT", current, (DWORD)_countof(current));
+        if (n > 0 && n < _countof(current) && _wcsicmp(current, requested.c_str()) != 0)
+            return DevToolsRpcError(id, DevToolsErr::InvalidParams,
+                L"This app already uses the project folder " + std::wstring(current) + L".", L"source-root-set");
+        if (n == 0) {
+            const HRESULT hr = RunOnUiThread([requested]() -> HRESULT {
+                if (!SetEnvironmentVariableW(L"WINAPP_DEVTOOLS_SOURCE_ROOT", requested.c_str())) return HRESULT_FROM_WIN32(GetLastError());
+                DevToolsAuthored_Init(requested, ExecutableBuildTime());
+                return S_OK;
+            });
+            if (FAILED(hr)) return DevToolsRpcError(id, DevToolsErr::NotOnDispatcher, L"The app's UI thread did not answer.", L"ui-thread");
+        }
+        return DevToolsRpcResult(id, L"null");
     }
     if (m == L"Internal.elementAnchor") {
         // hand the CLI the SAME rebuild-stable anchor the pin re-anchoring uses, so a comment it is about

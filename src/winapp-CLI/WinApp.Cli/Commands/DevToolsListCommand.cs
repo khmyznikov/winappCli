@@ -163,7 +163,7 @@ internal class DevToolsListCommand : Command, IShortDescription, IHelpExamples
                     {
                         if (!process.HasExited &&
                             process.Id != Environment.ProcessId &&
-                            process.Modules.Cast<ProcessModule>().Any(module => IsWinUiModule(module.ModuleName)))
+                            DevToolsAttachTarget.IsCandidate(process))
                         {
                             candidatePid = process.Id;
                         }
@@ -182,9 +182,6 @@ internal class DevToolsListCommand : Command, IShortDescription, IHelpExamples
                 }
             }
         }
-
-        internal static bool IsWinUiModule(string? moduleName) =>
-            string.Equals(moduleName, "Microsoft.UI.Xaml.dll", StringComparison.OrdinalIgnoreCase);
 
         private static void PopulateIdentity(DevToolsAppInfo info, bool guestDiscovery)
         {

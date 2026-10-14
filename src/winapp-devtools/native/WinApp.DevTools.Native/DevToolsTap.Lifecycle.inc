@@ -321,18 +321,9 @@ static DWORD WINAPI Worker(LPVOID p)
         {
             wchar_t root[MAX_PATH] = L"";
             DWORD rn = GetEnvironmentVariableW(L"WINAPP_DEVTOOLS_SOURCE_ROOT", root, _countof(root));
-            unsigned long long built = 0;
             wchar_t exe[MAX_PATH] = L"";
-            if (GetModuleFileNameW(nullptr, exe, _countof(exe))) {
-                WIN32_FILE_ATTRIBUTE_DATA fad{};
-                if (GetFileAttributesExW(exe, GetFileExInfoStandard, &fad)) {
-                    ULARGE_INTEGER li{};
-                    li.LowPart = fad.ftLastWriteTime.dwLowDateTime;
-                    li.HighPart = fad.ftLastWriteTime.dwHighDateTime;
-                    if (li.QuadPart > 116444736000000000ULL)
-                        built = (li.QuadPart - 116444736000000000ULL) / 10000000ULL;
-                }
-            }
+            GetModuleFileNameW(nullptr, exe, _countof(exe));
+            const unsigned long long built = ExecutableBuildTime();
             DevToolsAuthored_Init((rn > 0 && rn < _countof(root)) ? root : L"", built);
             wchar_t inventory[32768]{}, inventoryHash[65]{}, payloadHeld[65]{};
             const DWORD inventoryLength = GetEnvironmentVariableW(L"WINAPP_DEVTOOLS_SOURCE_INVENTORY", inventory, _countof(inventory));

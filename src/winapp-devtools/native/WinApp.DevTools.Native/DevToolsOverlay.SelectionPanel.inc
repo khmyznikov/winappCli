@@ -434,6 +434,8 @@ static void SetSelectionOperationError(const std::wstring& prop, const std::wstr
 
 static void GuestCommentRememberDraft();
 static void GuestCommentRestoreDraft();
+static bool CommentsHaveProjectFolder();
+static void GuestCommentSetStatus(IInspectable* root, const wchar_t* name, const std::wstring& text);
 static bool GuestCommentCanEdit(InstanceHandle handle);
 
 static void DevToolsSelFlushCommits()

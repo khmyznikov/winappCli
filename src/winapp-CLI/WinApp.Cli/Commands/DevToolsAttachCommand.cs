@@ -12,6 +12,7 @@ using Spectre.Console;
 using WinApp.Cli.Helpers;
 using WinApp.Cli.Services;
 using WinApp.Cli.Services.DevTools;
+using WinApp.Cli.Services.DevTools.Comments;
 
 namespace WinApp.Cli.Commands;
 
@@ -35,6 +36,7 @@ internal class DevToolsAttachCommand : Command, IShortDescription, IHelpExamples
     [
         "winapp devtools attach --pid <pid>",
         "winapp devtools attach --pid <pid> --overlay",
+        "winapp devtools attach --pid <pid> --overlay --source-root C:\\src\\MyApp",
     ];
 
     public static Option<int> PidOption { get; } = new("--pid")
@@ -59,6 +61,11 @@ internal class DevToolsAttachCommand : Command, IShortDescription, IHelpExamples
         Description = "Open the in-process DevTools inspector window and its supporting overlay after attaching.",
     };
 
+    public static Option<DirectoryInfo?> SourceRootOption { get; } = new("--source-root")
+    {
+        Description = "The app's project folder. Comments left in the app are saved there; an app started without winapp run has none until you give it.",
+    };
+
     public DevToolsAttachCommand()
         : base("attach", "Enable DevTools in a running WinUI 3 app until that app exits.")
     {
@@ -66,6 +73,7 @@ internal class DevToolsAttachCommand : Command, IShortDescription, IHelpExamples
         Options.Add(AppOption);
         Options.Add(OverlayOption);
         Options.Add(ShowWindowOption);
+        Options.Add(SourceRootOption);
         Options.Add(WinAppRootCommand.JsonOption);
     }
 
@@ -74,8 +82,12 @@ internal class DevToolsAttachCommand : Command, IShortDescription, IHelpExamples
         IStatusService statusService,
         IAnsiConsole ansiConsole,
         ILogger<DevToolsAttachCommand> logger,
-        IUiTargetResolver targetResolver) : AsynchronousCommandLineAction
+        IUiTargetResolver targetResolver,
+        ICommentPusher? commentPusher = null,
+        Func<Process, string?>? whyNotAttachable = null) : AsynchronousCommandLineAction
     {
+        private readonly Func<Process, string?> _whyNotAttachable = whyNotAttachable ?? DevToolsAttachTarget.WhyNot;
+
         public override async Task<int> InvokeAsync(ParseResult parseResult, CancellationToken cancellationToken = default)
         {
             var pid = parseResult.GetValue(PidOption);
@@ -83,6 +95,11 @@ internal class DevToolsAttachCommand : Command, IShortDescription, IHelpExamples
             var showOverlay = parseResult.GetValue(OverlayOption);
             var showWindow = parseResult.GetValue(ShowWindowOption);
             var showInteractiveSurface = showOverlay || showWindow;
+            var sourceRoot = parseResult.GetValue(SourceRootOption);
+            if (sourceRoot is { Exists: false })
+            {
+                return Fail(json, pid, $"The source root '{sourceRoot.FullName}' doesn't exist. Pass the app's project folder.");
+            }
 
             if (parseResult.GetValue(AppOption) is { } app)
             {
@@ -123,6 +140,10 @@ internal class DevToolsAttachCommand : Command, IShortDescription, IHelpExamples
             }
 
             using var targetLifetime = target;
+            if (_whyNotAttachable(target) is { } notWinUi3)
+            {
+                return Fail(json, pid, $"{notWinUi3} Nothing was loaded into that process.");
+            }
             DevToolsConnection? connection = null;
             if (json)
             {
@@ -173,6 +194,16 @@ internal class DevToolsAttachCommand : Command, IShortDescription, IHelpExamples
                 : $"This process has '{hello.Posture}' posture, so live edits (devtools set-property) are refused. " +
                   "The FIRST injection fixes posture for the process lifetime; restart the target to change it. " +
                   "WINAPP_DEVTOOLS_MUTATION=deny caps every mutation request to 'ui'.";
+            if (sourceRoot is not null)
+            {
+                var set = tap.SetSourceRoot(sourceRoot.FullName, cancellationToken);
+                if (!set.Ok)
+                {
+                    return Fail(json, pid, $"DevTools attached, but the project folder was not set: {set.Error?.Message ?? tap.LastConnectionError}");
+                }
+                // The comments saved there show as markers now, not on the next push.
+                commentPusher?.Push(unchecked((uint)pid), sourceRoot.FullName, sourceRoot.FullName, cancellationToken);
+            }
             if (showInteractiveSurface && !connection.OverlayShown)
             {
                 return Fail(json, pid, $"DevTools attached, but the requested in-app overlay did not open. {connection.OverlayError} " +
@@ -217,6 +248,10 @@ internal class DevToolsAttachCommand : Command, IShortDescription, IHelpExamples
             {
                 ansiConsole.MarkupLineInterpolated(
                     $"   Protocol: v{payload.ProtocolVersion} ({payload.Posture ?? "unknown posture"})");
+            }
+            if (sourceRoot is not null)
+            {
+                ansiConsole.MarkupLineInterpolated($"   Project folder: [grey]{sourceRoot.FullName}[/]");
             }
             if (showInteractiveSurface)
             {

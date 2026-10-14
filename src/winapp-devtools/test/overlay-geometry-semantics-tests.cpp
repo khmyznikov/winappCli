@@ -570,6 +570,8 @@ static InstanceHandle FindRecoveryPanel(unsigned long long rootKey)
 
 int main()
 {
+    // The local writer saves into the app's project folder; the tests below run as an app that has one.
+    SetEnvironmentVariableW(L"WINAPP_DEVTOOLS_COMMENT_ROOT", L"C:\\project");
     unsigned checks = 0, failures = 0;
     auto check = [&](bool ok, const char* entry, const char* name) {
         ++checks; if (!ok) ++failures;
@@ -1253,6 +1255,23 @@ int main()
         g_cliExe.store(fakeCli); guestWriterTest = true;
         g_wireOf = [](InstanceHandle raw) { return raw + 1000ull; };
         SetCommentTarget(11);
+        {
+            // An app DevTools attached to after launch has no project folder: Save says how to give it one instead of
+            // starting a writer that can only fail with a stage code.
+            SetEnvironmentVariableW(L"WINAPP_DEVTOOLS_COMMENT_ROOT", nullptr);
+            g_selCommentId = L"no-folder"; g_selCommentSaved = L"old";
+            g_guestCommentWrite = {}; commentLaunches = 0;
+            commentInput = L"needs a folder";
+            OnSelCommentSaveClick(nullptr, nullptr);
+            check(commentLaunches == 0 && g_guestCommentWrite.failed && g_guestCommentWrite.draft == L"needs a folder" &&
+                g_guestCommentWrite.status == DevToolsCommentText::NoProjectFolderStatus(GetCurrentProcessId()) &&
+                g_guestCommentWrite.status.find(L"--source-root") != std::wstring::npos &&
+                g_guestCommentWrite.status.find(L"stage") == std::wstring::npos,
+                "local writer", "without a project folder Save names the fix and keeps the draft");
+            SetEnvironmentVariableW(L"WINAPP_DEVTOOLS_COMMENT_ROOT", L"C:\\project");
+            DiscardSelectionCommentDraft();
+            g_guestCommentWrite = {};
+        }
         g_selCommentId = L"local-draft"; g_selCommentSaved = L"old";
         g_guestCommentWrite = {};
         commentInput = L"submitted";
