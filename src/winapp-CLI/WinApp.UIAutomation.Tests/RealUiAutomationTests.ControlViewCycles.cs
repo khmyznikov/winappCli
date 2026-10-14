@@ -67,9 +67,9 @@ public partial class RealUiAutomationTests
 
         var results = await svc.SearchAsync(tree.Target, new UiSelector { Query = "match" }, 50, CancellationToken.None);
 
-        CollectionAssert.AreEquivalent(
-            new[] { "match-first", "match-second" },
-            results.Select(result => result.AutomationId).ToArray());
+        Assert.AreEqual(
+            "match-first,match-second",
+            string.Join(",", results.Select(result => result.AutomationId).Order()));
     }
 
     [TestMethod]
