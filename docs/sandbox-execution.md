@@ -94,9 +94,12 @@ does not launch; retrying rebuilds its guest copy. If build files change while w
 preparing them, finish the build and retry.
 
 
-Warm UI commands report only their result, without repeating a Sandbox preparation
-message. Sandbox startup and connection recovery still report progress. Use `--verbose` for
-connection timings and diagnostic details; `--quiet` and `--json` suppress progress.
+Cold connections report separate steps on stderr: starting Sandbox, copying the
+guest-agent files, checking sign-in, configuring its firewall rule, and starting
+the agent. `target push` and `target pull` announce when file transfer starts.
+Warm UI commands report only their result, without repeating preparation messages.
+Connection recovery still reports progress. Use `--verbose` for connection timings
+and diagnostic details; `--quiet` and `--json` suppress progress.
 JSON runs include a guest process ID and target scope:
 
 ```json
