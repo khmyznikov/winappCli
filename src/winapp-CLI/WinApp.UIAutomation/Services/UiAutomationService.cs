@@ -1789,18 +1789,26 @@ internal sealed partial class UiAutomationService : IUiAutomation
     private IEnumerable<IUIAutomationElement> EnumerateExplicitControlView(IUIAutomationElement root, CancellationToken ct)
     {
         var walker = s_getExplicitIdentityWalker(this);
-        var pending = new Stack<IUIAutomationElement>();
-        pending.Push(root);
-        while (pending.TryPop(out var parent))
+        var visitedWindows = new HashSet<nint>();
+        var pending = new Stack<(IUIAutomationElement Parent, nint Window)>();
+        pending.Push((root, EnterWindow(root, enclosingWindow: 0, visitedWindows, out _)));
+        while (pending.TryPop(out var entry))
         {
             ct.ThrowIfCancellationRequested();
-            var child = walker.GetFirstChildElement(parent);
+            var child = walker.GetFirstChildElement(entry.Parent);
             while (child is not null)
             {
                 ct.ThrowIfCancellationRequested();
+                var childWindow = EnterWindow(child, entry.Window, visitedWindows, out var revisited);
+                if (revisited)
+                {
+                    // The rest of this sibling chain was read on the first visit.
+                    break;
+                }
+
                 yield return child;
                 ct.ThrowIfCancellationRequested();
-                pending.Push(child);
+                pending.Push((child, childWindow));
                 child = walker.GetNextSiblingElement(child);
             }
         }
@@ -2179,9 +2187,12 @@ internal sealed partial class UiAutomationService : IUiAutomation
     {
         ct.ThrowIfCancellationRequested();
         var walker = s_getControlViewWalker(this);
-        var pending = new Stack<IUIAutomationElement>();
+        var visitedWindows = new HashSet<nint>();
+        var rootWindow = EnterWindow(root, enclosingWindow: 0, visitedWindows, out _);
+        var pending = new Stack<(IUIAutomationElement Element, nint EnclosingWindow)>();
         TryPushTraversalElement(
             () => walker.GetFirstChildElement(root),
+            rootWindow,
             pending,
             "first child of the search root",
             throwOnTraversalFailure);
@@ -2189,15 +2200,24 @@ internal sealed partial class UiAutomationService : IUiAutomation
         while (pending.Count > 0)
         {
             ct.ThrowIfCancellationRequested();
-            var element = pending.Pop();
+            var (element, enclosingWindow) = pending.Pop();
+
+            var elementWindow = EnterWindow(element, enclosingWindow, visitedWindows, out var revisited);
+            if (revisited)
+            {
+                // Its sibling and children were queued on the first visit.
+                continue;
+            }
 
             TryPushTraversalElement(
                 () => walker.GetNextSiblingElement(element),
+                enclosingWindow,
                 pending,
                 "next sibling",
                 throwOnTraversalFailure);
             TryPushTraversalElement(
                 () => walker.GetFirstChildElement(element),
+                elementWindow,
                 pending,
                 "first child",
                 throwOnTraversalFailure);
@@ -2206,9 +2226,48 @@ internal sealed partial class UiAutomationService : IUiAutomation
         }
     }
 
+    /// <summary>
+    /// Records the native window that <paramref name="element"/> starts, if any, and returns the
+    /// window that encloses its children.
+    /// </summary>
+    /// <remarks>
+    /// The Control View is not always a tree: a WinUI 3 WebView2 lists the window's XAML input site
+    /// among its children, and that input site contains the WebView2 again. Such cycles cross native
+    /// window boundaries, so a walk ends if it never enters the same window twice.
+    /// <para>
+    /// Only an element whose handle differs from <paramref name="enclosingWindow"/> starts a window.
+    /// Windowless content reports 0, or its host's handle, and is never tracked, so content that
+    /// shares its host's handle cannot hide its siblings. RuntimeIds are not used because a XAML
+    /// popup window's root reports the same RuntimeId as its island.
+    /// </para>
+    /// </remarks>
+    private static nint EnterWindow(
+        IUIAutomationElement element, nint enclosingWindow, HashSet<nint> visitedWindows, out bool revisited)
+    {
+        nint hwnd;
+        try
+        {
+            hwnd = (nint)element.get_CurrentNativeWindowHandle();
+        }
+        catch (Exception ex) when (ex is COMException or InvalidCastException)
+        {
+            hwnd = 0;
+        }
+
+        if (hwnd == 0 || hwnd == enclosingWindow)
+        {
+            revisited = false;
+            return enclosingWindow;
+        }
+
+        revisited = !visitedWindows.Add(hwnd);
+        return hwnd;
+    }
+
     private void TryPushTraversalElement(
         Func<IUIAutomationElement?> getElement,
-        Stack<IUIAutomationElement> pending,
+        nint enclosingWindow,
+        Stack<(IUIAutomationElement Element, nint EnclosingWindow)> pending,
         string relationship,
         bool throwOnTraversalFailure = false)
     {
@@ -2217,7 +2276,7 @@ internal sealed partial class UiAutomationService : IUiAutomation
             var element = getElement();
             if (element is not null)
             {
-                pending.Push(element);
+                pending.Push((element, enclosingWindow));
             }
         }
         catch (Exception ex) when (!throwOnTraversalFailure && ex is COMException or InvalidCastException)
@@ -2562,25 +2621,22 @@ internal sealed partial class UiAutomationService : IUiAutomation
         return null;
     }
 
-    private void WalkTree(IUIAutomationElement element, int maxDepth, int currentDepth, string path, List<UiElement> results, ref int nextElementId,
+    private bool WalkTree(IUIAutomationElement element, int maxDepth, int currentDepth, string path, List<UiElement> results, ref int nextElementId,
                           string? parentSelector = null, List<string>? ancestorTypes = null,
-                          HashSet<nint>? topLevelWindowHandles = null, nint currentWindowHandle = 0)
+                          HashSet<nint>? topLevelWindowHandles = null, nint currentWindowHandle = 0,
+                          HashSet<nint>? visitedWindows = null, nint enclosingWindow = 0)
     {
-        if (currentDepth > 0 && topLevelWindowHandles is not null)
+        visitedWindows ??= [];
+        var elementWindow = EnterWindow(element, enclosingWindow, visitedWindows, out var revisited);
+        if (currentDepth > 0 && elementWindow != enclosingWindow && elementWindow != currentWindowHandle &&
+            topLevelWindowHandles?.Contains(elementWindow) == true)
         {
-            try
-            {
-                var hwnd = (nint)element.get_CurrentNativeWindowHandle();
-                if (hwnd != 0 && hwnd != currentWindowHandle && topLevelWindowHandles.Contains(hwnd))
-                {
-                    return;
-                }
-            }
-            catch (COMException)
-            {
-                // Keep walking when a provider cannot report the native handle. The independent
-                // HWND is still emitted below, matching the previous best-effort COM behavior.
-            }
+            return true;
+        }
+
+        if (revisited)
+        {
+            return false;
         }
 
         var uiElement = ToUiElement(element, path, ref nextElementId);
@@ -2597,17 +2653,17 @@ internal sealed partial class UiAutomationService : IUiAutomation
             // Peek for children so we can hint that the tree was truncated.
             try
             {
-                var peekWalker = _automation.get_ControlViewWalker();
+                var peekWalker = s_getControlViewWalker(this);
                 if (peekWalker.GetFirstChildElement(element) is not null)
                 {
                     uiElement.HasMoreChildren = true;
                 }
             }
             catch { /* COM errors here are non-fatal — leave HasMoreChildren null */ }
-            return;
+            return true;
         }
 
-        var walker = _automation.get_ControlViewWalker();
+        var walker = s_getControlViewWalker(this);
         var child = walker.GetFirstChildElement(element);
         var childIndex = 0;
 
@@ -2619,7 +2675,7 @@ internal sealed partial class UiAutomationService : IUiAutomation
         while (child is not null)
         {
             var childPath = string.IsNullOrEmpty(path) ? $"/{childIndex}" : $"{path}/{childIndex}";
-            WalkTree(
+            var isFirstVisit = WalkTree(
                 child,
                 maxDepth,
                 currentDepth + 1,
@@ -2629,7 +2685,14 @@ internal sealed partial class UiAutomationService : IUiAutomation
                 childParentSelector,
                 childAncestors,
                 topLevelWindowHandles,
-                currentWindowHandle);
+                currentWindowHandle,
+                visitedWindows,
+                elementWindow);
+            if (!isFirstVisit)
+            {
+                // The rest of this sibling chain was walked on the first visit.
+                break;
+            }
 
             IUIAutomationElement? next;
             try
@@ -2643,6 +2706,8 @@ internal sealed partial class UiAutomationService : IUiAutomation
             child = next;
             childIndex++;
         }
+
+        return true;
     }
 
     private static UiElement ToUiElement(IUIAutomationElement element, string path, ref int nextElementId,
