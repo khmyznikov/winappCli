@@ -191,8 +191,8 @@ internal sealed partial class ProjectRunService(
     /// inputs. The project's <c>CsWinRTWindowsMetadata</c> is read with an extra evaluate only when it can change
     /// the decision: when the shim would otherwise inject (the Windows SDK CsWinRT's default reads is missing),
     /// so a project that chose its own metadata (<c>local</c>, a winmd folder, an installed SDK version) keeps
-    /// it; or when the project's files mention the property, since a pinned SDK version can be missing even
-    /// though the default's is installed. Other hosts and projects pay nothing.
+    /// it; or when the project's files mention the property or the user passed <c>-p WindowsSDKVersion</c>,
+    /// since either can request a missing SDK even though the TFM's is installed. Other runs pay nothing.
     /// </summary>
     private async Task<(ProjectRunOptions Options, CsWinRTShimInput Shim)> ResolveFrameworksAndShimInputAsync(
         FileInfo csproj,
@@ -201,8 +201,11 @@ internal sealed partial class ProjectRunService(
         CancellationToken cancellationToken)
     {
         (options, var framework) = await ResolveFrameworksAsync(csproj, options, workingDir, cancellationToken);
+        var userSdkVersion = TryGetUserProperty(options.Properties, "WindowsSDKVersion", out var sdkVersion) ? sdkVersion : null;
         if (UserSetCsWinRTMetadata(options)
-            || (!csWinRTMetadataShimService.IsWindowsSdkAbsent(framework) && !ProjectMentionsCsWinRTMetadata(csproj)))
+            || (!csWinRTMetadataShimService.IsWindowsSdkAbsent(framework)
+                && userSdkVersion is null
+                && !ProjectMentionsCsWinRTMetadata(csproj)))
         {
             return (options, new CsWinRTShimInput(framework, null));
         }
@@ -222,6 +225,13 @@ internal sealed partial class ProjectRunService(
         {
             // Indeterminate: fall back to CsWinRT's default, which is what the build uses when the project sets nothing.
             logger.LogDebug(ex, "Could not read CsWinRTWindowsMetadata for {Project}.", csproj.Name);
+        }
+
+        // Before restore the CsWinRT targets that default the property from WindowsSDKVersion aren't imported yet,
+        // so apply that default for a user-passed WindowsSDKVersion here.
+        if (string.IsNullOrWhiteSpace(projectMetadata))
+        {
+            projectMetadata = userSdkVersion;
         }
 
         return (options, new CsWinRTShimInput(framework, string.IsNullOrWhiteSpace(projectMetadata) ? null : projectMetadata));

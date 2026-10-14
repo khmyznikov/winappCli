@@ -2657,6 +2657,67 @@ public class ProjectRunServiceTests
     }
 
     [TestMethod]
+    public async Task BuildAndResolveAsync_ConditionalSingleTfm_UsesEvaluatedTfmWithoutPinning()
+    {
+        // Per-Configuration <TargetFramework>: the first textual one (Debug) is not what a Release run builds,
+        // so the shim must see the evaluated TFM, and a single-targeted project is still never pinned with -f.
+        var csproj = WriteFile("App.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><OutputType>WinExe</OutputType></PropertyGroup>
+              <PropertyGroup Condition="'$(Configuration)' == 'Debug'"><TargetFramework>net10.0-windows10.0.26100.0</TargetFramework></PropertyGroup>
+              <PropertyGroup Condition="'$(Configuration)' == 'Release'"><TargetFramework>net10.0-windows10.0.19041.0</TargetFramework></PropertyGroup>
+            </Project>
+            """);
+        var dotnet = new FakeDotNetService
+        {
+            RunDotnetCommandHandler = args => args.Contains("--getProperty:TargetFrameworks", StringComparison.Ordinal)
+                ? (0, """{ "Properties": { "TargetFramework": "net10.0-windows10.0.19041.0", "TargetFrameworks": "" } }""", string.Empty)
+                : (0, PackagedPropertiesJson(), string.Empty),
+        };
+        var shim = new FakeCsWinRTMetadataShimService();
+        var service = NewServiceWith(dotnet, shim, out _);
+        var options = new ProjectRunOptions("Release", "x64", null, NoBuild: false, NoRestore: false, Properties: []);
+
+        await service.BuildAndResolveAsync(csproj, options, CancellationToken.None);
+
+        Assert.AreEqual("net10.0-windows10.0.19041.0", shim.SdkAbsentMonikers[0]);
+        var buildCall = dotnet.StreamingCalls.Single(a => a.StartsWith("build ", StringComparison.Ordinal));
+        Assert.IsFalse(buildCall.Contains(" -f ", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public async Task BuildAndResolveAsync_UserWindowsSdkVersion_ReadsMetadataAndFallsBackToIt()
+    {
+        // -p WindowsSDKVersion can request a missing SDK even when the TFM's is installed. Before restore the
+        // probe returns nothing, so the user's version stands in for CsWinRT's default.
+        var csproj = WriteFile("App.csproj", ExecutableCsproj);
+        var probes = 0;
+        var dotnet = new FakeDotNetService
+        {
+            RunDotnetCommandHandler = args =>
+            {
+                if (args.Contains("--getProperty:CsWinRTWindowsMetadata", StringComparison.Ordinal))
+                {
+                    probes++;
+                    StringAssert.Contains(args, @"-p:WindowsSDKVersion=10.0.19041.0");
+                    return (0, """{ "Properties": { "CsWinRTWindowsMetadata": "", "TargetFramework": "net10.0-windows10.0.26100.0" } }""", string.Empty);
+                }
+
+                return (0, PackagedPropertiesJson(), string.Empty);
+            },
+        };
+        var shim = new FakeCsWinRTMetadataShimService { WindowsSdkAbsent = false };
+        var service = NewServiceWith(dotnet, shim, out _);
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false,
+            Properties: ["WindowsSDKVersion=10.0.19041.0"]);
+
+        await service.BuildAndResolveAsync(csproj, options, CancellationToken.None);
+
+        Assert.IsTrue(probes >= 1, "a user-passed WindowsSDKVersion must trigger the probe");
+        Assert.AreEqual("10.0.19041.0", shim.ResolvedProjectMetadata[0]);
+    }
+
+    [TestMethod]
     public void ProjectMentionsCsWinRTMetadata_FindsProjectAndParentDirectoryBuildFiles()
     {
         var plain = WriteFileAt(@"src\Plain\Plain.csproj", ExecutableCsproj);

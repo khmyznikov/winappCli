@@ -67,15 +67,16 @@ internal sealed partial class ProjectRunService
             // Inline <TargetFrameworks>: pin the first statically ONLY when concrete AND unconditional. The
             // static read is first-textual-match, so a conditional/per-Configuration declaration could pin
             // the wrong group's TFM; fall through to the authoritative MSBuild evaluate in that case.
-            if (staticFirstIsConcrete && HasUnconditionalInlineTargetFrameworks(csproj))
+            if (staticFirstIsConcrete && HasUnconditionalInlineDeclaration(csproj, "TargetFrameworks"))
             {
                 LogEffectiveFrameworkPinned(csproj, staticFirst!);
                 return (options with { Framework = staticFirst }, staticFirst);
             }
         }
-        else if (staticFirstIsConcrete)
+        else if (staticFirstIsConcrete && HasUnconditionalInlineDeclaration(csproj, "TargetFramework"))
         {
-            // Inline single concrete <TargetFramework>: genuinely single-targeted — no pinning needed.
+            // Inline single concrete unconditional <TargetFramework>: genuinely single-targeted — no pinning
+            // needed. A per-Configuration declaration falls through so the evaluate reports the effective one.
             return (options, staticFirst);
         }
 
@@ -97,12 +98,12 @@ internal sealed partial class ProjectRunService
             UiSymbols.Note, csproj.Name, tfm);
 
     /// <summary>
-    /// True when multi-targeting is declared inline in a form the cheap static read can trust: exactly ONE
-    /// <c>&lt;TargetFrameworks&gt;</c> element with no <c>Condition</c> on it or any ancestor. A conditional
-    /// or duplicated declaration makes the first-textual-match read unreliable, forcing the caller to the
-    /// authoritative evaluate. Returns <see langword="false"/> on unreadable/invalid XML.
+    /// True when <paramref name="elementName"/> (<c>TargetFramework</c> or <c>TargetFrameworks</c>) is declared
+    /// inline in a form the cheap static read can trust: exactly ONE such element with no <c>Condition</c> on it
+    /// or any ancestor. A conditional or duplicated declaration makes the first-textual-match read unreliable,
+    /// forcing the caller to the authoritative evaluate. Returns <see langword="false"/> on unreadable/invalid XML.
     /// </summary>
-    private static bool HasUnconditionalInlineTargetFrameworks(FileInfo csproj)
+    private static bool HasUnconditionalInlineDeclaration(FileInfo csproj, string elementName)
     {
         XDocument doc;
         try
@@ -116,7 +117,7 @@ internal sealed partial class ProjectRunService
 
         // SDK-style project files are namespace-less; match on local name to stay namespace-agnostic.
         var declarations = doc.Descendants()
-            .Where(e => e.Name.LocalName == "TargetFrameworks")
+            .Where(e => e.Name.LocalName == elementName)
             .ToList();
 
         if (declarations.Count != 1)
