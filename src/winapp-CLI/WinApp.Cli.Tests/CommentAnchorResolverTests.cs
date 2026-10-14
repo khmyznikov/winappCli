@@ -269,6 +269,58 @@ public class CommentAnchorResolverTests
         }
     }
 
+    // A C++/WinRT app's repo holds a copy of every page under Generated Files and a restored package's XAML under
+    // packages; neither is where the developer edits, so neither is a candidate.
+    [TestMethod]
+    public void ReAnchor_SkipsGeneratedCopiesPackagesAndToolFolders()
+    {
+        foreach (var folder in new[] { "src", @"src\Generated Files", @"packages\Pkg.1.0", @"node_modules\pkg", ".git", ".vs" })
+        {
+            Directory.CreateDirectory(Path.Combine(_root, folder));
+            WriteXaml(Path.Combine(folder, "TabHeader.xaml"), "<Grid>\n<TextBlock x:Name=\"HeaderTextBlock\"/>\n</Grid>");
+        }
+        var anchor = new CommentAnchor
+        {
+            Weak = true,
+            Identity = new CommentIdentity { Type = "TextBlock", Name = "HeaderTextBlock" },
+        };
+
+        var hits = _resolver.ReAnchor(anchor, _root);
+
+        Assert.AreEqual(@"src\TabHeader.xaml", hits.Single().File);
+    }
+
+    [TestMethod]
+    public void ReAnchor_UnreadableFile_IsReportedOnceWithoutAStackTrace()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "Themes"));
+        File.WriteAllText(Path.Combine(_root, "Themes", "Huge.xaml"), "<Grid>" + new string(' ', 3 * 1024 * 1024) + "</Grid>");
+        var logger = new RecordingLogger();
+        var resolver = new CommentAnchorResolver(logger);
+        var anchor = new CommentAnchor { Weak = true, Identity = new CommentIdentity { Type = "Button", Name = "Save" } };
+
+        resolver.ReAnchor(anchor, _root);
+        resolver.ReAnchor(anchor, _root);
+
+        Assert.AreEqual(1, logger.Warnings.Count, string.Join("\n", logger.Warnings));
+        Assert.IsTrue(logger.Warnings[0].Message.Contains("Huge.xaml", StringComparison.Ordinal) && logger.Warnings[0].Exception is null);
+    }
+
+    private sealed class RecordingLogger : Microsoft.Extensions.Logging.ILogger<CommentAnchorResolver>
+    {
+        public List<(string Message, Exception? Exception)> Warnings { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == Microsoft.Extensions.Logging.LogLevel.Warning)
+            {
+                Warnings.Add((formatter(state, exception), exception));
+            }
+        }
+    }
+
     [TestMethod]
     public void ReAnchor_NoSourceRoot_ReturnsEmpty()
     {

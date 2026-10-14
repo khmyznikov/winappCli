@@ -63,11 +63,13 @@ internal sealed record DevToolsAppAuthored(
         }
     }
 
+    /// <summary>What to do when the app has no XAML source information: DevTools attached after it started.</summary>
+    public const string RelaunchForSource = "Launch it with `winapp run --devtools on`, which turns source information on.";
+
     public string? ExplainIfEmpty() =>
         Handles.Count > 0
             ? null
             : SourceInstrumented
                 ? "The agent classified no element as app-authored: every live element came from framework or template XAML."
-                : "This app reports no XAML source information, so nothing can be classified as app-authored. " +
-                  "Launch it with `winapp run --devtools on`, which turns source information on.";
+                : "This app reports no XAML source information, so nothing can be classified as app-authored. " + RelaunchForSource;
 }

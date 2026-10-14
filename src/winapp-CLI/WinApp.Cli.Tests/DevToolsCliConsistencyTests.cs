@@ -126,6 +126,14 @@ public class DevToolsCliConsistencyTests : BaseCommandTests
     }
 
     [TestMethod]
+    public void DevToolsUiTip_FollowsOnlyInspect()
+    {
+        Assert.IsTrue(DevToolsUiTip.ShownAfter(GetRequiredService<UiInspectCommand>()));
+        Assert.IsFalse(DevToolsUiTip.ShownAfter(GetRequiredService<UiSearchCommand>()), "a search or click is not where to repeat it");
+        Assert.IsFalse(DevToolsUiTip.ShownAfter(GetRequiredService<UiClickCommand>()));
+    }
+
+    [TestMethod]
     public void IdenticalSourceWarningsCollapseToOneEntry()
     {
         var warnings = Enumerable.Range(0, 94)

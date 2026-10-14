@@ -169,7 +169,7 @@ internal class DevToolsGetPropertyCommand : DevToolsLiveCommand, IHelpExamples
                         json,
                         target.Pid,
                         $"'{property}' is not among the {total} {(total == 1 ? "property" : "properties")} the agent reports for this element. " +
-                        "Run the command without --property to see which it reads."));
+                        DevToolsPropertyRow.UnknownPropertyHint(all.Select(p => p.Row.Name), property!, selector)));
                 }
             }
             else if (parseResult.GetValue(AllOption))

@@ -254,6 +254,26 @@ public class DevToolsJsonParityTests
         StringAssert.Contains(humanOut.Replace("\r", "").Replace("\n", " "), message);
     }
 
+    // After a late attach no element has a source, so blaming framework XAML sends the developer the wrong way.
+    [TestMethod]
+    public async Task GetSource_InAnAppWithNoSourceInformation_SaysToRelaunch()
+    {
+        using var agent = new FakeDevToolsProtocolAgent()
+            .Answer("VisualTree.find", Find(SaveButtonMatch))
+            .Answer("VisualTree.enumerate", AuthoredTree(), IsAuthored).Answer("VisualTree.enumerate", Tree)
+            .Answer("Source.get", """{"handle":"42","fileName":"","lineNumber":0,"columnNumber":0,"authoredState":"noSourceInfo"}""")
+            .Answer("VisualTree.getAppAuthored", """{"appAuthored":[],"sourceInstrumented":false}""");
+
+        var (jsonExit, jsonOut) = await RunAsync(new DevToolsGetSourceCommand(), agent, ["42", "--json"]);
+
+        Assert.AreEqual(1, jsonExit);
+        using var doc = JsonDocument.Parse(jsonOut);
+        var message = doc.RootElement.GetProperty("error").GetProperty("message").GetString()!;
+        StringAssert.Contains(message, "this app reports no XAML source information");
+        StringAssert.Contains(message, "winapp run --devtools on");
+        Assert.IsFalse(message.Contains("Framework", StringComparison.Ordinal));
+    }
+
     [TestMethod]
     public async Task GetSource_WithASourceRecord_IsASuccessInBothShapes()
     {

@@ -541,6 +541,22 @@ public class DevToolsAgentCommandTests : BaseCommandTests
     /// A stale handle is the single most common failure an agent hits (the tree rebuilds between commands), so
     /// its message must say what to do next rather than repeat the token.
     /// </summary>
+    // An element has about 300 properties; listing them all for a typo buried the answer in 60 lines.
+    [TestMethod]
+    public void UnknownProperty_NamesOnlyTheClosestFewAndHowToListEveryOne()
+    {
+        string[] names = ["Background", "BorderBrush", "BorderThickness", "TabWidthMode", "Width", "MinWidth", "MaxWidth",
+            "ScrollViewer.HorizontalScrollBarVisibility", "Typography.Capitals", .. Enumerable.Range(0, 250).Select(i => $"Unrelated{i}Thing")];
+
+        Assert.AreEqual("Closest: Background. `winapp devtools get-property TabView --all` lists every property.",
+            DevToolsPropertyRow.UnknownPropertyHint(names, "Backgrund", "TabView"));
+        Assert.AreEqual("ScrollViewer.HorizontalScrollBarVisibility",
+            DevToolsPropertyRow.ClosestNames(names, "HorizontalScrollBarVisibility").Single());
+        Assert.AreEqual("`winapp devtools get-property TabView --all` lists every property.",
+            DevToolsPropertyRow.UnknownPropertyHint(names, "NotAProperty", "TabView"));
+        Assert.IsTrue(DevToolsPropertyRow.ClosestNames(names, "Width").Count <= 5);
+    }
+
     [TestMethod]
     public void Errors_ExplainTheCommonFailuresInActionableTerms()
     {

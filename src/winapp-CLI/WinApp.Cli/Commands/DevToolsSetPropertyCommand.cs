@@ -154,13 +154,13 @@ internal class DevToolsSetPropertyCommand : DevToolsLiveCommand, IHelpExamples
             var beforeRow = DevToolsPropertyRow.Find(beforeRows, property);
             if (beforeRow is null)
             {
-                var known = beforeRows is null or { Count: 0 }
+                var hint = beforeRows is null or { Count: 0 }
                     ? string.Empty
-                    : $" The agent reads: {string.Join(", ", beforeRows.Select(r => r.Name))}.";
+                    : " " + DevToolsPropertyRow.UnknownPropertyHint(beforeRows.Select(r => r.Name), property, parseResult.GetValue(SelectorArgument));
                 return Task.FromResult(Fail(
                     json,
                     target.Pid,
-                    $"The DevTools agent does not read '{property}' on this element.{known}"));
+                    $"The DevTools agent does not read '{property}' on this element.{hint}"));
             }
 
             // The tap already knows the XAML type each property must be written as, so --type is a manual

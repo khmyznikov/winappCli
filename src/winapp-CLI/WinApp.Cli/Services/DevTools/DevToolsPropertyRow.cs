@@ -103,6 +103,62 @@ internal sealed record DevToolsPropertyRow(
     public static DevToolsPropertyRow? Find(IReadOnlyList<DevToolsPropertyRow>? rows, string property) =>
         rows?.FirstOrDefault(r => string.Equals(r.Name, property, StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>
+    /// What to say about a property name the agent doesn't read: the few closest names and how to list every one.
+    /// An element has hundreds of properties, so listing all of them buries the likely typo.
+    /// </summary>
+    public static string UnknownPropertyHint(IEnumerable<string> names, string requested, string? selector)
+    {
+        var closest = ClosestNames(names, requested);
+        var all = $"`winapp devtools get-property {selector ?? "<selector>"} --all` lists every property.";
+        return closest.Count == 0 ? all : $"Closest: {string.Join(", ", closest)}. {all}";
+    }
+
+    internal static IReadOnlyList<string> ClosestNames(IEnumerable<string> names, string requested, int max = 5)
+    {
+        var wanted = requested.Trim();
+        return names.Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(name => (Name: name, Score: Score(name)))
+            .Where(candidate => candidate.Score < int.MaxValue)
+            .OrderBy(candidate => candidate.Score).ThenBy(candidate => candidate.Name, StringComparer.OrdinalIgnoreCase)
+            .Take(max).Select(candidate => candidate.Name).ToList();
+
+        int Score(string name)
+        {
+            var member = name[(name.LastIndexOf('.') + 1)..];
+            if (member.Equals(wanted, StringComparison.OrdinalIgnoreCase))
+            {
+                return 0;
+            }
+            if (wanted.Length >= 3 && (member.StartsWith(wanted, StringComparison.OrdinalIgnoreCase) || name.StartsWith(wanted, StringComparison.OrdinalIgnoreCase)))
+            {
+                return 1;
+            }
+            if (wanted.Length >= 3 && name.Contains(wanted, StringComparison.OrdinalIgnoreCase))
+            {
+                return 2;
+            }
+            var distance = EditDistance(member.ToUpperInvariant(), wanted.ToUpperInvariant());
+            return distance <= Math.Max(2, wanted.Length / 3) ? 10 + distance : int.MaxValue;
+        }
+    }
+
+    private static int EditDistance(string a, string b)
+    {
+        var previous = Enumerable.Range(0, b.Length + 1).ToArray();
+        for (var i = 1; i <= a.Length; i++)
+        {
+            var current = new int[b.Length + 1];
+            current[0] = i;
+            for (var j = 1; j <= b.Length; j++)
+            {
+                current[j] = Math.Min(Math.Min(current[j - 1], previous[j]) + 1, previous[j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1));
+            }
+            previous = current;
+        }
+        return previous[b.Length];
+    }
+
     public static DevToolsPropertyRow? FromElement(JsonElement row)
     {
         if (row.ValueKind != JsonValueKind.Object)
