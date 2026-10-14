@@ -266,10 +266,10 @@ internal class UiTouchCommand : Command, IShortDescription, IHelpExamples
                 to = toPoint;
             }
 
-            if (at is null && string.IsNullOrWhiteSpace(selectorStr))
+            if (at is null && !UiQueryOptions.HasQuery(parseResult, selectorStr))
             {
                 logger.LogError("{Symbol} Provide a target: a selector, or --at x,y.", UiSymbols.Error);
-                UiJsonError.Emit(json, UiJsonError.CodeInvalidArguments, "Provide a target: a selector, or --at x,y.");
+                UiJsonError.Emit(json, UiJsonError.CodeInvalidArguments, "Provide a target: a selector, --type, --class-name, or --at x,y.");
                 return 1;
             }
 

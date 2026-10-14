@@ -187,10 +187,10 @@ internal class UiPenCommand : Command, IShortDescription, IHelpExamples
                 at = atPoint;
             }
 
-            if (path is null && at is null && string.IsNullOrWhiteSpace(selectorStr))
+            if (path is null && at is null && !UiQueryOptions.HasQuery(parseResult, selectorStr))
             {
                 logger.LogError("{Symbol} Provide a target: a selector, --at x,y, or --path.", UiSymbols.Error);
-                UiJsonError.Emit(json, UiJsonError.CodeInvalidArguments, "Provide a target: a selector, --at x,y, or --path.");
+                UiJsonError.Emit(json, UiJsonError.CodeInvalidArguments, "Provide a target: a selector, --type, --class-name, --at x,y, or --path.");
                 return 1;
             }
 
@@ -244,7 +244,7 @@ internal class UiPenCommand : Command, IShortDescription, IHelpExamples
                 long targetHwnd = uiTarget.WindowHandle;
                 // L1: report the effective target — pathStr when --path was given, atStr when --at
                 // was given, or selectorStr when the selector resolved the contact point.
-                var targetLabel = pathStr ?? (at is not null ? atStr : selectorStr);
+                var targetLabel = pathStr ?? (at is not null ? atStr : UiQueryOptions.Describe(parseResult, selectorStr));
                 PointerCommandSupport.InjectionPreparation prep;
 
                 await using (await turn.EnterAsync(cancellationToken).ConfigureAwait(false))

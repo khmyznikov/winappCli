@@ -72,7 +72,7 @@ internal class UiSetValueCommand : Command, IShortDescription, IHelpExamples
                 return 1;
             }
 
-            if (string.IsNullOrWhiteSpace(selectorStr))
+            if (!UiQueryOptions.HasQuery(parseResult, selectorStr))
             {
                 UiErrors.MissingSelector(logger, "set-value", json);
                 return 1;
@@ -80,7 +80,11 @@ internal class UiSetValueCommand : Command, IShortDescription, IHelpExamples
 
             if (value is null)
             {
-                var message = $"A value is required. Usage: {UiCommandAdvice.Command("set-value <selector> <value> -a <app>")}";
+                // The value is the second positional, so with no selector it must follow an empty one.
+                var usage = UiQueryOptions.HasElementFilters(parseResult) && !string.IsNullOrWhiteSpace(selectorStr)
+                    ? "set-value \"\" <value> --type <type> -a <app>"
+                    : "set-value <selector> <value> -a <app>";
+                var message = $"A value is required. Usage: {UiCommandAdvice.Command(usage)}";
                 logger.LogError("{Symbol} {Message}", UiSymbols.Error, message);
                 UiJsonError.Emit(json, UiJsonError.CodeInvalidArguments, message);
                 return 1;
@@ -92,8 +96,8 @@ internal class UiSetValueCommand : Command, IShortDescription, IHelpExamples
         protected override async Task<int> ExecuteAsync(ParseResult parseResult, IUiTurn turn, CancellationToken cancellationToken)
         {
             var json = parseResult.GetValue(WinAppRootCommand.JsonOption);
-            // Preflight rejected a missing selector, so this is non-null by construction.
-            var selectorStr = parseResult.GetValue(SharedUiOptions.SelectorArgument)!;
+            var selectorArg = parseResult.GetValue(SharedUiOptions.SelectorArgument);
+            var selectorStr = UiQueryOptions.Describe(parseResult, selectorArg);
             var app = parseResult.GetValue(SharedUiOptions.AppOption);
             var window = parseResult.GetValue(SharedUiOptions.WindowOption);
             var value = parseResult.GetValue(SharedUiOptions.ValueArgument)!;
@@ -101,7 +105,7 @@ internal class UiSetValueCommand : Command, IShortDescription, IHelpExamples
             try
             {
                 var uiTarget = await targetResolver.ResolveAsync(app, window, cancellationToken);
-                var selector = UiQueryOptions.Parse(parseResult, selectorParser, selectorStr);
+                var selector = UiQueryOptions.Parse(parseResult, selectorParser, selectorArg);
                 var element = await UiQueryOptions.FindTargetAsync(parseResult, uiAutomation, uiTarget, selector, cancellationToken);
 
                 if (element is null)

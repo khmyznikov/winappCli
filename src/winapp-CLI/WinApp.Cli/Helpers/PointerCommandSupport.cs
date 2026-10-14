@@ -32,11 +32,12 @@ internal static class PointerCommandSupport
             return new ResolvedPoint(true, explicitPoint.Value, uiTarget.WindowHandle, explicitLabel);
         }
 
-        var selector = UiQueryOptions.Parse(parseResult, selectorParser, selectorStr!);
+        var selector = UiQueryOptions.Parse(parseResult, selectorParser, selectorStr);
+        var label = UiQueryOptions.Describe(parseResult, selectorStr);
         var element = await UiQueryOptions.FindTargetAsync(parseResult, uiAutomation, uiTarget, selector, cancellationToken);
         if (element is null)
         {
-            UiErrors.ElementNotFound(logger, selectorStr!, json, target: uiTarget);
+            UiErrors.ElementNotFound(logger, label, json, target: uiTarget);
             return default;
         }
 
@@ -45,7 +46,7 @@ internal static class PointerCommandSupport
             logger.LogError("{Symbol} Element has zero size — cannot use its center as a {PointKind}.",
                 UiSymbols.Error, pointKind);
             UiJsonError.Emit(json, UiJsonError.CodeZeroSize,
-                $"Element has zero size — cannot use its center as a {pointKind}.", selectorStr);
+                $"Element has zero size — cannot use its center as a {pointKind}.", label);
             return default;
         }
 
@@ -55,12 +56,12 @@ internal static class PointerCommandSupport
             uiAutomation, uiTarget, selector, element,
             GestureTargeting.DefaultMaxReads, GestureTargeting.DefaultReadDelayMs, null, cancellationToken,
             requireUnique: UiQueryOptions.HasFilters(parseResult));
-        if (!UiInjectionReporting.TryReport(stable, logger, json, selectorStr!, action))
+        if (!UiInjectionReporting.TryReport(stable, logger, json, label, action))
         {
             return default;
         }
 
-        return new ResolvedPoint(true, new PointerPoint(stable.CenterX, stable.CenterY), targetHwnd, selectorStr);
+        return new ResolvedPoint(true, new PointerPoint(stable.CenterX, stable.CenterY), targetHwnd, label);
     }
 
     public static async Task SetForegroundAsync(
