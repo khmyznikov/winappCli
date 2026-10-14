@@ -150,6 +150,8 @@ internal sealed class HotReloadResponse
     public List<string> Messages { get; set; } = [];
     /// <summary>Reloads that failed in the app (for example markup the runtime couldn't parse).</summary>
     public List<string> Errors { get; set; } = [];
+    /// <summary>What an applied update didn't keep (items code added to a collection a replayed constructor fills).</summary>
+    public List<string> Notes { get; set; } = [];
 }
 
 internal static class HotReloadFrames

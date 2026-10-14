@@ -37,6 +37,7 @@ internal static class XamlReload
     private static DispatcherQueue? s_dispatcher;
     private static HashSet<object>? s_loadedDuringRefresh;
     private static List<string>? s_messages;
+    private static List<string>? s_notes;
     private static List<string>? s_errors;
     private static ReflectionMetadataProvider? s_provider;
     private static bool s_initialized;
@@ -185,10 +186,11 @@ internal static class XamlReload
     }
 
     /// <summary>Runs on the UI thread after an edit-and-continue delta (if any) was applied.</summary>
-    public static void Apply(HotReloadRequest request, List<string> messages, List<string> errors)
+    public static void Apply(HotReloadRequest request, List<string> messages, List<string> errors, List<string> notes)
     {
         s_messages = messages;
         s_errors = errors;
+        s_notes = notes;
         s_deferredBinds = [];
         CodeAddedItems.LaunchItems(request.LaunchItems);
         try
@@ -300,6 +302,7 @@ internal static class XamlReload
         {
             s_messages = null;
             s_errors = null;
+            s_notes = null;
         }
     }
 
@@ -311,10 +314,11 @@ internal static class XamlReload
     private static List<Action>? s_deferredBinds;
 
     /// <summary>Runs the evaluations <see cref="Apply"/> deferred, reporting into the same update's lists.</summary>
-    public static void ApplyDeferredBindings(List<string> messages, List<string> errors)
+    public static void ApplyDeferredBindings(List<string> messages, List<string> errors, List<string> notes)
     {
         s_messages = messages;
         s_errors = errors;
+        s_notes = notes;
         try
         {
             while (s_deferredBinds is { Count: > 0 } deferred)
@@ -329,6 +333,7 @@ internal static class XamlReload
             s_deferredBinds = null;
             s_messages = null;
             s_errors = null;
+            s_notes = null;
         }
     }
 
@@ -406,7 +411,8 @@ internal static class XamlReload
     /// </summary>
     internal static string Describe(Exception ex, string? uri, string? component = null)
     {
-        var message = string.Join(" ", ex.GetBaseException().Message.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0 && l != NoText));
+        // The runtime's restricted error text often repeats the system message: each line once.
+        var message = string.Join(" ", ex.GetBaseException().Message.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0 && l != NoText).Distinct());
         // A dictionary's items split by a property element (<ResourceDictionary.ThemeDictionaries>) in between.
         message = message.Replace("The property '__implicit_items' is set more than once.",
             "This dictionary's resources are split by another element (such as <ResourceDictionary.ThemeDictionaries>): keep them together in one block (the XAML compiler reports this as WMC0035).", StringComparison.Ordinal)
@@ -1355,13 +1361,17 @@ internal static class XamlReload
         }
     }
 
-    private static void Reinitialize(object component)
+    private static void Reinitialize(object component, bool retry = true)
     {
         var type = component.GetType();
         HotReloadAgent.Log($"reinitialize {type.FullName}");
         var restore = Snapshot(component);
         var keepAdded = CodeAddedItems.Detach(component, (element, owner) => Unwire(component, element, owner));
         var hosted = ReleaseHostedContent(component);
+        // The lists the old tree shows let go of the collections they show: otherwise they keep listening after they're
+        // gone, and a collection the replay changes (or one the app changes later) calls into them and fails.
+        var detached = DetachItemsSources(component);
+        var again = false;
         try
         {
             ClearErrorInfo();
@@ -1370,12 +1380,14 @@ internal static class XamlReload
             // The constructor body runs again; subscriptions it makes to objects that outlive it would otherwise double.
             var events = replay is null ? null : new LiveObjects.EventSnapshot(component);
             var collections = replay is null ? [] : OwnCollections(component);
+            string[]? reset = null;
             if (replay is not null)
             {
-                // Empties the collections the constructor fills, so the replay doesn't add the same items again.
-                type.GetMethod(ResetMethod, InstanceMembers, Type.EmptyTypes)?.Invoke(component, null);
+                // Starts the collections the constructor fills over, so the replay doesn't add the same items again.
+                reset = type.GetMethod(ResetMethod, InstanceMembers, Type.EmptyTypes)?.Invoke(component, null) as string[];
             }
             (replay ?? type.GetMethod("InitializeComponent", InstanceMembers, Type.EmptyTypes))?.Invoke(component, null);
+            NoteDroppedItems(component, reset);
             events?.RemoveDuplicates();
             foreach (var (property, value) in collections)
             {
@@ -1391,13 +1403,102 @@ internal static class XamlReload
         {
             restore();
             hosted();
-            ReportError(Describe(ex, ClassUris.GetValueOrDefault(type.FullName!), type.Name));
+            detached?.Invoke();
+            // The list being replaced can still be releasing the items of a collection the reload reset (it grew since
+            // the last reload): the runtime then fails a call into it (E_NOINTERFACE, or the object is already gone).
+            // That settles once it's released, so the reload is tried once more before it's reported.
+            var cause = ex.GetBaseException();
+            // (CsWinRT raises E_NOINTERFACE as an InvalidCastException.)
+            var transient = cause is ObjectDisposedException || (cause is COMException or InvalidCastException && cause.HResult == unchecked((int)0x80004002));
+            if (retry && transient)
+            {
+                HotReloadAgent.Log($"reinitialize {type.FullName} failed; trying again: {ex}");
+                again = true;
+            }
+            else if (transient)
+            {
+                ReportError($"{ClassUris.GetValueOrDefault(type.FullName!) ?? type.Name}: the page couldn't be rebuilt in place ({cause.Message.Split('\n')[0].Trim()}); save again, or restart the app if it keeps failing");
+            }
+            else
+            {
+                ReportError(Describe(ex, ClassUris.GetValueOrDefault(type.FullName!), type.Name));
+            }
         }
         finally
         {
             // Into the rebuilt collections, or back into the old ones when the reload was undone.
             keepAdded(component);
         }
+        if (again)
+        {
+            // In a callback of its own (still within the update when there is one, so its outcome is this save's).
+            if (s_deferredBinds is { } deferred)
+            {
+                deferred.Insert(0, () => Reinitialize(component, retry: false));
+            }
+            else
+            {
+                s_dispatcher?.TryEnqueue(() => Reinitialize(component, retry: false));
+            }
+        }
+    }
+
+    /// <summary>
+    /// A collection the replayed constructor fills starts over on reload (see the generated reset method, which returns
+    /// "Name|Count" for each as it was): items code added to it while the app ran are gone, and the save says so.
+    /// </summary>
+    private static void NoteDroppedItems(object component, string[]? reset)
+    {
+        foreach (var entry in reset ?? [])
+        {
+            var name = entry[..entry.LastIndexOf('|')];
+            var before = int.Parse(entry[(entry.LastIndexOf('|') + 1)..], System.Globalization.CultureInfo.InvariantCulture);
+            var type = component.GetType();
+            var value = type.GetField(name, InstanceMembers)?.GetValue(component) ?? type.GetProperty(name, InstanceMembers)?.GetValue(component);
+            var after = (value as System.Collections.ICollection)?.Count ?? 0;
+            if (after < before && s_notes is { } notes)
+            {
+                var note = $"{type.Name}.{name} starts over on each reload because its constructor fills it: {before - after} item(s) added while the app ran were dropped";
+                if (!notes.Contains(note))
+                {
+                    notes.Add(note);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Clears ItemsSource on the component's named lists (its x:Name fields that hold an ItemsRepeater or ItemsControl), so
+    /// they stop listening to the collections they show; the returned action sets them back.
+    /// </summary>
+    private static Action DetachItemsSources(object component)
+    {
+        var detached = new List<(DependencyObject List, DependencyProperty Property, object Value)>();
+        for (var type = component.GetType(); type is not null && type.Assembly == component.GetType().Assembly; type = type.BaseType)
+        {
+            foreach (var field in type.GetFields(InstanceMembers | BindingFlags.DeclaredOnly))
+            {
+                var list = field.GetValue(component) as DependencyObject;
+                var property = list switch
+                {
+                    ItemsRepeater => ItemsRepeater.ItemsSourceProperty,
+                    ItemsControl => ItemsControl.ItemsSourceProperty,
+                    _ => null,
+                };
+                if (property is not null && list!.GetValue(property) is { } value)
+                {
+                    detached.Add((list, property, value));
+                    list.ClearValue(property);
+                }
+            }
+        }
+        return () =>
+        {
+            foreach (var (list, property, value) in detached)
+            {
+                list.SetValue(property, value);
+            }
+        };
     }
 
     /// <summary>After every component load (WinUI's load callback), on the loading thread.</summary>

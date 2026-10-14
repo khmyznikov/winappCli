@@ -856,7 +856,7 @@ internal sealed class HotReloadSession
                 component.Pending = false;
             }
             waiting.AddRange(response.Messages.Select(SourcePaths));
-            var partial = Describe(fine, notes) + string.Concat(failing.Select(file =>
+            var partial = Describe(fine, notes.Concat(response.Notes)) + string.Concat(failing.Select(file =>
                 Environment.NewLine + $"  {file} still has an error: " + string.Join(" ", errors.Where(e => Mentions(e, file)))));
             return new SaveResult(waiting.Count > 0 ? Outcome.Waiting : Outcome.Applied,
                 partial + string.Concat(waiting.Distinct().Select(w => Environment.NewLine + "  " + w)),
@@ -867,7 +867,7 @@ internal sealed class HotReloadSession
             component.Pending = false;
         }
         waiting.AddRange(response.Messages.Select(SourcePaths));
-        var detail = Describe(applied.Count > 0 ? applied : batch, notes);
+        var detail = Describe(applied.Count > 0 ? applied : batch, notes.Concat(response.Notes));
         return waiting.Count > 0
             ? new SaveResult(Outcome.Waiting, detail + Environment.NewLine + "  " + string.Join(Environment.NewLine + "  ", waiting.Distinct()))
             : new SaveResult(Outcome.Applied, detail);

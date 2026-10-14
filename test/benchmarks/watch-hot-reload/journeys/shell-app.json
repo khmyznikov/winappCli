@@ -178,6 +178,7 @@
           "        <ComboBox x:Name=\"FontPicker\" ItemsSource=\"{x:Bind FontSizes}\" Loaded=\"FontPicker_Loaded\" />",
           "        <TextBlock x:Name=\"Sized\" Text=\"sized\" FontSize=\"{x:Bind (x:Double)FontPicker.SelectedValue, Mode=OneWay}\" />",
           "        <ListView x:Name=\"BarList\" ItemsSource=\"{x:Bind Bars}\" />",
+          "        <Button AutomationProperties.AutomationId=\"AddBar\" Content=\"Add bar\" Click=\"AddBar_Click\" />",
           "        <local:Echo>",
           "            <local:Echo.Values>",
           "                <local:EchoValue Value=\"{x:Bind Disable.IsChecked, Mode=OneWay}\" />",
@@ -216,6 +217,11 @@
           "        Bars.Add(\"one\");",
           "        Bars.Add(\"two\");",
           "        Bars.Add(\"three\");",
+          "    }",
+          "",
+          "    private void AddBar_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)",
+          "    {",
+          "        Bars.Add(\"added \" + Bars.Count);",
           "    }",
           "",
           "    // Like WinUI Gallery's ComboBox page: sizes in a List<double>, the selection made once the box has loaded.",
@@ -697,6 +703,15 @@
                 "target": "BarList",
                 "assert": "child-count-equals",
                 "value": "3"
+              },
+              {
+                "target": "AddBar",
+                "assert": "invoke"
+              },
+              {
+                "target": "BarList",
+                "assert": "child-count-equals",
+                "value": "4"
               }
             ]
           },
@@ -757,7 +772,8 @@
             ]
           },
           "expect": {
-            "outcome": "applied"
+            "outcome": "applied",
+            "detail": "note: OptionsPage\\.Bars starts over on each reload because its constructor fills it: 1 item\\(s\\) added while the app ran were dropped"
           }
         },
         {

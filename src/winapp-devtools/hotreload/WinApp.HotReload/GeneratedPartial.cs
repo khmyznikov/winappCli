@@ -212,16 +212,21 @@ internal static class GeneratedPartial
         // to their initial value first (their initializer, or null), so it builds them as it did at launch instead of adding
         // the same items again. A new object rather than a cleared one: the old one may still be shown by the UI the
         // reload replaces, which a change would reach.
-        builder.Append("    internal void ").Append(ResetMethod).AppendLine("()");
+        builder.Append("    internal string[] ").Append(ResetMethod).AppendLine("()");
         builder.AppendLine("    {");
+        builder.AppendLine("        var __counts = new global::System.Collections.Generic.List<string>();");
         if (constructor is not null && canReplay && (constructor.Body is not null || constructor.ExpressionBody is not null))
         {
             var parts = userParts.ToList();
             foreach (var filled in FilledCollections(constructor, parts, skipped))
             {
+                // How many items it had, so the agent can say when items added while the app ran were dropped.
+                builder.Append("        __counts.Add(\"").Append(filled).Append("|\" + (((object)this.").Append(filled)
+                    .AppendLine(" as global::System.Collections.ICollection)?.Count ?? 0));");
                 builder.Append("        ").AppendLine(ResetStatement(filled, parts));
             }
         }
+        builder.AppendLine("        return __counts.ToArray();");
         builder.AppendLine("    }");
         builder.AppendLine("}");
         return builder.ToString();
