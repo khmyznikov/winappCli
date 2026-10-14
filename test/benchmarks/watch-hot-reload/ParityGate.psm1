@@ -16,6 +16,9 @@
 #     "probes": [ { "id", "target", "assert": "invoke" | "set-value" | "toggle-on" | "focus", "value" } ],
 #                                   run on both apps, in order, with a reading after each
 #     "navigate": [ ...probes ],    run on the clean build only, before reading (to reach the page the journey is on)
+#     "prepare": [ ...probes ],     run on both apps before the first reading (a Reset button that undoes what the
+#                                   journey's clicks built up, which the clean build never saw)
+#     "enabled": false,             never run the gate for this journey (its point is state a clean launch can't have)
 #     "properties": [ "Text", ... ],what to read on each element (default below)
 #     "ignore": [ "*#CountText.Text" ], element paths or path.Property wildcards that may differ (event counters)
 #     "replayInputs": false         don't give the clean build the text the journey typed (default: replay what is still shown)
@@ -230,6 +233,7 @@ function Read-ParityPhases {
         [Parameter(Mandatory)][int]$ProcessId,
         [Parameter(Mandatory)][scriptblock]$InvokeProbe,
         $Probes,
+        $Prepare,
         [string]$Root,
         [string]$RootNamespace,
         [string[]]$Properties,
@@ -237,6 +241,11 @@ function Read-ParityPhases {
     )
     $phases = [ordered]@{}
     $notes = [System.Collections.Generic.List[string]]::new()
+    foreach ($step in @($Prepare)) {
+        if ($null -eq $step) { continue }
+        $outcome = & $InvokeProbe $step $ProcessId
+        if (-not $outcome.Ok) { $notes.Add("prepare $($step.assert) $($step.target): the step failed: $(Remove-Ansi $outcome.Output)") }
+    }
     $read = Wait-ParitySnapshot -Winapp $Winapp -ProcessId $ProcessId -Root $Root -RootNamespace $RootNamespace -Properties $Properties -TimeoutSeconds $TimeoutSeconds
     if (-not $read.Stable) { $notes.Add('initial: the UI did not settle') }
     $phases['initial'] = $read.Snapshot
@@ -321,7 +330,7 @@ function Invoke-ParityCheck {
     $root = if ($Config.root) { [string]$Config.root } else { $null }
     $properties = if ($Config.properties) { @($Config.properties) } else { $script:DefaultProperties }
     $ignore = @($Config.ignore | Where-Object { $_ })
-    $common = @{ Winapp = $Winapp; InvokeProbe = $InvokeProbe; Probes = $Config.probes; Root = $root; RootNamespace = $RootNamespace; Properties = $properties; TimeoutSeconds = $TimeoutSeconds }
+    $common = @{ Winapp = $Winapp; InvokeProbe = $InvokeProbe; Probes = $Config.probes; Prepare = $Config.prepare; Root = $root; RootNamespace = $RootNamespace; Properties = $properties; TimeoutSeconds = $TimeoutSeconds }
 
     $hot = Read-ParityPhases @common -ProcessId $ProcessId
     $hotSeconds = $clock.Elapsed.TotalSeconds
