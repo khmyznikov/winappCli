@@ -129,7 +129,7 @@ static std::wstring OriginTooltip(const DevToolsCardRow& r)
 
 static std::wstring LayoutNumW(double v)
 {
-    if (!(v == v)) return L"\u2014";
+    if (!(v == v)) return L"n/a";
     wchar_t buf[32];
     _snwprintf_s(buf, _countof(buf), _TRUNCATE, L"%.2f", v);
     std::wstring s = buf;
@@ -384,7 +384,7 @@ static std::wstring BuildBoxModel(const DevToolsWindowLayout& L, const std::vect
          L" VerticalAlignment=\"Center\">";
     m += L"<TextBlock Text=\"content\" FontSize=\"9\" Foreground=\"" + dim +
          L"\" HorizontalAlignment=\"Center\" AutomationProperties.AccessibilityView=\"Raw\"/>";
-    m += L"<TextBlock Text=\"" + DevToolsXmlEscape(degenerate ? std::wstring(L"\u2014") : sContent) +
+    m += L"<TextBlock Text=\"" + DevToolsXmlEscape(degenerate ? std::wstring(L"n/a") : sContent) +
          L"\" FontSize=\"12\" FontFamily=\"Consolas\" FontWeight=\"SemiBold\" Foreground=\"" + ink +
          L"\" HorizontalAlignment=\"Center\" TextTrimming=\"CharacterEllipsis\" TextWrapping=\"NoWrap\""
          L" AutomationProperties.Name=\"content box " + DevToolsXmlEscape(sContent) + L"\"/>";

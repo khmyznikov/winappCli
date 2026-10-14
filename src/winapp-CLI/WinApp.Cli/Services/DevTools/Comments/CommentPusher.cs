@@ -25,7 +25,7 @@ internal sealed record TapComment(
 /// <remarks>
 /// The CLI stays the single reader/writer of <c>.winapp/ui-comments.json</c>; the app parses no file and keeps
 /// no store. Every call is best-effort: no running app, no tap, or a tap that doesn't answer all mean "nothing
-/// to show right now", never a failed command — you can author and hand off comments with the app closed.
+/// to show right now", never a failed command. You can author and hand off comments with the app closed.
 /// </remarks>
 internal interface ICommentPusher
 {

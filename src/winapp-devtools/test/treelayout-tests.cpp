@@ -387,7 +387,7 @@ static void Test_A11yRowsFollowTheVisibleHierarchy()
 }
 
 // The identity a devtools selector is built on. A wire handle is exact but opaque; `id` is the readable
-// half — and the ONLY thing that lets the CLI refuse a selector that no longer names the element it named
+// half, and the ONLY thing that lets the CLI refuse a selector that no longer names the element it named
 // when it was printed. Three properties have to hold or the selector is worse than the bare handle it
 // replaced: it must depend on the whole path (so duplicate x:Names stay distinct), it must not move when an
 // unrelated sibling type is inserted, and it must be wide enough that a 20,000-node census does not collide.
@@ -395,8 +395,8 @@ static void Test_ElementIdentityIsPathDependentAndStable()
 {
     std::printf("\n[selectors] the stable element identity behind a devtools slug\n");
 
-    // The control: an identity that hashes only the element's own type+name — which is what a naive
-    // "type-name-hash" slug does — cannot tell two DataTemplate rows apart at all.
+    // The control: an identity that hashes only the element's own type+name (which is what a naive
+    // "type-name-hash" slug does) cannot tell two DataTemplate rows apart at all.
     Check(IdentitySegment(L"Microsoft.UI.Xaml.Controls.Button", L"DeleteButton", 0) ==
           IdentitySegment(L"Microsoft.UI.Xaml.Controls.Button", L"DeleteButton", 0),
           "the same element's segment is deterministic");
@@ -434,7 +434,7 @@ static void Test_ElementIdentityIsPathDependentAndStable()
     Check(IdentityToken(0) == L"0000000000", "a zero identity still renders full width");
 
     // Width: 16 bits (the UI Automation slug's 4 hex digits) collides essentially always over a DevTools census.
-    // This asserts the property that matters — that the token carries at least 40 bits — rather than
+    // This asserts the property that matters (that the token carries at least 40 bits) rather than
     // re-deriving the birthday bound at runtime.
     Check(kIdentityHexDigits >= 10, "the identity is at least 40 bits wide for a 20,000-node census");
     Check(IdentityToken(0xFFFFFFFFFFULL) == L"ffffffffff" &&

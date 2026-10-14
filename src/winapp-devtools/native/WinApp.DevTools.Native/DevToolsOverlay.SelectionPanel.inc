@@ -103,7 +103,7 @@ static void DevToolsSelWireFocus(IInspectable* el, DevToolsUiEvent which, EventS
     DevToolsOverlayLog(L"overlay.sel wire-focus event=%s hr=0x%08X", DevToolsUiEventName(which), hr);
 }
 
-// Focus-within counter — the single signal that both gates collapse and (later) marks the field we must not
+// Focus-within counter: the single signal that both gates collapse and (later) marks the field we must not
 // re-render on a property echo. Logged so the loaded-XAML TextBox focus PROOF is reproducible from the log.
 static void OnSelGotFocus(void*, void*)
 {

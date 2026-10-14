@@ -173,7 +173,7 @@ static bool TapAnchorOf(InstanceHandle h, std::wstring* outAnchor, bool* unique 
 }
 
 // resolve an anchor from TapAnchorOf back to a live handle. 0 when it does not currently resolve, which
-// the caller must treat as "not back yet" rather than "gone forever" — the page may not have been rebuilt at
+// the caller must treat as "not back yet" rather than "gone forever"; the page may not have been rebuilt at
 // the moment we looked.
 static InstanceHandle TapResolveAnchor(const wchar_t* anchor)
 {

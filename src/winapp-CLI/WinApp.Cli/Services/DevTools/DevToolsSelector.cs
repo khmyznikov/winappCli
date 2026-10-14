@@ -126,7 +126,7 @@ internal static class DevToolsSelector
 
         // Re-scan the whole live tree when the narrowed search did not produce a match. Two ways it can miss:
         // the token cannot substring-match the element's type (above), or the search itself was node-capped.
-        // A near miss does NOT excuse skipping the rescan when the search was truncated — the element the
+        // A near miss does NOT excuse skipping the rescan when the search was truncated: the element the
         // selector actually names could be outside the cap, and reporting "stale" on the strength of a
         // similar element we did happen to see is a confident wrong answer about a live element.
         if (exact.Length == 0 && (nearMisses.Length == 0 || result.Truncated))
@@ -156,7 +156,7 @@ internal static class DevToolsSelector
         if (exact.Length > 1)
         {
             // Two live elements re-derived the SAME identity: a hash collision. Vanishingly unlikely at 40
-            // bits, and still never resolved by picking one — that is the whole reason the width was raised
+            // bits, and still never resolved by picking one. That is the whole reason the width was raised
             // above the UI Automation slug's 16.
             return Resolution.Fail(
                 $"'{selector}' matches {exact.Length} elements (their identities collide). Use one of their handles:",
@@ -173,7 +173,7 @@ internal static class DevToolsSelector
         }
 
         return Resolution.Fail(
-            $"No element matches the selector '{selector}'. Selectors are minted from the tree's shape — " +
+            $"No element matches the selector '{selector}'. Selectors are minted from the tree's shape, so " +
             "re-run `winapp devtools inspect` or `winapp devtools search` to get current ones.");
     }
 
@@ -227,7 +227,7 @@ internal static class DevToolsSelector
             .ToArray();
 
         // The search itself is node-capped. On a tree above that cap, "exactly one match" can mean "exactly
-        // one in the part we looked at" — and this is the path that decides which single element a later
+        // one in the part we looked at", and this is the path that decides which single element a later
         // set-property MUTATES. Resolve, but never silently: say the search was incomplete.
         var incomplete = found.Result.Truncated
             ? "The agent's node limit truncated the search, so another element could share this name. " +

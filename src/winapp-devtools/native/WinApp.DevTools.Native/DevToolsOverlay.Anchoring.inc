@@ -616,7 +616,7 @@ static void TrackingSync()
         ClearSelScroller();
         DevToolsOverlayLog(L"overlay.track stopped (nothing anchored)");
     }
-// arm the census-removal signal alongside the tick, because it exists to cover the case the tick cannot — a
+// arm the census-removal signal alongside the tick, because it exists to cover the case the tick cannot: a
 // removal while the app is busy, when WM_TIMER is starved.
     // Census-removal signals cover busy UI periods when WM_TIMER is starved; keep the sink armed and filter by
     // handle.

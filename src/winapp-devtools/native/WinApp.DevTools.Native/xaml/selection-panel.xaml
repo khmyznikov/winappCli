@@ -47,7 +47,7 @@
           </Grid.ColumnDefinitions>
           <FontIcon Grid.Column="0" FlowDirection="LeftToRight" Glyph="&#xE7BA;"
                     FontSize="11" VerticalAlignment="Top" Margin="0,2,7,0" Foreground="$CAUTION$" />
-          <TextBlock Grid.Column="1" Text="This element is gone from the app. Your comment has unsaved changes &#x2014; copy them somewhere safe before closing."
+          <TextBlock Grid.Column="1" Text="This element is gone from the app. Your comment has unsaved changes. Copy them somewhere safe before closing."
                      FontSize="11" TextWrapping="Wrap" Foreground="$CAUTION$" />
         </Grid>
       </Border>

@@ -487,7 +487,7 @@ public class DevToolsJsonParityTests
 
     /// <summary>
     /// a node-capped search that found one <c>x:Name</c> may simply not have looked at a duplicate, so a
-    /// WRITE through that name is refused outright. Warning-and-proceeding was not enough — <c>--json</c>
+    /// WRITE through that name is refused outright. Warning-and-proceeding was not enough: <c>--json</c>
     /// suppressed even the warning, and the write still landed.
     /// </summary>
     [TestMethod]
@@ -549,7 +549,7 @@ public class DevToolsJsonParityTests
 
     /// <summary>
     /// a truncated <c>x:Name</c> lookup resolved this root. Without the caveat, JSON hands back an
-    /// apparently unambiguous handle that a caller would then pass to <c>set-property</c> — routing straight
+    /// apparently unambiguous handle that a caller would then pass to <c>set-property</c>, routing straight
     /// around the name-based mutation refusal, which only fires when the NAME is what gets written through.
     /// </summary>
     [TestMethod]
@@ -596,8 +596,8 @@ public class DevToolsJsonParityTests
 
     /// <summary>
     /// filtering must not narrow the protocol payload. Rebuilding each row from the CLI's own record
-    /// dropped every wire field it does not model — <c>editKind</c>, <c>chain</c>, <c>children</c>,
-    /// <c>enumValues</c>, <c>valueState</c> — and <c>chain</c> is the strongest "why did this value win?"
+    /// dropped every wire field it does not model (<c>editKind</c>, <c>chain</c>, <c>children</c>,
+    /// <c>enumValues</c>, <c>valueState</c>), and <c>chain</c> is the strongest "why did this value win?"
     /// evidence the protocol carries.
     /// </summary>
     [TestMethod]
@@ -689,7 +689,7 @@ public class DevToolsJsonParityTests
 
     /// <summary>
     /// <c>authoredState</c> is a per-element fact the result contract requires. Dropping it turns "we
-    /// could not look" into "there is nothing authored here" — the confidently-wrong answer it exists to stop.
+    /// could not look" into "there is nothing authored here", the confidently-wrong answer it exists to stop.
     /// </summary>
     [TestMethod]
     public async Task GetProperty_Json_CarriesAuthoredState()
@@ -758,7 +758,7 @@ public class DevToolsJsonParityTests
             Assert.IsFalse(doc.RootElement.GetProperty("ok").GetBoolean(), $"{label}: expected ok:false.");
             Assert.IsTrue(doc.RootElement.TryGetProperty("error", out var error), $"{label}: no error member.");
             Assert.AreEqual(JsonValueKind.Object, error.ValueKind,
-                $"{label}: error must be an object, not a bare string — an agent branches on error.token.");
+                $"{label}: error must be an object, not a bare string; an agent branches on error.token.");
             Assert.AreEqual(JsonValueKind.Number, error.GetProperty("code").ValueKind, $"{label}: no code.");
             Assert.AreEqual(expectedToken, error.GetProperty("token").GetString(), $"{label}: wrong token.");
             Assert.IsFalse(string.IsNullOrWhiteSpace(error.GetProperty("message").GetString()), $"{label}: empty message.");

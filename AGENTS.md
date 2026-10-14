@@ -18,6 +18,9 @@ conversation.
   installed app)". Don't explain git, JSON, or what a CLI flag is.
 - **Use short sentences and everyday words.** Write "use", not "leverage". Name
   each thing one way and stick to it.
+- **No em dashes.** Use a comma, colon, parentheses, or a new sentence. This
+  covers code, UI text, and comments too; the PR check
+  (`scripts\check-em-dash.ps1`) fails on any line a PR adds with one.
 - **Don't talk down.** Never write "simply", "just", "obviously", "as you know",
   or "it's easy". Leave out filler, hedging, and praise ("robust",
   "comprehensive", "seamless").

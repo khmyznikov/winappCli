@@ -582,7 +582,7 @@ static void HighlightSnapTarget(int corner)
 
 // The pointer is tracked through a full-canvas catcher (see drag-catcher.xaml) rather than a pointer capture:
 // the overlay has no CapturePointer wrapper, and a catcher that covers the whole client area gives the same
-// guarantee — the pointer cannot leave it — using the primitive this file already trusts.
+// guarantee (the pointer cannot leave it) using the primitive this file already trusts.
 static IInspectable* g_dragCatcher = nullptr;
 static EventSink g_dragMoveSink, g_dragUpSink;
 static double g_dragOffX = 0.0, g_dragOffY = 0.0;

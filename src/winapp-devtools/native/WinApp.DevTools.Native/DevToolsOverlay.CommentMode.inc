@@ -228,7 +228,7 @@ static void UpsertPin(InstanceHandle key, const std::wstring& id, const std::wst
     if (g_anchorOf && key) g_anchorOf(key, &elAnchor);
     bool found = false;
     for (auto& p : g_pins) {
-// Match on the element first, then on the comment id — a pin seeded from the store may still be carrying the
+// Match on the element first, then on the comment id: a pin seeded from the store may still be carrying the
 // handle it resolved to, and editing that comment in the panel must update it in place rather than leave a
 // second marker on the same element.
         // Store-seeded pins may keep old handles; match by id too so edits update rather than duplicate.

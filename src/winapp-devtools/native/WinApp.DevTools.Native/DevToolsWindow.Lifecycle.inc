@@ -216,7 +216,7 @@ if (g_route1WindowHidden) {
     DevToolsOverlayLog(L"route1.step2b propsHostChildren=%p", g_ctx.propsHostChildren);
 
     // 2b-ii. Comments view: cache the second list's host + the two ScrollViewers the toggle swaps, and
-    // the filter box (it filters the TREE, so it goes away with it). Every one is optional — an older
+    // the filter box (it filters the TREE, so it goes away with it). Every one is optional: an older
     // shell without these names simply has no comments view rather than failing the open.
     {
         void* feC = nullptr;

@@ -12,7 +12,7 @@ namespace WinApp.Cli.Tests;
 
 /// <summary>
 /// Tests for <c>comments list</c>, driven through the real command handler and the real
-/// <see cref="CommentAnchorResolver"/> against real XAML on disk — a stub resolver could not reproduce either
+/// <see cref="CommentAnchorResolver"/> against real XAML on disk. A stub resolver could not reproduce either
 /// defect, since both are about what the search returns.
 /// </summary>
 [TestClass]
@@ -25,7 +25,7 @@ public class DevToolsCommentsListCommandTests
 
     private string PageFile => Path.Combine(Project, "HomePage.xaml");
 
-    /// <summary>Six nested <c>Grid</c>s — the shape that produced "6 candidates" for one picked element.</summary>
+    /// <summary>Six nested <c>Grid</c>s: the shape that produced "6 candidates" for one picked element.</summary>
     private const string SixGridPage = """
 <Page xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" x:Class="Gallery.HomePage">
     <Grid>
@@ -58,7 +58,7 @@ public class DevToolsCommentsListCommandTests
 
     private string StorePath => Path.Combine(Project, ".winapp", "ui-comments.json");
 
-    /// <summary>Line 6 is the fourth <c>&lt;Grid&gt;</c> — one of six identical type-only matches.</summary>
+    /// <summary>Line 6 is the fourth <c>&lt;Grid&gt;</c>, one of six identical type-only matches.</summary>
     private const int CapturedGridLine = 6;
 
     private Comment Seed(string id, string status = CommentStatus.Open, int? line = CapturedGridLine, string? file = "HomePage.xaml", bool authored = true)
@@ -259,7 +259,7 @@ public class DevToolsCommentsListCommandTests
         StringAssert.Contains(output, "No comment store found");
         StringAssert.Contains(Flatten(output), Flatten(StorePath));
         Assert.IsFalse(output.Contains("No comments.", StringComparison.Ordinal),
-            "\"No comments.\" is indistinguishable from \"your store is one directory up\" — that ambiguity is the bug");
+            "\"No comments.\" is indistinguishable from \"your store is one directory up\"; that ambiguity is the bug");
     }
 
     [TestMethod]
@@ -301,7 +301,7 @@ public class DevToolsCommentsListCommandTests
 
     /// <summary>
     /// Found by running it from the repo root: the store moved there, so re-anchoring under the CURRENT
-    /// directory scanned every same-named .xaml in the repo and turned one element into ten candidates —
+    /// directory scanned every same-named .xaml in the repo and turned one element into ten candidates,
     /// and the answer differed depending on which directory you listed from. The comment's own project root
     /// is what keeps the search where the element lives.
     /// </summary>

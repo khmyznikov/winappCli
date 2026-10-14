@@ -237,7 +237,7 @@ static std::wstring BuildCommentRowMarkup(size_t idx, const DevToolsWindowCommen
             m += L"<HyperlinkButton x:Name=\"E" + i + L"\" Content=\"Reveal\" Padding=\"6,0\" FontSize=\"11\""
                  L" AutomationProperties.Name=\"Reveal in File Explorer: " + subject + L"\""
                  L" AutomationProperties.AutomationId=\"CommentReveal" + i + L"\""
-                 L" ToolTipService.ToolTip=\"Nothing on this machine opens .xaml files &#x2014; show it in File Explorer instead\"/>";
+                 L" ToolTipService.ToolTip=\"Nothing on this machine opens .xaml files. Show it in File Explorer instead\"/>";
             m += L"<HyperlinkButton x:Name=\"C" + i + L"\" Content=\"Copy path\" Padding=\"6,0\" FontSize=\"11\""
                  L" AutomationProperties.AutomationId=\"CommentCopyPath" + i + L"\""
                  L" AutomationProperties.Name=\"Copy path for: " + subject + L"\""

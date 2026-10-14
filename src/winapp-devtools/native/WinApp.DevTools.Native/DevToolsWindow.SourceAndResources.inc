@@ -183,7 +183,7 @@ static const std::vector<std::pair<std::wstring, std::wstring>>& ColorPresets()
 }
 
 // to a curated brush name, and assign it live via the in-process resolve bridge (IVisualTreeService3::ResolveResource).
-// This is an ASSIGN, not a rebind — it switches the property TO a named resource; the prior value's resource identity
+// This is an ASSIGN, not a rebind: it switches the property TO a named resource; the prior value's resource identity
 // is unrecoverable, so the picker never claims to show "where the value came from". No initial seed / placeholder-only
 // (SelectedIndex starts -1 => no spurious apply on realize). Same non-owning-selector + gen-guard lifetime contract as
 // EnumSelectSink: the ComboBox element is tracked in g_editRows so the selector stays live until the next rebuild.

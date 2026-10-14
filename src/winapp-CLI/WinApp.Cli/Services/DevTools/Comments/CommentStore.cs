@@ -74,7 +74,7 @@ internal sealed class CommentStore : ICommentStore
             // would overwrite (and permanently discard) recoverable content. Read verbs surface the error and
             // exit non-zero; the mutating path (WithExclusiveStore) refuses to write and preserves the file.
             throw new CommentStoreCorruptException(
-                $"UI comments store is corrupt (invalid JSON): {storePath}. It was left unchanged — fix or delete the file to continue.",
+                $"UI comments store is corrupt (invalid JSON): {storePath}. It was left unchanged. Fix or delete the file to continue.",
                 ex);
         }
     }
@@ -282,7 +282,7 @@ internal sealed class CommentStore : ICommentStore
                 ? ex
                 : new CommentStoreCorruptException(
                     $"UI comments store is corrupt (invalid JSON): {storePath}. It was left unchanged and copied to " +
-                    $"{Path.GetFileName(backup)} — fix or delete the store to continue.",
+                    $"{Path.GetFileName(backup)}. Fix or delete the store to continue.",
                     ex.InnerException);
         }
         finally
@@ -417,8 +417,8 @@ internal static class CommentTimestamps
 }
 
 /// <summary>
-/// Thrown when the on-disk UI-comments store exists but is not valid JSON. Signals callers to fail closed —
-/// surface the error and exit non-zero, and never overwrite the corrupt file — so recoverable content is not
+/// Thrown when the on-disk UI-comments store exists but is not valid JSON. Signals callers to fail closed
+/// (surface the error and exit non-zero, and never overwrite the corrupt file) so recoverable content is not
 /// silently discarded.
 /// </summary>
 internal sealed class CommentStoreCorruptException(string message, Exception? innerException = null)

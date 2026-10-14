@@ -347,7 +347,7 @@ internal static class BindingDiagnosis
         }
         else
         {
-            // No live expression to capture. An {x:Bind} row still has a restore route — Bindings.Update()
+            // No live expression to capture. An {x:Bind} row still has a restore route: Bindings.Update()
             Captured.Remove(element, prop);
             CompiledOwner? owner;
             try { owner = ParseXBindPath(authored) is not null ? XBindOwner(element) : null; }

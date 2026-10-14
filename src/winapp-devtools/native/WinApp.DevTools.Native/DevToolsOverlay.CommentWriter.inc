@@ -14,7 +14,7 @@ static void SetCommentTarget(InstanceHandle raw)
     g_selHandle = raw;
     g_selCommentWire = raw && g_wireOf ? g_wireOf(raw) : 0;
 }
-// The registry is what the CLI last pushed (DevToolsOverlay_SetComments, from `.winapp/ui-comments.json` — the
+// The registry is what the CLI last pushed (DevToolsOverlay_SetComments, from `.winapp/ui-comments.json`; the
 // CLI is that file's single writer; the overlay parses no JSON and reads no file) PLUS anything composed this
 // session, which the CLI persists on the way through. Entries persist across comment-mode toggles (id/tex.
 struct PinClickSink;

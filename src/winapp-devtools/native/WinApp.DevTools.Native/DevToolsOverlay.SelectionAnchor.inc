@@ -347,7 +347,7 @@ static void ShowSelectionAnchor(IInspectable* el, bool fromUserPick)
     g_selComment = DevToolsSelFindName(insp, L"DevToolsSelComment");
 // The Close button doubles as the panel's focus parking spot: moving focus onto it is how a keyboard gesture
 // COMMITS the field it leaves (the field's already-wired LostFocus does the write), which is why the keyboard
-// helpers below still talk about "the icon" — this is what took its place.
+// helpers below still talk about "the icon": this is what took its place.
     g_selIcon    = DevToolsSelFindName(insp, L"DevToolsSelClose");
     g_selExpanded = (g_selPanel != nullptr);
     g_selDetached = false;
@@ -505,7 +505,7 @@ void DevToolsOverlay_ShowBadgeForHandle(IXamlDiagnostics* diag, InstanceHandle t
         g_lastPickBoundsDip = bounds;
         if (g_selectedHandle == target) g_selectedBounds = bounds;
         g_selPendingHandle = target;
-// It is a parameter, not stored state — every caller below computes it at its own call site, where how the
+// It is a parameter, not stored state. Every caller below computes it at its own call site, where how the
 // selection was made is unambiguous, and it is consumed immediately.
         ShowSelectionAnchor(el, fromUserPick);
         el->Release();

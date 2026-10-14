@@ -6,7 +6,7 @@ using System.Text.Json;
 namespace WinApp.Cli.Services.DevTools;
 
 /// <summary>
-/// One row of <c>Property.get</c>: the property's live value, and the part a UI-Automation read cannot answer —
+/// One row of <c>Property.get</c>: the property's live value, and the part a UI-Automation read cannot answer:
 /// WHERE that effective value came from, and whether a binding or a resource produced it.
 /// </summary>
 /// <param name="Name">The dependency property name.</param>
@@ -40,7 +40,7 @@ internal sealed record DevToolsPropertyRow(
     /// Derived from <see cref="AuthoredKind"/> FIRST, and from <see cref="ValueSource"/> only when nothing was
     /// authored on this element. The two fields answer different questions and both answer truthfully: the
     /// runtime resolves a <c>{ThemeResource}</c> to a plain local value, so <c>valueSource</c> genuinely says
-    /// <c>Local</c> — and a label built from it alone prints "Local" for a brush the developer wrote as
+    /// <c>Local</c>, and a label built from it alone prints "Local" for a brush the developer wrote as
     /// <c>{ThemeResource TextFillColorSecondaryBrush}</c>, which is the one thing this command exists to tell
     /// them. This mirrors <c>OriginLabel</c> in <c>DevToolsWindow.cpp</c>, which resolved the same bug for the
     /// in-app pane; the two surfaces must not disagree about the same wire fields.

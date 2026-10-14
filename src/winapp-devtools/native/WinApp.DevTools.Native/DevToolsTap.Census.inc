@@ -337,7 +337,7 @@ struct RemovedHandler : DevToolsSinkBase
         WINAPP_DEVTOOLS_PERF(DevToolsPerfSite::TapRemovedTurn);
         // Clear the latch BEFORE draining: a Remove that lands while we are draining must be able to
         // enqueue a fresh turn, or it would sit in g_removedPending until some later burst happened to
-        // flush it — which is the same "arrives eventually, or never" failure this replaces.
+        // flush it, which is the same "arrives eventually, or never" failure this replaces.
         g_removedEnqueued.store(false, std::memory_order_release);
         std::vector<InstanceHandle> batch;
         AcquireSRWLockExclusive(&g_removedLock);
@@ -482,7 +482,7 @@ struct TreeCb : IVisualTreeServiceCallback2
         // consumers see a finished census and can build UI without re-entering the framework mid-mutation.
         DevToolsTreeWatch_NoteMutation();
         // Both struct parameters are [in] per xamlom.h, so the framework owns and frees their BSTRs
-        // (Type/Name/SourceInfo). We must NOT SysFreeString them here — that would be a double free.
+        // (Type/Name/SourceInfo). We must NOT SysFreeString them here: that would be a double free.
         if (t == Add) {
             // This catches the async, post-Activate Adds the seed/overlay-scope self-exclusion misses
             // (XamlDiagnostics re-issues different InstanceHandles for the same objects across phases, so
@@ -522,7 +522,7 @@ struct TreeCb : IVisualTreeServiceCallback2
                 // Mint the generation-stamped slot under the census lock, after overlay self-exclusion.
                 MintSlot_nolock(e.Handle);
                 // Remember the outermost Panel (first StackPanel/Grid/Canvas in tree order) as the overlay
-                // insertion target — a real app panel we can append to without reparenting Window.Content.
+                // insertion target: a real app panel we can append to without reparenting Window.Content.
                 if (!g_firstPanel) {
                     std::wstring ty = e.Type;
                     if (ty.find(L"StackPanel") != std::wstring::npos ||

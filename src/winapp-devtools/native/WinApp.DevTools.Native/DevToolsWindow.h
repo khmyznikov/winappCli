@@ -110,7 +110,7 @@ struct DevToolsWindowComment
 using DevToolsWindowCommentsFn = std::function<bool(std::vector<DevToolsWindowComment>* /*out*/)>;
 
 // Resolve a comment's live anchor to a WIRE handle for selection, or 0 when its element isn't realized right
-// now — which is a normal answer (another page, a virtualized item), not a failure.
+// now, which is a normal answer (another page, a virtualized item), not a failure.
 using DevToolsWindowAnchorWireFn = std::function<InstanceHandle(const wchar_t* /*anchor*/)>;
 
 using DevToolsWindowCommentResolveFn = std::function<bool(const wchar_t* /*id*/, std::function<void(int)> /*completed*/)>;

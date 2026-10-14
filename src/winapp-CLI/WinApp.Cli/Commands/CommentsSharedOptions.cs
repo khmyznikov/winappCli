@@ -73,7 +73,7 @@ internal static class CommentsSharedOptions
            + "Comments are stored at the repository root; pass --source-root <dir> if the app's source lives outside this git working tree.";
 
     /// <summary>
-    /// The message for an id lookup that found nothing — which is "no store here" or "not in this store", never
+    /// The message for an id lookup that found nothing: "no store here" or "not in this store", never
     /// the ambiguous middle. Both name the file, so the user can see which store was consulted.
     /// </summary>
     public static string NotFoundMessage(string id, CommentStoreLocation location)

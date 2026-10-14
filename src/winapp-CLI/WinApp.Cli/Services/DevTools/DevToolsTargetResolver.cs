@@ -11,7 +11,7 @@ internal interface IDevToolsTargetResolver
 {
     /// <summary>
     /// Resolves a target from the shared <c>-a/--app</c> and <c>-w/--window</c> options, attaching the agent
-    /// only when explicitly authorized. Never throws for an ordinary targeting failure — the reason is returned so the caller can
+    /// only when explicitly authorized. Never throws for an ordinary targeting failure; the reason is returned so the caller can
     /// render it in its own human/JSON shape.
     /// </summary>
     /// <param name="attachIfNeeded">
@@ -163,7 +163,7 @@ internal sealed class DevToolsTargetResolver(
         }
 
         // An explicitly authorized target is attached now. Request mutation,
-        // because a posture is fixed for the process lifetime by the FIRST injection — attaching read-only here
+        // because a posture is fixed for the process lifetime by the FIRST injection, and attaching read-only here
         // would silently make `set-property` impossible until the app restarts.
         var connection = await devToolsService.ConnectAsync(
             unchecked((uint)pid),

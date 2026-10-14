@@ -8,7 +8,7 @@ namespace WinApp.Cli.Tests;
 /// <summary>
 /// Pins the discovery and handshake contract: parsing a <c>winapp-devtools-&lt;pid&gt;</c> pipe leaf to its target
 /// pid, enumerating injected apps from an injectable pipe lister (dedup + sort + junk-rejection), and parsing
-/// the <c>hello</c> capability reply defensively. All pure — no running app or real pipe needed.
+/// the <c>hello</c> capability reply defensively. All pure: no running app or real pipe needed.
 /// </summary>
 [TestClass]
 public class DevToolsPipeDiscoveryTests

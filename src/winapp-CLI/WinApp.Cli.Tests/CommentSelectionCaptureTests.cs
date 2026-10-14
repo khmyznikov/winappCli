@@ -460,7 +460,7 @@ public class CommentSelectionCaptureTests
 
     // the identity bundle is read out of the census, and the census of a real app nests far past
     // System.Text.Json's default 64-level ceiling (AI Dev Gallery: 97). A deserializer left at the default
-    // silently yields NO nodes, so every captured anchor gets an empty type/name — which then reads downstream
+    // silently yields NO nodes, so every captured anchor gets an empty type/name, which then reads downstream
     // as "the element was renamed or removed" for elements that are on screen.
     [TestMethod]
     public void FindNode_DeeplyNestedCensus_PastDefaultJsonDepth_StillResolves()
@@ -471,7 +471,7 @@ public class CommentSelectionCaptureTests
             deep = $"[{{\"handle\":\"{index}\",\"name\":\"Parent\",\"type\":\"Grid\",\"children\":{deep}}}]";
         }
         var node = CommentSelectionCapture.FindNode(deep, "119");
-        Assert.IsNotNull(node, "A census deeper than 64 JSON levels must still be walkable — otherwise identity capture is silently empty.");
+        Assert.IsNotNull(node, "A census deeper than 64 JSON levels must still be walkable, otherwise identity capture is silently empty.");
         Assert.AreEqual("Leaf", node.Name);
         Assert.AreEqual("Grid", node.Type);
     }

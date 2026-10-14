@@ -146,7 +146,7 @@ internal class DevToolsCommentsListCommand : Command, IShortDescription, IHelpEx
                     var candidates = CommentViewBuilder.AmbiguousCandidates(c);
                     if (candidates.Count > 1)
                     {
-                        DevToolsRender.WriteMarkupLine(ansiConsole, $"   [yellow]⚠ {Markup.Escape(CommentViewBuilder.CandidatesReason(c))} — {candidates.Count} candidates:[/] [grey]{Markup.Escape(string.Join(", ", candidates))}[/]");
+                        DevToolsRender.WriteMarkupLine(ansiConsole, $"   [yellow]⚠ {Markup.Escape(CommentViewBuilder.CandidatesReason(c))} ({candidates.Count} candidates):[/] [grey]{Markup.Escape(string.Join(", ", candidates))}[/]");
                     }
                     else if (CommentViewBuilder.AnchorHealthWarning(c) is string warning)
                     {

@@ -281,8 +281,8 @@ static void ClearAdorner(){
 }
 
 // Draw (or replace) the pick-highlight adorner in the overlay Canvas at the given DIP rect. The adorner is a
-// stroke-only, hit-test-transparent Border, so it never intercepts the next pick and — being a child of the
-// overlay Canvas (whose handle is in the exclusion set) — is self-excluded from the element-count oracle (bel.
+// stroke-only, hit-test-transparent Border, so it never intercepts the next pick and, as a child of the
+// overlay Canvas (whose handle is in the exclusion set), is self-excluded from the element-count oracle (bel.
 static HRESULT DrawAdorner(IXamlDiagnostics* diag, int x, int y, int w, int h, DevToolsSeedFn seed)
 {
     WINAPP_DEVTOOLS_PERF(DevToolsPerfSite::OverlayAdorner);

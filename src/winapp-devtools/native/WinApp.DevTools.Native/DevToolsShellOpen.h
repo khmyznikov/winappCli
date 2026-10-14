@@ -52,7 +52,7 @@ inline std::wstring Describe(const Result& r,
                              const std::wstring& resolvedPath,
                              const std::wstring& offScreenPrefix)
 {
-    const std::wstring lead = offScreenPrefix.empty() ? std::wstring() : offScreenPrefix + L" \u2014 ";
+    const std::wstring lead = offScreenPrefix.empty() ? std::wstring() : offScreenPrefix + L": ";
     switch (r.outcome) {
     case Outcome::NoPath:
         return display.empty()

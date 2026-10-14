@@ -33,7 +33,7 @@ static void FlattenCensusNode(const CensusSnapshot& cs, InstanceHandle h, int de
     }
 }
 
-// What must not happen is SILENT truncation: a header printing the truncated `nodes.size()` as "VISUAL TREE — N
+// What must not happen is SILENT truncation: a header printing the truncated `nodes.size()` as "VISUAL TREE · N
 // NODES" states a partial count as if it were the whole tree.
 static std::vector<DevToolsWindowNode> SnapshotFlatCensus(size_t* outTotal, CensusSnapshot* outSnapshot = nullptr)
 {
@@ -289,7 +289,7 @@ static std::wstring TapQuoteArg(const std::wstring& in)
 
 // That is the ONLY form the DevTools window may use: it calls on the app UI thread, and blocking there for a CLI
 // process would freeze the app being inspected. A protocol verb runs on its own per-connection pipe thread, so it
-// waits and reports what the child actually did — "CreateProcess succeeded" is not evidence the comment was written.
+// waits and reports what the child actually did: "CreateProcess succeeded" is not evidence the comment was written.
 static int TapRunCli(const std::wstring& args, DWORD waitMs, const std::wstring& revision = L"")
 {
     if (!DevToolsTrust_MutationEnabled()) return -4;
@@ -348,7 +348,7 @@ static std::wstring TapMintCommentId()
 {
     GUID g{};
     if (FAILED(CoCreateGuid(&g))) {
-        // Not a security token — just an id. A clock+counter fallback keeps this from ever returning "cmt_".
+        // Not a security token, just an id. A clock+counter fallback keeps this from ever returning "cmt_".
         static std::atomic<unsigned long long> s_seq{0};
         wchar_t buf[32]{};
         swprintf_s(buf, L"cmt_%08llx%04llx", (unsigned long long)GetTickCount64() & 0xFFFFFFFFull,
@@ -609,7 +609,7 @@ static bool PublishOverlayPick(InstanceHandle h, bool releaseCommit) {
     // slot) is the window's "no selection" sentinel, matching the Selection.picked broadcast below.
     const bool claimedByWindow = DevToolsWindow_IsOpen() && DevToolsWindow_OnPicked(wire, releaseCommit);
 
-    // This runs on the UI thread, so it must only ENQUEUE — DevToolsEvents_Broadcast does exactly that (a slow
+    // This runs on the UI thread, so it must only ENQUEUE. DevToolsEvents_Broadcast does exactly that (a slow
     // client's writer thread does the blocking I/O).
     std::wstring params = L"{\"generation\":" + std::to_wstring(gen) +
                           L",\"handle\":\"" + std::to_wstring(wire) + L"\"}";

@@ -14,7 +14,7 @@ using WinApp.Cli.Services.DevTools;
 namespace WinApp.Cli.Commands;
 
 /// <summary>
-/// <c>winapp devtools list</c> — discover already-injected DevTools apps and, when requested, running WinUI
+/// <c>winapp devtools list</c>: discover already-injected DevTools apps and, when requested, running WinUI
 /// candidates that can be attached by exact PID. Attached apps are probed through DevTools; available candidates
 /// are identified centrally by the loaded WinUI runtime module so external clients never scan processes.
 /// </summary>

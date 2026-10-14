@@ -115,7 +115,7 @@ DevToolsPathWalkView DevToolsPathWalk_FromJson(const std::wstring& json, bool ag
     if (againstKind == L"xbind") {
         v.againstName = against.empty() ? std::wstring(L"the page") : against;
         v.againstNote = L"resolved against " + v.againstName +
-                        L" \u2014 an {x:Bind} binds to the page, not the DataContext";
+                        L" (an {x:Bind} binds to the page, not the DataContext)";
     } else if (againstKind == L"binding") {
         v.againstName = against.empty() ? std::wstring(L"the DataContext") : against;
         v.againstNote = L"resolved against the DataContext";
@@ -235,7 +235,7 @@ DevToolsPathWalkView DevToolsPathWalk_FromJson(const std::wstring& json, bool ag
         case DevToolsWalkOutcome::Missing: {
             v.answer = L"no " + failing + L" on " + lookedOn;
             const std::wstring suggestion = j.GetString(L"suggestion");
-            if (!suggestion.empty()) v.answer += L" \u2014 did you mean " + suggestion + L"?";
+            if (!suggestion.empty()) v.answer += L". Did you mean " + suggestion + L"?";
             break;
         }
 
@@ -247,11 +247,11 @@ DevToolsPathWalkView DevToolsPathWalk_FromJson(const std::wstring& json, bool ag
                 if (!ex.empty()) {
                     v.namesException = true;
                     v.answer = L"its getter threw " + ex;
-                    if (!msg.empty()) v.answer += L" \u2014 \"" + msg + L"\"";
+                    if (!msg.empty()) v.answer += L": \"" + msg + L"\"";
                     break;
                 }
             }
-            v.answer = L"its getter threw. DevTools cannot see which exception \u2014 "
+            v.answer = L"its getter threw. DevTools cannot see which exception: "
                        L"the type and message are lost crossing the ABI.";
             v.revealException = true;
             break;

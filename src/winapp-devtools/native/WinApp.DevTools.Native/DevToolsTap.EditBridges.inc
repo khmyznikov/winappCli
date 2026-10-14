@@ -40,7 +40,7 @@ static DWORD WINAPI PipeServer(LPVOID)
     if (!sd) {
         // Fail closed: never expose the command pipe with the default DACL (which would grant read
         // access broadly). If the current user's SID/integrity level can't be resolved to lock the pipe
-        // down, don't serve at all — the CLI simply reports the DevTools agent as unavailable.
+        // down, don't serve at all. The CLI simply reports the DevTools agent as unavailable.
         Log(L"pipe server: could not build owner-only security descriptor; refusing to create pipe");
         return 0;
     }
@@ -769,7 +769,7 @@ static bool Route1Layout(InstanceHandle wire, DevToolsWindowLayout& out)
     return out.haveDesired || out.haveRender || out.haveOffset;
 }
 
-// The overlay works in RAW diagnostics handles (straight from HitTest), so this is a direct ReadElementSourceInfo —
+// The overlay works in RAW diagnostics handles (straight from HitTest), so this is a direct ReadElementSourceInfo,
 // no wire resolution (unlike Route1Source, which the window calls with wire tokens). UI thread only (the overlay's
 // pick and comment flyout both run there).
 static bool OverlaySourceBridge(InstanceHandle raw, std::wstring* outFile, unsigned int* outLine, unsigned int* outCol)

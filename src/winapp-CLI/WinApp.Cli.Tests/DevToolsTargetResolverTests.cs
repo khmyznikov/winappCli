@@ -271,7 +271,7 @@ public class DevToolsTargetResolverTests
 
         public bool ShowOverlay { get; private set; }
 
-        /// <summary>Whether injection was reached at all — the assertion that "nothing was loaded" needs.</summary>
+        /// <summary>Whether injection was reached at all: the assertion that "nothing was loaded" needs.</summary>
         public bool WasCalled { get; private set; }
 
         public Task<DevToolsConnection> ConnectAsync(

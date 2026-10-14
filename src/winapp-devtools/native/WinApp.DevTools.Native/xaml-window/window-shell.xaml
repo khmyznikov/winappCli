@@ -5,7 +5,7 @@
      is embedded verbatim by gen-xaml-resources.ps1 into DevToolsWindowXaml.g.h (DevToolsXaml::WindowShell) at build time.
 
      ENCODING: the shared `cl` line has no /utf-8, so this file is ASCII-only. Non-ASCII glyphs are written as
-     XAML numeric character references (e.g. &#x2014; em dash, &#x00B7; middle dot); XamlReader decodes them at
+     XAML numeric character references (e.g. &#x00B7; middle dot); XamlReader decodes them at
      parse time. Do NOT put raw non-ASCII bytes here.
 
      TOKENS (substituted by BuildWindowMarkup before the document is parsed):
@@ -153,7 +153,7 @@
                    HorizontalAlignment="Center" VerticalAlignment="Bottom" Visibility="Collapsed"/>
           </Grid>
         </Button>
-        <TextBox x:Name="TreeFilter" Grid.Column="2" PlaceholderText="Filter tree &#x2014; type or #name" AutomationProperties.Name="TreeFilter"/>
+        <TextBox x:Name="TreeFilter" Grid.Column="2" PlaceholderText="Filter tree: type or #name" AutomationProperties.Name="TreeFilter"/>
         <!-- The wrapper owns the tooltip so the unavailable reason remains discoverable even while the
              ToggleButton itself is disabled. JmxLbl is the single live text source: it is collapsed, so it is
              absent from the UIA tree by construction, and the toggle's AutomationProperties.Name is what
@@ -418,7 +418,7 @@
                                  Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                       <Button x:Name="PXInfo" Grid.Column="1" Width="22" Height="22" MinWidth="0" MinHeight="0" Padding="0"
                               VerticalAlignment="Top"
-                              ToolTipService.ToolTip="An {x:Bind} is compiled into generated code when the app is built, and the runtime exposes no way to create or change one.&#x0A;&#x0A;Choosing {Binding} installs a runtime binding with SetBinding &#x2014; on the running app only. Your .xaml is not changed, and the compiled binding cannot be restored without restarting.">
+                              ToolTipService.ToolTip="An {x:Bind} is compiled into generated code when the app is built, and the runtime exposes no way to create or change one.&#x0A;&#x0A;Choosing {Binding} installs a runtime binding with SetBinding, on the running app only. Your .xaml is not changed, and the compiled binding cannot be restored without restarting.">
                         <FontIcon Glyph="&#xE946;" FontSize="12" AutomationProperties.AccessibilityView="Raw"/>
                       </Button>
                     </Grid>

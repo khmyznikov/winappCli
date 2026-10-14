@@ -296,7 +296,7 @@ public class CommentPusherTests
     [TestMethod]
     public void ToTapComments_KeepsUnanchoredComments()
     {
-        // A comment with no live anchor still counts — it simply has no marker until its element exists. The
+        // A comment with no live anchor still counts. It simply has no marker until its element exists. The
         // count and the markers are allowed to differ; what is not allowed is dropping the comment silently.
         var doc = new CommentStoreDocument
         {

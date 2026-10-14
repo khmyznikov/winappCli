@@ -46,7 +46,7 @@
 
 // Overlay UI markup lives as reviewable.xaml under native/WinApp.DevTools.Native/xaml/*.xaml and is embedded as
 // DevToolsXaml::* wide-string literals by this generated header (produced by gen-xaml-resources.ps1, run from
-// build-devtools.ps1). The header is build output (.gitignored) — edit the.xaml, not the header.
+// build-devtools.ps1). The header is build output (.gitignored); edit the .xaml, not the header.
 #include "DevToolsOverlayXaml.g.h"
 
 // PW_RENDERFULLCONTENT (WinUI3/DirectComposition-aware PrintWindow capture) may be absent from older SDK

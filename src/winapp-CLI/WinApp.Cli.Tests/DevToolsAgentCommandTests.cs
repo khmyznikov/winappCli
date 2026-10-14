@@ -204,7 +204,7 @@ public class DevToolsAgentCommandTests : BaseCommandTests
     /// <summary>
     /// The app's own XAML is the DEFAULT view, not an opt-in. A WinUI control template inserts 12-14 levels
     /// between the window and an ordinary Button, so a raw default listing showed framework plumbing at every
-    /// depth a person would actually type. <c>--all</c> is the single opt-out — there is no longer a positive
+    /// depth a person would actually type. <c>--all</c> is the single opt-out. There is no longer a positive
     /// <c>--app-authored</c> flag, and it is asserted GONE rather than merely unused, because an option left
     /// registered as a no-op is the worst of both: it reads as supported and changes nothing.
     /// </summary>
@@ -369,8 +369,8 @@ public class DevToolsAgentCommandTests : BaseCommandTests
 
     /// <summary>
     /// <c>name=value</c> is always a string, so a value that LOOKS like a boolean or a number is still
-    /// sendable as text. Value-based typing made <c>call VisualTree.find query=true</c> — a legitimate search
-    /// for the literal text "true" — impossible to express, because the native dispatch requires a JSON string
+    /// sendable as text. Value-based typing made <c>call VisualTree.find query=true</c> (a legitimate search
+    /// for the literal text "true") impossible to express, because the native dispatch requires a JSON string
     /// and no shell quoting survives argument parsing.
     /// </summary>
     [TestMethod]
@@ -410,7 +410,7 @@ public class DevToolsAgentCommandTests : BaseCommandTests
     /// <summary>
     /// A malformed <c>:=</c> value is rejected at parse time with the token named. Letting
     /// it through made <c>Utf8JsonWriter</c> throw while the request was still being built, which escaped the
-    /// command — so a <c>--json</c> caller got a bare stack-trace message and no payload at all.
+    /// command, so a <c>--json</c> caller got a bare stack-trace message and no payload at all.
     /// </summary>
     [TestMethod]
     public void CallParams_RejectsMalformedRawJsonBeforeItReachesTheWriter()
@@ -434,7 +434,7 @@ public class DevToolsAgentCommandTests : BaseCommandTests
     }
 
     /// <summary>
-    /// Every classified value must actually be writable as the kind it claims — asserted against the writer
+    /// Every classified value must actually be writable as the kind it claims, asserted against the writer
     /// rather than against the classifier's own opinion, because the failure mode was the writer throwing.
     /// </summary>
     [TestMethod]
@@ -466,7 +466,7 @@ public class DevToolsAgentCommandTests : BaseCommandTests
     /// <summary>
     /// the runtime resolves a <c>{ThemeResource}</c> to a plain local value, so <c>valueSource</c> really
     /// does say <c>Local</c>. A label built from it alone printed "Local" for a brush the developer wrote as
-    /// <c>{ThemeResource TextFillColorSecondaryBrush}</c> — the one thing this command exists to tell them.
+    /// <c>{ThemeResource TextFillColorSecondaryBrush}</c>, the one thing this command exists to tell them.
     /// Provenance comes from <c>authoredKind</c> first, matching <c>OriginLabel</c> in <c>DevToolsWindow.cpp</c>.
     /// </summary>
     [TestMethod]
@@ -549,7 +549,7 @@ public class DevToolsAgentCommandTests : BaseCommandTests
             "devtools inspect");
         StringAssert.Contains(
             DevToolsErrors.Describe(new DevToolsProtocolError(-32005, "refused-unsafe", "refused: posture")),
-            "restart",
+            "Restart the app",
             "A refused write must explain that posture is fixed at injection, not just that it was refused.");
         StringAssert.Contains(
             DevToolsErrors.Describe(DevToolsProtocolError.NoResponse()),

@@ -419,10 +419,10 @@ static void Test_NoSuggestionIsInventedWithoutOne()
     // near-miss to be near. A suggestion this renderer produced itself would be a guess wearing an answer's
     // clothes.
     DevToolsPathWalkView bare = DevToolsPathWalk_FromJson(kMissing, false);
-    Check(!Has(bare.answer, L"did you mean"), "no suggestion is invented");
+    Check(!Has(bare.answer, L"Did you mean"), "no suggestion is invented");
 
     DevToolsPathWalkView sug = DevToolsPathWalk_FromJson(kMissingWithSuggestion, false);
-    Check(Has(sug.answer, L"did you mean Title?"), "a supplied suggestion is rendered");
+    Check(Has(sug.answer, L". Did you mean Title?"), "a supplied suggestion is rendered");
     Check(Has(sug.answer, L"no Titel on"), "alongside the fact it is explaining");
 }
 

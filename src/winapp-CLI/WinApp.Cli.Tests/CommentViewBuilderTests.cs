@@ -118,7 +118,7 @@ public class CommentViewBuilderTests
 
     // an anchor whose identity bundle is empty cannot be re-anchored NO MATTER WHAT THE SOURCE LOOKS
     // LIKE, so reporting it as "the element may be renamed or removed" asserts a cause that was never
-    // established — while the element is on screen in front of the user. The two states must not share a
+    // established, while the element is on screen in front of the user. The two states must not share a
     // message.
     [TestMethod]
     public void AnchorHealth_EmptyIdentity_ReportsUnanchorable_NotRenamedOrRemoved()
@@ -151,7 +151,7 @@ public class CommentViewBuilderTests
     [TestMethod]
     public void AnchorHealth_TypeOnlyWithSourceFile_IsMaybeStale()
     {
-        // Type + source file is the resolver's last-resort cascade step, so it CAN produce a hit — zero hits
+        // Type + source file is the resolver's last-resort cascade step, so it CAN produce a hit, so zero hits
         // here really is a claim about the source, not about the anchor.
         var c = View("cmt_type", "MainWindow.xaml", "Grid", null, "pad it");
 

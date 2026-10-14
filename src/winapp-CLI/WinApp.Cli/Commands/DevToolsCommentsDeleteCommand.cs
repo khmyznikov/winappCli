@@ -15,12 +15,12 @@ using WinApp.Cli.Services.DevTools.Comments;
 namespace WinApp.Cli.Commands;
 
 /// <summary>
-/// <c>winapp devtools comments delete &lt;id&gt;</c> — removes a comment from
+/// <c>winapp devtools comments delete &lt;id&gt;</c> removes a comment from
 /// <c>.winapp/ui-comments.json</c> outright.
 ///
 /// Deliberately NOT <c>resolve</c>: resolve records that a comment was acted on and keeps the row (an agent's
 /// work queue needs its history), delete says the comment should never have been there and leaves nothing
-/// behind. The store is under the gitignored <c>.winapp</c>, so this is permanent — hence "not found" is an
+/// behind. The store is under the gitignored <c>.winapp</c>, so this is permanent. That is why "not found" is an
 /// error rather than a silent success, and the removed row is echoed so a caller can see what it destroyed.
 /// </summary>
 internal class DevToolsCommentsDeleteCommand : Command, IShortDescription, IHelpExamples

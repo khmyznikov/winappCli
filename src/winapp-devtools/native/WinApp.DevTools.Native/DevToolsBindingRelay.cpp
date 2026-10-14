@@ -178,7 +178,7 @@ const wchar_t* DevToolsBindingRelay_NoAgentReason(DevToolsAppRuntime runtime)
     if (runtime == DevToolsAppRuntime::NativeAot)
         return L"Native AOT apps can't load the managed binding agent, so {Binding}/{x:Bind} can't be diagnosed "
                L"by it. Use get-property to read the property's live value and where it comes from.";
-    return L"this app has no .NET runtime, so there is no managed agent to load \u2014 bindings cannot be "
+    return L"this app has no .NET runtime, so there is no managed agent to load, so bindings cannot be "
            L"diagnosed by the managed host under any launch option. Use get-property to read the property's live value and where it comes from.";
 }
 

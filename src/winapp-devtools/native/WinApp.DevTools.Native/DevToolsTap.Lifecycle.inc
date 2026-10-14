@@ -65,7 +65,7 @@ static bool ConfirmAppContentPanel(InstanceHandle h)
 static InstanceHandle FindOutermostPanel(InstanceHandle wantCensusRoot, unsigned long long xamlRootKey) {
     // Gather every type-name candidate with its depth under the lock (cheap, no COM), then confirm shallowest first
     // OUTSIDE the lock. Splitting it this way keeps the census lock free of COM calls while still letting the runtime
-    // — not the name — have the final say on which element the overlay attaches to.
+    // (not the name) have the final say on which element the overlay attaches to.
     std::vector<std::pair<unsigned int, InstanceHandle>> candidates;
     AcquireSRWLockShared(&g_censusLock);
     for (auto& kv : g_type) {

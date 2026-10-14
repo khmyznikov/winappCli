@@ -16,13 +16,13 @@ namespace WinApp.Cli.Tests;
 /// Border/ContentPresenter/Grid/ScrollViewer levels, so an app's own Button sits at raw depth 12-14 and a
 /// default <c>--depth 4</c> listing showed nothing a developer wrote. Filtering could not fix it: the filter
 /// ran AFTER a depth-limited enumerate, so the authored descendants were never fetched to be kept. The fix is
-/// the ORDER — the tap projects, then bounds — and that is what these assert, by checking which request the
+/// the ORDER (the tap projects, then bounds), and that is what these assert, by checking which request the
 /// command actually sends.
 /// </item>
 /// <item>
 /// <b>Selectors were opaque decimals.</b> Now they are the same vocabulary <c>winapp ui</c> uses: a
 /// census-unique <c>x:Name</c>, else a <c>type-name-hash</c> slug validated against the live identity. The
-/// validation is the point — a slug that no longer names the element it named must be REFUSED, not resolved
+/// validation is the point: a slug that no longer names the element it named must be REFUSED, not resolved
 /// to the similar-looking element still there.
 /// </item>
 /// </list>
@@ -74,7 +74,7 @@ public class DevToolsSelectorTests
 
     /// <summary>
     /// The authored reply shape: nodes plus the state of the classifier pass that produced them. Built here
-    /// so a test states the classification facts and the tree it is talking about in ONE place — which is the
+    /// so a test states the classification facts and the tree it is talking about in ONE place, which is the
     /// property the envelope exists to guarantee.
     /// </summary>
     private static string AuthoredEnvelope(
@@ -283,7 +283,7 @@ public class DevToolsSelectorTests
 
     /// <summary>
     /// The width is a shared contract with the tap (<c>DevToolsTreeLayout::kIdentityHexDigits</c>). If the two ever
-    /// disagree, every slug silently degrades to a text query and resolves whatever happens to match — the
+    /// disagree, every slug silently degrades to a text query and resolves whatever happens to match, the
     /// exact failure mode selectors exist to remove.
     /// <para>
     /// Asserted through BEHAVIOUR rather than by comparing the constant to itself: what has to hold is that a
@@ -381,7 +381,7 @@ public class DevToolsSelectorTests
 
     /// <summary>
     /// The staleness gate. A slug whose type and name still match a live element but whose IDENTITY does not
-    /// names an element that MOVED — and the similar one still there is not it. Resolving to it would be the
+    /// names an element that MOVED, and the similar one still there is not it. Resolving to it would be the
     /// silent wrong-element write the whole design exists to prevent.
     /// </summary>
     [TestMethod]
@@ -431,7 +431,7 @@ public class DevToolsSelectorTests
         ["button-deletebutton-1111111111", "button-deletebutton-2222222222"];
 
     /// <summary>
-    /// The bare NAME of a duplicated element is refused, and the refusal lists selectors that DO work — the
+    /// The bare NAME of a duplicated element is refused, and the refusal lists selectors that DO work, the
     /// `winapp ui` shape: never guess, always hand back something copy-pasteable.
     /// </summary>
     [TestMethod]
@@ -453,12 +453,12 @@ public class DevToolsSelectorTests
     /// <summary>
     /// The narrowing search is an OPTIMISATION, never the last word. <c>VisualTree.find</c> matches a plain
     /// substring against the type as the runtime spells it, while the slug's type token has had every
-    /// non-alphanumeric character stripped — so an ordinary <c>UserControl</c> class name like
+    /// non-alphanumeric character stripped, so an ordinary <c>UserControl</c> class name like
     /// <c>My_Control</c> cannot match its own token, and the search returns nothing for a live, unmoved
     /// element. Reporting "no element matches, re-run inspect" there would be a loop: inspect reprints the
     /// same selector. The resolver must fall back to the whole tree before concluding anything.
     /// <para>
-    /// The fake serves a find reply MISSING the element and an enumerate reply containing it — exactly the
+    /// The fake serves a find reply MISSING the element and an enumerate reply containing it: exactly the
     /// asymmetry the real tap produces for such a type.
     /// </para>
     /// </summary>
@@ -502,7 +502,7 @@ public class DevToolsSelectorTests
 
     /// <summary>
     /// The classifier resolves missing source info in bounded batches, so a freshly attached app can be
-    /// classified only partly — and the missing elements are the app's OWN. A view that omits them while
+    /// classified only partly, and the missing elements are the app's OWN. A view that omits them while
     /// saying nothing presents a partial answer as the whole truth, which is the failure the tap's own
     /// "truncation is REPORTED, never silent" rule exists to prevent.
     /// <para>
@@ -531,8 +531,8 @@ public class DevToolsSelectorTests
     }
 
     /// <summary>
-    /// The completeness statement must come from the pass that produced the tree. Asking a SECOND time — the
-    /// shape this replaced — lets a later pass finish the backfill and answer "complete" about a tree the
+    /// The completeness statement must come from the pass that produced the tree. Asking a SECOND time (the
+    /// shape this replaced) lets a later pass finish the backfill and answer "complete" about a tree the
     /// FIRST pass had already rendered incomplete. The gate is that the command never asks again.
     /// </summary>
     [TestMethod]
@@ -564,7 +564,7 @@ public class DevToolsSelectorTests
     /// <summary>
     /// An empty authored result while the classifier is still working is NOT "your app authored nothing".
     /// The tap therefore stops refusing with `no-authored` mid-classification, and the CLI must say which of
-    /// the three empty cases it hit — otherwise a fresh attach tells a developer their markup is missing.
+    /// the three empty cases it hit, otherwise a fresh attach tells a developer their markup is missing.
     /// </summary>
     [TestMethod]
     public async Task Inspect_EmptyAuthoredResultWhileClassifying_SaysNotFinished_NotThatNothingIsAuthored()
@@ -590,7 +590,7 @@ public class DevToolsSelectorTests
     /// <summary>
     /// An uninstrumented app is recognised as such on the FIRST call, even while the classifier is still
     /// backfilling. The runtime banks a source file as each element is added, so absence is evidence about
-    /// the launch rather than about progress — and leading with "still classifying" would tell a developer to
+    /// the launch rather than about progress, and leading with "still classifying" would tell a developer to
     /// wait for something that will never arrive, when the fix is to relaunch with `--devtools`. This is the
     /// exact shape the live gate hit: the first inspect said "not finished", the second said the truth.
     /// </summary>
@@ -710,7 +710,7 @@ public class DevToolsSelectorTests
 
     /// <summary>
     /// The agent-facing shape has to be actionable. An ambiguity error that carries only a sentence ending in
-    /// a colon leaves a `--json` caller with nothing to retry — on the duplicate-`x:Name` workflow, where
+    /// a colon leaves a `--json` caller with nothing to retry on the duplicate-`x:Name` workflow, where
     /// every candidate has a distinct working selector.
     /// </summary>
     [TestMethod]
