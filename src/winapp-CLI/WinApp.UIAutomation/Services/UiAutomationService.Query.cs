@@ -160,8 +160,8 @@ internal sealed partial class UiAutomationService
         if (exactName is not null && !hasExactId && results.Count > 1)
         {
             var exactNameResults = results.Where(result => IsExactNameMatch(
-                GetBstr(() => s_getCurrentBstr(result.Element, UIA_PROPERTY_ID.UIA_NamePropertyId)), exactName)).ToList();
-            if (exactNameResults.Count > 0) { results = exactNameResults; }
+                GetBstr(() => s_getCurrentBstr(result.Element, UIA_PROPERTY_ID.UIA_NamePropertyId)), exactName)).Take(2).ToList();
+            if (exactNameResults.Count == 1) { results = exactNameResults; }
         }
         if (requireUnique && results.Count > 1)
         {

@@ -51,11 +51,12 @@ public partial class RealUiAutomationTests
     public async Task Query_SeveralExactNameMatches_KeepAmbiguityRules(bool filtered, bool requireUnique)
     {
         using var fx = new UiaTestFixture();
+        // Two labels have the exact Name, so neither wins; the only invokable match still does.
         fx.OnUiThread(() =>
         {
-            fx.DupButton.AccessibleName = ExactNameQuery;
             fx.DupLabel.AccessibleName = ExactNameQuery;
-            fx.TextLabel.AccessibleName = "Welcome to " + ExactNameQuery;
+            fx.TextLabel.AccessibleName = ExactNameQuery;
+            fx.DupButton.AccessibleName = "Welcome to " + ExactNameQuery;
         });
         var svc = NewService();
         var target = SessionFor(fx);
@@ -72,7 +73,7 @@ public partial class RealUiAutomationTests
             return;
         }
 
-        // The unfiltered lookup still prefers the only invokable element among the exact matches.
+        // Same as before this preference existed: the unfiltered lookup picks the only invokable match.
         var found = await svc.FindSingleElementAsync(target, selector, requireUnique, CancellationToken.None);
         Assert.IsNotNull(found);
         Assert.AreEqual("btnShared", found.AutomationId);
