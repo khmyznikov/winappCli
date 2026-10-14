@@ -1789,9 +1789,10 @@ internal sealed partial class UiAutomationService : IUiAutomation
     private IEnumerable<IUIAutomationElement> EnumerateExplicitControlView(IUIAutomationElement root, CancellationToken ct)
     {
         var walker = s_getExplicitIdentityWalker(this);
-        var visitedWindows = new HashSet<nint>();
+        var rootWindow = FindEnclosingWindow(root, walker);
+        var visitedWindows = new HashSet<nint> { rootWindow };
         var pending = new Stack<(IUIAutomationElement Parent, nint Window)>();
-        pending.Push((root, EnterWindow(root, enclosingWindow: 0, visitedWindows, out _)));
+        pending.Push((root, rootWindow));
         while (pending.TryPop(out var entry))
         {
             ct.ThrowIfCancellationRequested();
@@ -2187,8 +2188,8 @@ internal sealed partial class UiAutomationService : IUiAutomation
     {
         ct.ThrowIfCancellationRequested();
         var walker = s_getControlViewWalker(this);
-        var visitedWindows = new HashSet<nint>();
-        var rootWindow = EnterWindow(root, enclosingWindow: 0, visitedWindows, out _);
+        var rootWindow = FindEnclosingWindow(root, walker);
+        var visitedWindows = new HashSet<nint> { rootWindow };
         var pending = new Stack<(IUIAutomationElement Element, nint EnclosingWindow)>();
         TryPushTraversalElement(
             () => walker.GetFirstChildElement(root),
@@ -2244,16 +2245,7 @@ internal sealed partial class UiAutomationService : IUiAutomation
     private static nint EnterWindow(
         IUIAutomationElement element, nint enclosingWindow, HashSet<nint> visitedWindows, out bool revisited)
     {
-        nint hwnd;
-        try
-        {
-            hwnd = (nint)element.get_CurrentNativeWindowHandle();
-        }
-        catch (Exception ex) when (ex is COMException or InvalidCastException)
-        {
-            hwnd = 0;
-        }
-
+        var hwnd = ReadNativeWindowHandle(element);
         if (hwnd == 0 || hwnd == enclosingWindow)
         {
             revisited = false;
@@ -2262,6 +2254,46 @@ internal sealed partial class UiAutomationService : IUiAutomation
 
         revisited = !visitedWindows.Add(hwnd);
         return hwnd;
+    }
+
+    /// <summary>
+    /// Returns the native window that contains a walk's <paramref name="root"/>: its own, or its
+    /// nearest windowed ancestor's when the root is windowless (for example, a <c>--root</c> scope).
+    /// </summary>
+    private static nint FindEnclosingWindow(IUIAutomationElement root, IUIAutomationTreeWalker walker)
+    {
+        IUIAutomationElement? current = root;
+        for (var remaining = 64; current is not null && remaining > 0; remaining--)
+        {
+            var hwnd = ReadNativeWindowHandle(current);
+            if (hwnd != 0)
+            {
+                return hwnd;
+            }
+
+            try
+            {
+                current = walker.GetParentElement(current);
+            }
+            catch (Exception ex) when (ex is COMException or InvalidCastException)
+            {
+                break;
+            }
+        }
+
+        return 0;
+    }
+
+    private static nint ReadNativeWindowHandle(IUIAutomationElement element)
+    {
+        try
+        {
+            return (nint)element.get_CurrentNativeWindowHandle();
+        }
+        catch (Exception ex) when (ex is COMException or InvalidCastException)
+        {
+            return 0;
+        }
     }
 
     private void TryPushTraversalElement(
@@ -2624,19 +2656,34 @@ internal sealed partial class UiAutomationService : IUiAutomation
     private bool WalkTree(IUIAutomationElement element, int maxDepth, int currentDepth, string path, List<UiElement> results, ref int nextElementId,
                           string? parentSelector = null, List<string>? ancestorTypes = null,
                           HashSet<nint>? topLevelWindowHandles = null, nint currentWindowHandle = 0,
-                          HashSet<nint>? visitedWindows = null, nint enclosingWindow = 0)
+                          Dictionary<nint, int>? walkedWindowDepths = null, nint enclosingWindow = 0)
     {
-        visitedWindows ??= [];
-        var elementWindow = EnterWindow(element, enclosingWindow, visitedWindows, out var revisited);
-        if (currentDepth > 0 && elementWindow != enclosingWindow && elementWindow != currentWindowHandle &&
-            topLevelWindowHandles?.Contains(elementWindow) == true)
+        if (walkedWindowDepths is null)
+        {
+            enclosingWindow = FindEnclosingWindow(element, s_getControlViewWalker(this));
+            walkedWindowDepths = new() { [enclosingWindow] = currentDepth };
+        }
+
+        // Unlike a search, inspect stops at maxDepth, so a window first reached near the limit is
+        // walked again if a shorter path reaches it later. Each re-walk starts strictly shallower,
+        // so cycles still end.
+        var hwnd = ReadNativeWindowHandle(element);
+        var startsWindow = hwnd != 0 && hwnd != enclosingWindow;
+        var elementWindow = startsWindow ? hwnd : enclosingWindow;
+        if (startsWindow && currentDepth > 0 && hwnd != currentWindowHandle &&
+            topLevelWindowHandles?.Contains(hwnd) == true)
         {
             return true;
         }
 
-        if (revisited)
+        if (startsWindow)
         {
-            return false;
+            if (walkedWindowDepths.TryGetValue(hwnd, out var walkedDepth) && walkedDepth <= currentDepth)
+            {
+                return false;
+            }
+
+            walkedWindowDepths[hwnd] = currentDepth;
         }
 
         var uiElement = ToUiElement(element, path, ref nextElementId);
@@ -2675,7 +2722,7 @@ internal sealed partial class UiAutomationService : IUiAutomation
         while (child is not null)
         {
             var childPath = string.IsNullOrEmpty(path) ? $"/{childIndex}" : $"{path}/{childIndex}";
-            var isFirstVisit = WalkTree(
+            var walked = WalkTree(
                 child,
                 maxDepth,
                 currentDepth + 1,
@@ -2686,11 +2733,11 @@ internal sealed partial class UiAutomationService : IUiAutomation
                 childAncestors,
                 topLevelWindowHandles,
                 currentWindowHandle,
-                visitedWindows,
+                walkedWindowDepths,
                 elementWindow);
-            if (!isFirstVisit)
+            if (!walked)
             {
-                // The rest of this sibling chain was walked on the first visit.
+                // The rest of this sibling chain was already walked at the same or a shallower depth.
                 break;
             }
 
