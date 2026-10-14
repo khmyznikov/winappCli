@@ -156,7 +156,7 @@
       </Button>      <!-- Layout adorners are a mode: a ToggleButton exposes the on-state to UI Automation. -->
       <ToggleButton x:Name="DevToolsProtoLayout" Style="{x:Null}" AllowFocusOnInteraction="False" Width="30" Height="26" Padding="0" BorderThickness="0" CornerRadius="6"
               Background="#00000000" Foreground="$TEXT$" VerticalAlignment="Center"
-              ToolTipService.ToolTip="Layout adorners (margin, padding, alignment)"
+              ToolTipService.ToolTip="Layout adorners: margin, padding and alignment of the element you hover or select"
               AutomationProperties.AutomationId="DevToolsProtoLayout"
               AutomationProperties.Name="Layout adorners">
         <ToggleButton.Resources>

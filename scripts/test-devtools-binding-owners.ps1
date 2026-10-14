@@ -548,6 +548,11 @@ try {
         Check ((Wait-Focused 'DevToolsProtoPick') -eq 'DevToolsProtoPick') 'the first shortcut after focus moves on from an Esc return reaches the toolbar'
         $null = Invoke-Cli @('ui', 'send-keys', 'esc', '-a', $app, '--via', 'send-input')
         Check ((Wait-Focused 'ShortcutOther') -eq 'ShortcutOther') 'Esc returns focus to the element the shortcut left'
+        # A command run through UI Automation leaves keyboard focus where it was, so the app's own shortcuts still work.
+        $null = Invoke-Cli @('ui', 'focus', 'ShortcutReturn', '-a', $app)
+        $null = Invoke-Cli @('ui', 'invoke', 'DevToolsProtoLayout', '-a', $app)
+        Check ((Wait-Focused 'ShortcutReturn') -eq 'ShortcutReturn') 'a toolbar command invoked through UI Automation returns focus to the app'
+        $null = Invoke-Cli @('ui', 'invoke', 'DevToolsProtoLayout', '-a', $app)
 
         # A centered or margined window content starts away from the window origin; the highlight must still
         # land on the selected element.

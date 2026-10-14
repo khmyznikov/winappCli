@@ -103,6 +103,8 @@ static void TestToolbarContract()
     CheckToolbar(xaml.find("<ToggleButton x:Name=\"DevToolsProtoLayout\"") != std::string::npos &&
                      xaml.find("ToolTip=\"Show layout adorners") == std::string::npos,
                  "Layout adorners is a toggle for UI Automation, with a tooltip that holds in both states");
+    CheckToolbar(xaml.find("ToolTip=\"Layout adorners: margin, padding and alignment of the element you hover or select\"") != std::string::npos,
+                 "the Layout adorners tooltip says they show for the hovered or selected element, not the whole app");
     CheckToolbar(xaml.find("<ToggleButton x:Name=\"DevToolsProtoPick\"") != std::string::npos &&
                      overlay.find("ProtoSetToggle(L\"DevToolsProtoPick\", L\"DevToolsPickOn\", L\"DevToolsPickOff\", on);") != std::string::npos,
                  "Select element is a toggle whose state UI Automation reads, like Comment mode");
@@ -485,16 +487,16 @@ static void TestToolbarContract()
                  "the inspector's Comment action saves through the in-app comment writer");
     CheckToolbar(overlay.find("static EventSink g_protoSink[23];") != std::string::npos,
                  "toolbar owns independent pointer, click, resize and focus sinks");
-    CheckToolbar(overlay.find("wireNamedClick(L\"DevToolsProtoPick\", g_protoSink[2], &OnPickClick);") != std::string::npos,
-                 "Pick is wired by namescope identity");
-    CheckToolbar(overlay.find("wireNamedClick(L\"DevToolsProtoComments\", g_protoSink[3], &OnCommentModeClick);") != std::string::npos &&
+    CheckToolbar(overlay.find("wireNamedClick(L\"DevToolsProtoPick\", g_protoSink[2], &ThenReturnFocus<&OnPickClick>);") != std::string::npos,
+                 "Pick is wired by namescope identity, and gives focus back to the app after a command run through UI Automation");
+    CheckToolbar(overlay.find("wireNamedClick(L\"DevToolsProtoComments\", g_protoSink[3], &ThenReturnFocus<&OnCommentModeClick>);") != std::string::npos &&
                      overlay.find("wireNamedClick(L\"DevToolsProtoCommentsMenu\", g_protoSink[15], &OnCommentsMenuClick);") != std::string::npos,
                  "Comments and its menu are wired by namescope identity");
-    CheckToolbar(overlay.find("wireNamedClick(L\"DevToolsProtoInspect\", g_protoSink[4], &OnInspectClick);") != std::string::npos,
+    CheckToolbar(overlay.find("wireNamedClick(L\"DevToolsProtoInspect\", g_protoSink[4], &ThenReturnFocus<&OnInspectClick>);") != std::string::npos,
                  "Inspect is wired by namescope identity");
-    CheckToolbar(overlay.find("wireNamedClick(L\"DevToolsProtoLayout\", g_protoSink[5], &OnLayoutToggleClick);") != std::string::npos,
+    CheckToolbar(overlay.find("wireNamedClick(L\"DevToolsProtoLayout\", g_protoSink[5], &ThenReturnFocus<&OnLayoutToggleClick>);") != std::string::npos,
                  "Layout is wired by namescope identity");
-    CheckToolbar(overlay.find("wireNamedClick(L\"DevToolsProtoTheme\", g_protoSink[6], &OnThemeToggleClick);") != std::string::npos,
+    CheckToolbar(overlay.find("wireNamedClick(L\"DevToolsProtoTheme\", g_protoSink[6], &ThenReturnFocus<&OnThemeToggleClick>);") != std::string::npos,
                  "Theme is wired by namescope identity");
     CheckToolbar(overlay.find("wireNamedClick(L\"DevToolsProtoPin\", g_protoSink[7], &OnPinClick);") != std::string::npos,
                  "Pin is wired by namescope identity");

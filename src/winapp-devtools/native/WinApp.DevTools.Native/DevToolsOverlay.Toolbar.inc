@@ -21,6 +21,47 @@ static void DevToolsSetToolbarRequestedTheme(int appTheme)
     HostSetLayerTheme(appTheme);
 }
 
+// The app's own RequestedTheme on its content root, saved by the first switch so the switch back restores it rather
+// than leaving DevTools' value in place. `set` is false when the app never set one.
+static bool g_themeSwitched = false;
+static bool g_themeOriginalSet = false;
+static DevToolsX::ElementTheme g_themeOriginal = DevToolsX::ElementTheme::Default;
+
+// The switch back: the app's own value, or none. False when this switch is not a switch back.
+static bool RestoreAppRequestedTheme(void* themeFe)
+{
+    if (!g_themeSwitched) return false;
+    g_themeSwitched = false;
+    try {
+        winrt::Windows::Foundation::IInspectable object{ nullptr };
+        winrt::copy_from_abi(object, themeFe);
+        const auto element = object.as<DevToolsX::FrameworkElement>();
+        if (g_themeOriginalSet) element.RequestedTheme(g_themeOriginal);
+        else element.ClearValue(DevToolsX::FrameworkElement::RequestedThemeProperty());
+        DevToolsSetToolbarRequestedTheme(static_cast<int>(element.ActualTheme()));
+        DevToolsOverlayLog(L"overlay.theme restored the app's own value set=%d theme=%d", (int)g_themeOriginalSet, (int)g_themeOriginal);
+        return true;
+    } catch (const winrt::hresult_error& e) {
+        DevToolsOverlayLog(L"overlay.theme restore failed hr=0x%08X", e.code().value);
+        return false;
+    }
+}
+
+static void SaveAppRequestedTheme(void* themeFe)
+{
+    try {
+        winrt::Windows::Foundation::IInspectable object{ nullptr };
+        winrt::copy_from_abi(object, themeFe);
+        const auto element = object.as<DevToolsX::FrameworkElement>();
+        const auto local = element.ReadLocalValue(DevToolsX::FrameworkElement::RequestedThemeProperty());
+        g_themeOriginalSet = local != DevToolsX::DependencyProperty::UnsetValue();
+        g_themeOriginal = g_themeOriginalSet ? element.RequestedTheme() : DevToolsX::ElementTheme::Default;
+    } catch (const winrt::hresult_error& e) {
+        DevToolsOverlayLog(L"overlay.theme could not read the app's own value hr=0x%08X", e.code().value);
+        g_themeOriginalSet = false;
+    }
+}
+
 static void OnThemeToggleClick(void*, void*)
 {
     if (!DevToolsTrust_MutationEnabled()) {
@@ -42,8 +83,14 @@ static void OnThemeToggleClick(void*, void*)
         return;
     }
 
+    if (RestoreAppRequestedTheme(themeFe)) {
+        reinterpret_cast<IUnknown*>(themeFe)->Release();
+        return;
+    }
+    SaveAppRequestedTheme(themeFe);
     const int target = DevToolsTheme::ToggleTarget(actualBefore);
     HRESULT hrPut = DevToolsPutRequestedTheme(themeFe, target);
+    g_themeSwitched = SUCCEEDED(hrPut);
     int requestedAfter = DevToolsTheme::kDefault;
     HRESULT hrRequestedAfter = DevToolsGetRequestedTheme(themeFe, &requestedAfter);
     int actualAfter = actualBefore;
@@ -258,6 +305,52 @@ static bool ReturnFocusFromToolbar()
     if (returned && !g_pinned) ShowARow(false);
     DevToolsOverlayLog(L"overlay.toolbar focus returned=%d", (int)returned);
     return returned;
+}
+
+// UI Automation (a script, or `winapp ui invoke`) moves focus onto a toolbar button to run it, which left the app's
+// own keyboard shortcuts dead. Focus moved there programmatically goes back to the app element that had it once the
+// command ran; focus a person moved with the keyboard (Tab, Ctrl+Shift+F12) stays on the toolbar.
+static winrt::weak_ref<DevToolsX::UIElement> g_commandReturnFocus;
+static bool g_commandReturnArmed = false;
+
+static bool InToolbar(DevToolsX::DependencyObject node)
+{
+    winrt::Windows::Foundation::IInspectable object{ nullptr };
+    winrt::copy_from_abi(object, g_protoRoot);
+    const auto root = object.try_as<DevToolsX::DependencyObject>();
+    for (; node; node = DevToolsXM::VisualTreeHelper::GetParent(node)) if (node == root) return true;
+    return false;
+}
+
+static void NoteToolbarGettingFocus(DevToolsXI::GettingFocusEventArgs const& args)
+{
+    const auto from = args.OldFocusedElement();
+    const bool fromApp = from && !InToolbar(from);
+    if (fromApp) g_commandReturnFocus = winrt::make_weak(from.try_as<DevToolsX::UIElement>());
+    g_commandReturnArmed = fromApp && args.FocusState() == DevToolsX::FocusState::Programmatic;
+    DevToolsOverlayLog(L"overlay.toolbar getting focus from=%s state=%d", fromApp ? L"app" : L"toolbar", (int)args.FocusState());
+}
+
+static void ReturnFocusAfterCommand()
+{
+    if (!g_commandReturnArmed || !g_protoRoot) return;
+    g_commandReturnArmed = false;
+    try {
+        bool inToolbar = false;
+        ToolbarFocusedElement(&inToolbar);
+        const auto target = g_commandReturnFocus.get();
+        const bool returned = inToolbar && target && target.Focus(DevToolsX::FocusState::Programmatic);
+        DevToolsOverlayLog(L"overlay.toolbar command returned focus=%d", (int)returned);
+    } catch (const winrt::hresult_error& e) {
+        DevToolsOverlayLog(L"overlay.toolbar command focus return failed hr=0x%08X", e.code().value);
+    }
+}
+
+template <void (*Command)(void*, void*)>
+static void ThenReturnFocus(void* sender, void* args)
+{
+    Command(sender, args);
+    ReturnFocusAfterCommand();
 }
 
 static void ProtoSetToggle(const wchar_t* button, const wchar_t* onPart, const wchar_t* offPart, bool on);
@@ -908,8 +1001,8 @@ static void WirePrototype(IInspectable* canvas)
             wireUiEvent(handle, DevToolsUiEvent::PointerExited,  g_protoSink[11], &OnDragHandleExit);
             handle->Release();
         }
-        wireNamedClick(L"DevToolsProtoPick", g_protoSink[2], &OnPickClick);
-        wireNamedClick(L"DevToolsProtoComments", g_protoSink[3], &OnCommentModeClick);
+        wireNamedClick(L"DevToolsProtoPick", g_protoSink[2], &ThenReturnFocus<&OnPickClick>);
+        wireNamedClick(L"DevToolsProtoComments", g_protoSink[3], &ThenReturnFocus<&OnCommentModeClick>);
         wireNamedClick(L"DevToolsProtoCommentsMenu", g_protoSink[15], &OnCommentsMenuClick);
         wireNamedClick(L"DevToolsShowAllComments", g_protoSink[16], &OnShowAllCommentsClick);
         wireNamedClick(L"DevToolsToggleMarkers", g_protoSink[17], &OnToggleMarkersClick);
@@ -920,11 +1013,20 @@ static void WirePrototype(IInspectable* canvas)
         wireNamedClick(L"DevToolsStartHidden", g_protoSink[21], &OnStartHiddenClick);
         wireNamedClick(L"DevToolsStartOff", g_protoSink[22], &OnStartOffClick);
         WireToolbarMenu(L"DevToolsMoreMenu");
-        wireNamedClick(L"DevToolsProtoInspect", g_protoSink[4], &OnInspectClick);
-        wireNamedClick(L"DevToolsProtoLayout", g_protoSink[5], &OnLayoutToggleClick);
-        wireNamedClick(L"DevToolsProtoTheme", g_protoSink[6], &OnThemeToggleClick);
+        wireNamedClick(L"DevToolsProtoInspect", g_protoSink[4], &ThenReturnFocus<&OnInspectClick>);
+        wireNamedClick(L"DevToolsProtoLayout", g_protoSink[5], &ThenReturnFocus<&OnLayoutToggleClick>);
+        wireNamedClick(L"DevToolsProtoTheme", g_protoSink[6], &ThenReturnFocus<&OnThemeToggleClick>);
         wireNamedClick(L"DevToolsProtoPin", g_protoSink[7], &OnPinClick);
         items->Release();
+    }
+    try {
+        winrt::Windows::Foundation::IInspectable object{ nullptr };
+        winrt::copy_from_abi(object, g_protoRoot);
+        object.as<DevToolsX::UIElement>().GettingFocus([](auto&&, DevToolsXI::GettingFocusEventArgs const& args) {
+            NoteToolbarGettingFocus(args);
+        });
+    } catch (const winrt::hresult_error& e) {
+        DevToolsOverlayLog(L"overlay.toolbar GettingFocus subscription failed hr=0x%08X", e.code().value);
     }
     if (barUi) {
         wireUiEvent(barUi, DevToolsUiEvent::PointerExited, g_protoSink[1], &OnACollapse);
