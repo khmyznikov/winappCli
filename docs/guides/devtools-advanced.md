@@ -50,9 +50,10 @@ process without restarting it, headless unless you add `--overlay` (toolbar) or
 their own: attach first, or add `--attach`. `-a` takes a PID, process name or window
 title; `-w` takes a window handle.
 
-Comments left in the app are saved in its project folder. An app started without
-`winapp run` has none, so pass `--source-root <project folder>`; without it, comment
-mode tells you to re-attach with one.
+An app started without `winapp run` has no project folder, so comments left in it aren't
+saved until you pass `--source-root <project folder>` (the folder with its project file).
+They then go to the same [comment store](#comment-storage-and-advanced-authoring) as with
+`winapp run`, so both show the same comments and markers.
 
 Late attachment can't add the .NET startup hook or source information recorded at
 launch, so binding operations and source locations need an app started by `winapp run`.

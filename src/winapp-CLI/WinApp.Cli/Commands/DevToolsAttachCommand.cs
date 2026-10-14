@@ -63,7 +63,7 @@ internal class DevToolsAttachCommand : Command, IShortDescription, IHelpExamples
 
     public static Option<DirectoryInfo?> SourceRootOption { get; } = new("--source-root")
     {
-        Description = "The app's project folder. Comments left in the app are saved there; an app started without winapp run has none until you give it.",
+        Description = "The app's project folder (the one with its project file, as winapp run uses). Comments left in the app are saved to .winapp/ui-comments.json at the repository root containing it, or in it when it isn't in a repository.",
     };
 
     public DevToolsAttachCommand()
@@ -252,6 +252,11 @@ internal class DevToolsAttachCommand : Command, IShortDescription, IHelpExamples
             if (sourceRoot is not null)
             {
                 ansiConsole.MarkupLineInterpolated($"   Project folder: [grey]{sourceRoot.FullName}[/]");
+            }
+            else if (CommentSelectionCapture.ReadCommentRoot(tap.GetSourceRoot(cancellationToken)).Length == 0)
+            {
+                ansiConsole.WriteLine(
+                    "   Comments: not saved. Run attach again with --source-root <project folder>.");
             }
             if (showInteractiveSurface)
             {

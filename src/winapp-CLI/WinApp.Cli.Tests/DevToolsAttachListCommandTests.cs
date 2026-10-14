@@ -202,6 +202,74 @@ public class DevToolsAttachListCommandTests : BaseCommandTests
     }
 
     [TestMethod]
+    [DoNotParallelize]
+    public async Task Attach_SourceRootInsideARepository_UsesTheRepositoryRootStoreLikeRun()
+    {
+        // `run` gives the app its project folder, and the writer saves to .winapp at the repository root containing
+        // it. Attach with the same folder must read and write that same store, so the same comments show as markers.
+        var repo = Directory.CreateTempSubdirectory("winapp-attach-repo-");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(repo.FullName, ".git"));
+            var project = Directory.CreateDirectory(Path.Combine(repo.FullName, "src", "App"));
+            var store = new WinApp.Cli.Services.DevTools.Comments.CommentStore();
+            var storePath = store.GetStorePath(project);
+            Assert.AreEqual(Path.Combine(repo.FullName, ".winapp", "ui-comments.json"), storePath);
+            store.Add(storePath, new WinApp.Cli.Services.DevTools.Comments.Comment
+            {
+                Id = "from-run", Text = "made while the app ran under winapp run", Status = WinApp.Cli.Services.DevTools.Comments.CommentStatus.Open, ProjectRoot = project.FullName,
+                Anchor = new WinApp.Cli.Services.DevTools.Comments.CommentAnchor
+                {
+                    SourceFile = "MainWindow.xaml", ElementPath = "Root/0",
+                    Identity = new WinApp.Cli.Services.DevTools.Comments.CommentIdentity { Type = "Button" },
+                },
+            });
+            using var agent = new FakeDevToolsProtocolAgent()
+                .Answer("DevTools.negotiate", $$"""{"protocol":"winapp-devtools","protocolVersion":"0","processId":{{Environment.ProcessId}},"mutation":true,"posture":"mutation"}""")
+                .Answer("Internal.setSourceRoot", "null")
+                .Answer("Internal.setComments", """{"total":1,"placed":1}""");
+            var handler = new DevToolsAttachCommand.Handler(new DevToolsTargetResolverTests.FakeAttach(),
+                GetRequiredService<WinApp.Cli.Services.IStatusService>(), TestAnsiConsole,
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<DevToolsAttachCommand>.Instance, _targetResolver,
+                new WinApp.Cli.Services.DevTools.Comments.CommentPusher(store), whyNotAttachable: _ => null);
+
+            var exit = await handler.InvokeAsync(GetRequiredService<DevToolsAttachCommand>().Parse(
+                ["--pid", agent.Pid.ToString(System.Globalization.CultureInfo.InvariantCulture), "--source-root", project.FullName, "--json"]));
+
+            Assert.AreEqual(0, exit, TestAnsiConsole.Output);
+            using var set = JsonDocument.Parse(agent.ReceivedRequests.Single(r => r.Contains("Internal.setSourceRoot", StringComparison.Ordinal)));
+            Assert.AreEqual(project.FullName, set.RootElement.GetProperty("params").GetProperty("path").GetString(),
+                "the in-app writer passes this folder to comments add, which resolves the same repository-root store");
+            using var pushed = JsonDocument.Parse(agent.ReceivedRequests.Single(r => r.Contains("Internal.setComments", StringComparison.Ordinal)));
+            var rows = pushed.RootElement.GetProperty("params").GetProperty("comments");
+            Assert.AreEqual(1, rows.GetArrayLength());
+            Assert.AreEqual("from-run", rows[0].GetProperty("id").GetString());
+        }
+        finally { repo.Delete(recursive: true); }
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    public async Task Attach_WithoutAProjectFolder_SaysHowToGiveOne()
+    {
+        using var agent = new FakeDevToolsProtocolAgent()
+            .Answer("DevTools.negotiate", $$"""{"protocol":"winapp-devtools","protocolVersion":"0","processId":{{Environment.ProcessId}},"mutation":true,"posture":"mutation"}""")
+            .Answer("Internal.sourceRoot", """{"sourceRoot":""}""");
+        var handler = new DevToolsAttachCommand.Handler(new DevToolsTargetResolverTests.FakeAttach(),
+            GetRequiredService<WinApp.Cli.Services.IStatusService>(), TestAnsiConsole,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<DevToolsAttachCommand>.Instance, _targetResolver,
+            whyNotAttachable: _ => null);
+        var pid = agent.Pid.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+        var exit = await handler.InvokeAsync(GetRequiredService<DevToolsAttachCommand>().Parse(["--pid", pid]));
+
+        Assert.AreEqual(0, exit, TestAnsiConsole.Output);
+        var hints = TestAnsiConsole.Output.Split('\n').Where(l => l.Contains("--source-root", StringComparison.Ordinal)).ToList();
+        Assert.AreEqual(1, hints.Count, TestAnsiConsole.Output);
+        StringAssert.Contains(hints[0], "Run attach again with --source-root <project folder>.");
+    }
+
+    [TestMethod]
     public async Task Attach_MissingSourceRoot_FailsBeforeLoadingAnything()
     {
         var devTools = new DevToolsTargetResolverTests.FakeAttach();

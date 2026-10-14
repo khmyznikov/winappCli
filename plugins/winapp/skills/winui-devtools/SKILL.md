@@ -57,8 +57,9 @@ winapp devtools list --include-available
 winapp devtools attach --pid <pid> --source-root <project folder>
 ```
 
-`--source-root` gives the app the project folder its in-app comments are saved in; an
-app started without `winapp run` has none. `list` and `attach` only take WinUI 3 apps.
+`--source-root` gives the app its project folder, so in-app comments go to the same store
+as with `winapp run`; an app started without `winapp run` has none. `list` and `attach`
+only take WinUI 3 apps.
 
 Late attach cannot provide startup-only binding hooks or missing XAML source
 information. Obtain permission before launching, injecting into, or mutating
