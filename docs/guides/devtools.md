@@ -152,6 +152,7 @@ and the next command. For scripts, add `--json`; see
 | The app is already running and couldn't be closed | Close it and run again, or [attach to its PID](devtools-advanced.md#attach-to-an-app-that-is-already-running). |
 | The toolbar doesn't appear, or reports a missing XAML resource | Merge `XamlControlsResources` into your app's resources (standard templates do); until then use `--devtools headless`. See [visual UI prerequisites](devtools-advanced.md#visual-ui-prerequisites). |
 | Launch fails on the execution alias | Turn the app's entry on in **Settings > Apps > Advanced app settings > App execution aliases**. |
+| DevTools can't launch the app through its alias | The alias starts a launcher. Start the app through it and attach; see [an app whose alias starts a launcher](devtools-advanced.md#an-app-whose-alias-starts-a-launcher). |
 | The DevTools engine is missing | Reinstall winapp; keep its files together. |
 | Access denied when attaching | Run winapp as the app's user, at the same or higher integrity. |
 

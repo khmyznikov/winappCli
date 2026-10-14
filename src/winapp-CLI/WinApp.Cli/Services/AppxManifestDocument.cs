@@ -764,21 +764,29 @@ internal class AppxManifestDocument
     private static string DescribeUnsafeCoexistence(List<XElement> aliasExtensions, XElement app)
     {
         var appExecutable = app.Attribute("Executable")?.Value ?? "the app's executable";
-        const string next = " Start the app another way, then run 'winapp devtools attach --pid <pid>'.";
+        const string attachInstead = " Start the app another way, then run 'winapp devtools attach --pid <pid>'.";
         if (aliasExtensions.Count > 1)
         {
-            return $"The app declares {aliasExtensions.Count} execution-alias extensions, so DevTools can't tell which one starts '{appExecutable}'." + next;
+            return $"The app declares {aliasExtensions.Count} execution-alias extensions, so DevTools can't tell which one starts '{appExecutable}'." + attachInstead;
         }
         var extension = aliasExtensions[0];
-        var aliases = string.Join("', '", extension.Descendants()
+        var aliasNames = extension.Descendants()
             .Where(e => e.Name.LocalName == "ExecutionAlias")
             .Select(e => e.Attribute("Alias")?.Value)
-            .OfType<string>());
+            .OfType<string>()
+            .ToList();
+        var aliases = string.Join("', '", aliasNames);
         var starts = extension.Attribute("Executable")?.Value ?? appExecutable;
         var why = string.Equals(starts, appExecutable, StringComparison.OrdinalIgnoreCase)
             ? $"starts '{starts}' with a different entry point"
             : $"starts '{starts}', not '{appExecutable}'";
-        return $"The app's execution alias '{aliases}' {why}, so DevTools can't launch the app through it." + next;
+        var message = $"The app's execution alias '{aliases}' {why}, so DevTools can't launch the app through it.";
+        // The app's own alias still starts it with the caller's environment, which turns on source info for a late attach.
+        return aliasNames.Count == 0 ? message + attachInstead :
+            message + "\nTo inspect it, start it through its alias and attach:\n" +
+            "    $env:ENABLE_XAML_DIAGNOSTICS_SOURCE_INFO = 1\n" +
+            $"    {aliasNames[0]}\n" +
+            "    winapp devtools attach --pid <pid> --source-root <project folder>";
     }
 
     internal ExecutionAliasResolver.AliasTarget GetExecutionAliasTarget(string layoutDirectory, string? appId = null)

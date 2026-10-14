@@ -177,8 +177,13 @@ internal partial class RunCommand
             }
         }
 
-        internal static string StepAsideLine(string reason) =>
-            $"DevTools unavailable: {reason.Trim().TrimEnd('.')} · the app runs without DevTools";
+        // A reason's first line is the summary; any lines below it (commands to run instead) follow the line as they are.
+        internal static string StepAsideLine(string reason)
+        {
+            var lines = reason.Trim().Split('\n', 2);
+            return $"DevTools unavailable: {lines[0].TrimEnd().TrimEnd('.', ':')} · the app runs without DevTools" +
+                (lines.Length > 1 ? "\n" + lines[1] : "");
+        }
 
         internal Func<string?, bool, IReadOnlyDictionary<string, string?>> CreateDevToolsEnvironment { get; set; } =
             DevToolsArtifacts.CreateLaunchEnvironment;

@@ -208,3 +208,19 @@ The common cases are in [When something fails](devtools.md#when-something-fails)
 - **Sandbox launch failed:** keep the reported diagnostics path; don't reuse selectors
   from an earlier run. Set `WINAPP_DEVTOOLS_LOG=1` before launch for crash diagnostics
   (dumps may contain app memory).
+
+### An app whose alias starts a launcher
+
+When the app's execution alias starts a different exe (a launcher) than its main
+executable, `winapp run --devtools` can't start the app. Start it through its own alias
+with source info turned on, then attach:
+
+```powershell
+$env:ENABLE_XAML_DIAGNOSTICS_SOURCE_INFO = 1
+my-app-alias.exe
+winapp devtools attach --pid <pid> --source-root <project folder>
+```
+
+The run's error message prints these commands with the app's real alias. Every element
+then shows its XAML file, **Just my XAML** works, and comments link to their files.
+Elements have no line numbers: those need the source capture that `winapp run` does.

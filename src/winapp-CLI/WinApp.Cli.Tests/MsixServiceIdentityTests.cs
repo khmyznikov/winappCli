@@ -2183,7 +2183,10 @@ public class MsixServiceIdentityTests : BaseCommandTests
             inspectorAlias: new InspectorAliasRequest(Required: required), cancellationToken: TestContext.CancellationToken);
 
         const string expected = "The app's execution alias 'app-launcher.exe' starts 'app-launcher.exe', not 'AppHost.exe', " +
-            "so DevTools can't launch the app through it. Start the app another way, then run 'winapp devtools attach --pid <pid>'.";
+            "so DevTools can't launch the app through it.\nTo inspect it, start it through its alias and attach:\n" +
+            "    $env:ENABLE_XAML_DIAGNOSTICS_SOURCE_INFO = 1\n" +
+            "    app-launcher.exe\n" +
+            "    winapp devtools attach --pid <pid> --source-root <project folder>";
         if (required)
         {
             var error = await Assert.ThrowsAsync<InvalidOperationException>(Stage);

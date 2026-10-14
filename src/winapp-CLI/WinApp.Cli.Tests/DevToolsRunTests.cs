@@ -690,6 +690,14 @@ public sealed class DevToolsRunTests() : BaseCommandTests(logLevel: Microsoft.Ex
     }
 
     [TestMethod]
+    public void StepAside_KeepsCommandsInTheReasonBelowTheOneLineSummary()
+    {
+        Assert.AreEqual(
+            "DevTools unavailable: The alias starts a launcher · the app runs without DevTools\nAttach instead:\n    app-launcher.exe",
+            RunCommand.Handler.StepAsideLine("The alias starts a launcher.\nAttach instead:\n    app-launcher.exe"));
+    }
+
+    [TestMethod]
     public async Task Setting_Headless_AttachesWithoutTheToolbar()
     {
         var app = WinUIProject(true, setting: DevToolsMode.Headless);
