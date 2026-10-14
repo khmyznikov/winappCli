@@ -711,7 +711,7 @@ internal class AppxManifestDocument
                 || !TargetsApplication(aliasExtension, app, "EntryPoint")))
             {
                 return new(AddExecutionAliasStatus.CoexistenceUnsafe, aliasName,
-                    ErrorMessage: "The execution-alias extension does not unambiguously target the requested application.");
+                    ErrorMessage: DescribeUnsafeCoexistence(aliasExtensions, app));
             }
         }
 
@@ -758,6 +758,28 @@ internal class AppxManifestDocument
     private static bool TargetsApplication(XElement extension, XElement app, string attribute) =>
         extension.Attribute(attribute) is not { } target
         || !target.Value.Contains('$') && string.Equals(target.Value, app.Attribute(attribute)?.Value, StringComparison.OrdinalIgnoreCase);
+
+    // DevTools launches the app through an execution alias it adds next to the app's own, and that is only safe when
+    // the existing alias starts the same program. A launcher stub's alias does not.
+    private static string DescribeUnsafeCoexistence(List<XElement> aliasExtensions, XElement app)
+    {
+        var appExecutable = app.Attribute("Executable")?.Value ?? "the app's executable";
+        const string next = " Start the app another way, then run 'winapp devtools attach --pid <pid>'.";
+        if (aliasExtensions.Count > 1)
+        {
+            return $"The app declares {aliasExtensions.Count} execution-alias extensions, so DevTools can't tell which one starts '{appExecutable}'." + next;
+        }
+        var extension = aliasExtensions[0];
+        var aliases = string.Join("', '", extension.Descendants()
+            .Where(e => e.Name.LocalName == "ExecutionAlias")
+            .Select(e => e.Attribute("Alias")?.Value)
+            .OfType<string>());
+        var starts = extension.Attribute("Executable")?.Value ?? appExecutable;
+        var why = string.Equals(starts, appExecutable, StringComparison.OrdinalIgnoreCase)
+            ? $"starts '{starts}' with a different entry point"
+            : $"starts '{starts}', not '{appExecutable}'";
+        return $"The app's execution alias '{aliases}' {why}, so DevTools can't launch the app through it." + next;
+    }
 
     internal ExecutionAliasResolver.AliasTarget GetExecutionAliasTarget(string layoutDirectory, string? appId = null)
     {

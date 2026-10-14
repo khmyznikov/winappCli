@@ -291,9 +291,13 @@ internal partial class MsixService
                 await InstallRecipeFrameworkPackagesAsync(recipeFile, registrationManifest, runtimeArch, taskContext, cancellationToken);
             }
 
-            await RemoveRegistrationOfAnotherIdentityAsync(previousPackageName, identity.PackageName, identity.Publisher, outputAppXDirectory, clean, taskContext, cancellationToken);
-
             var preparedAlias = inspectorAlias is null ? null : PrepareInspectorAlias(registrationManifest, inspectorAlias);
+            // Requested DevTools stops here, before anything is registered; the default steps aside after registration.
+            if (preparedAlias?.Error is { } aliasError && inspectorAlias!.Required)
+            {
+                throw new InvalidOperationException(aliasError);
+            }
+            await RemoveRegistrationOfAnotherIdentityAsync(previousPackageName, identity.PackageName, identity.Publisher, outputAppXDirectory, clean, taskContext, cancellationToken);
             if (preparedAlias?.Target?.ApplicationUserModelId is { } targetAumid)
             {
                 identity = identity with { ApplicationId = targetAumid[(targetAumid.IndexOf('!') + 1)..] };
@@ -467,9 +471,13 @@ internal partial class MsixService
             }
 
             // See MSBuild branch above for the rationale (issue #537).
-            await RemoveRegistrationOfAnotherIdentityAsync(previousRawPackageName, identity.PackageName, identity.Publisher, outputAppXDirectory, clean, taskContext, cancellationToken);
-
             var preparedAlias = inspectorAlias is null ? null : PrepareInspectorAlias(copiedAppxManifestPath, inspectorAlias);
+            // Requested DevTools stops here, before anything is registered; the default steps aside after registration.
+            if (preparedAlias?.Error is { } aliasError && inspectorAlias!.Required)
+            {
+                throw new InvalidOperationException(aliasError);
+            }
+            await RemoveRegistrationOfAnotherIdentityAsync(previousRawPackageName, identity.PackageName, identity.Publisher, outputAppXDirectory, clean, taskContext, cancellationToken);
             if (preparedAlias?.Target?.ApplicationUserModelId is { } targetAumid)
             {
                 identity = identity with { ApplicationId = targetAumid[(targetAumid.IndexOf('!') + 1)..] };
@@ -533,11 +541,7 @@ internal partial class MsixService
             return Failed($"Could not prepare an inspector execution alias: {ex.Message}");
         }
 
-        InspectorAlias Failed(string error)
-        {
-            logger.LogWarning("{UISymbol} {Error}", UiSymbols.Warning, error);
-            return new(null, null, RequiresRegistration: false, Error: error);
-        }
+        InspectorAlias Failed(string error) => new(null, null, RequiresRegistration: false, Error: error);
     }
 
     /// <summary>

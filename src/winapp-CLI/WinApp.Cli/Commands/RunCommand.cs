@@ -1003,7 +1003,9 @@ internal partial class RunCommand : Command, IShortDescription, ITargetAwareComm
                         effectiveAlias.UseAlias && !devTools && inspectorApplicationId is null,
                         packageGraph,
                         appxRecipe: appxRecipe,
-                        inspectorAlias: devTools || inspectorApplicationId is not null ? new InspectorAliasRequest(inspectorApplicationId) : null,
+                        inspectorAlias: devTools || inspectorApplicationId is not null
+                            ? new InspectorAliasRequest(inspectorApplicationId, Required: inspectorApplicationId is not null || !devToolsRun.FailOpen)
+                            : null,
                         developmentIdentity: developmentIdentity,
                         cancellationToken: cancellationToken);
 

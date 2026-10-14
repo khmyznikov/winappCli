@@ -2148,6 +2148,58 @@ public class MsixServiceIdentityTests : BaseCommandTests
         Assert.IsEmpty(AppxManifestDocument.Load(Path.Join(output.FullName, "appxmanifest.xml")).GetExecutionAliases());
     }
 
+    // A common packaging pattern: the app's alias starts a launcher stub, not the app itself. DevTools can't launch
+    // through it, and a run that asked for DevTools must stop before registering anything.
+    [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task InspectorAlias_LauncherStubAlias_FailsBeforeRegisteringWhenDevToolsWasRequested(bool required)
+    {
+        var source = _tempDirectory.CreateSubdirectory("inspector-launcher-source");
+        var output = _tempDirectory.CreateSubdirectory("inspector-launcher-layout");
+        var manifest = new FileInfo(Path.Join(source.FullName, "AppxManifest.xml"));
+        var xml = BuildMSBuildManifest(exe: "AppHost.exe")
+            .Replace("IgnorableNamespaces=\"uap build\"",
+                "xmlns:uap3=\"http://schemas.microsoft.com/appx/manifest/uap/windows10/3\" " +
+                "xmlns:desktop=\"http://schemas.microsoft.com/appx/manifest/desktop/windows10\" IgnorableNamespaces=\"uap build uap3 desktop\"",
+                StringComparison.Ordinal)
+            .Replace("<Application Id=\"App\" Executable=\"AppHost.exe\" EntryPoint=\"Windows.FullTrustApplication\" />",
+                """
+                <Application Id="App" Executable="AppHost.exe" EntryPoint="Windows.FullTrustApplication">
+                  <Extensions>
+                    <uap3:Extension Category="windows.appExecutionAlias" Executable="app-launcher.exe" EntryPoint="Windows.FullTrustApplication">
+                      <uap3:AppExecutionAlias><desktop:ExecutionAlias Alias="app-launcher.exe" /></uap3:AppExecutionAlias>
+                    </uap3:Extension>
+                  </Extensions>
+                </Application>
+                """, StringComparison.Ordinal);
+        await File.WriteAllTextAsync(manifest.FullName, xml, TestContext.CancellationToken);
+        await File.WriteAllTextAsync(Path.Join(source.FullName, "AppHost.exe"), "exe", TestContext.CancellationToken);
+        await File.WriteAllTextAsync(Path.Join(source.FullName, "app-launcher.exe"), "exe", TestContext.CancellationToken);
+        _msixService.AliasProxyExists = _ => false;
+
+        Task<MsixIdentityResult> Stage() => _msixService.AddLooseLayoutIdentityAsync(
+            manifest, source, output, TestTaskContext, selfContained: true,
+            inspectorAlias: new InspectorAliasRequest(Required: required), cancellationToken: TestContext.CancellationToken);
+
+        const string expected = "The app's execution alias 'app-launcher.exe' starts 'app-launcher.exe', not 'AppHost.exe', " +
+            "so DevTools can't launch the app through it. Start the app another way, then run 'winapp devtools attach --pid <pid>'.";
+        if (required)
+        {
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(Stage);
+            Assert.AreEqual(expected, error.Message);
+            Assert.IsEmpty(_fakeRegistration.RegisterLooseLayoutCalls, "nothing is registered");
+            Assert.IsEmpty(_fakeRegistration.UnregisterCalls, "and nothing already registered is removed");
+        }
+        else
+        {
+            // The default steps aside after registering, so the app still runs without DevTools.
+            var result = await Stage();
+            Assert.AreEqual(expected, result.InspectorAlias!.Error);
+            Assert.HasCount(1, _fakeRegistration.RegisterLooseLayoutCalls);
+        }
+    }
+
     [TestMethod]
     public async Task InspectorAlias_SelectedApplicationIsReturnedAndAuthoredAliasIsPreserved()
     {
