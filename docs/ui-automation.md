@@ -723,6 +723,7 @@ winapp ui touch tile-photo-7b3c -a myapp --gesture long-press --hold-ms 600
 winapp ui touch -a myapp --at 100,300 --gesture swipe --to-point 400,300
 winapp ui touch img-map-9f8e -a myapp --gesture pinch --distance 200    # pinch-to-zoom out (2 fingers)
 winapp ui touch img-map-9f8e -a myapp --gesture stretch --distance 200  # stretch-to-zoom in (2 fingers)
+winapp ui touch img-map-9f8e -a myapp --gesture pinch --distance 300 --angle 45   # diagonal pinch
 ```
 
 **Options:**
@@ -731,6 +732,7 @@ winapp ui touch img-map-9f8e -a myapp --gesture stretch --distance 200  # stretc
 - `--to-point <x,y>` — End point for a `swipe`. Takes precedence over `--direction`.
 - `--direction <right|left|up|down>` — Swipe direction (default: `right`). Combined with `--distance` to compute the end point when `--to-point` is not given.
 - `--distance <px>` — Finger spread for `pinch`/`stretch`, or swipe distance in pixels.
+- `--angle <degrees>` — Finger axis for `pinch`/`stretch`, 0–359, counter-clockwise: `0` is horizontal (default), `90` is vertical, `45` runs from lower-left to upper-right.
 - `--hold-ms <ms>` — Hold contacts down before lifting (long-press hold time; defaults to 500 ms for `long-press` when not set).
 - `--duration-ms <ms>` — Glide time for moving gestures (swipe/pinch/stretch; default 300).
 - `--fingers <n>` — Number of contacts (1–10; default 1). `pinch`/`stretch` always use 2.
