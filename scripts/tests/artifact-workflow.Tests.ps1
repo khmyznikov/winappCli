@@ -71,7 +71,7 @@ Describe 'Artifact-first workflow dependencies' {
 
         $gate = Get-JobText $buildWorkflow 'build-and-package'
         $gate | Should -Match '(?m)^\s+if: always\(\)'
-        $gate | Should -Match 'needs: \[build-artifacts, validate-tests, validate-docs, e2e-test-ui, samples, metrics, project-arch-changes, project-arch\]'
+        $gate | Should -Match 'needs: \[build-artifacts, validate-tests, validate-docs, e2e-test-ui, samples, metrics\]'
     }
 
     It 'builds both architectures in one producer without intermediate publish artifacts' {
@@ -93,7 +93,7 @@ Describe 'Artifact-first workflow dependencies' {
         $npmPackaging | Should -Match 'npm run compile --ignore-scripts'
     }
 
-    It 'starts validation, docs, UI E2E, samples and the architecture matrix from early artifacts, not the final gate' {
+    It 'starts validation, docs, UI E2E and samples from early artifacts, not the final gate' {
         foreach ($job in @('validate-tests', 'validate-docs', 'e2e-test-ui', 'samples')) {
             $text = Get-JobText $buildWorkflow $job
             $text | Should -Match '(?m)^\s+needs: build-artifacts\r?$'
@@ -103,17 +103,6 @@ Describe 'Artifact-first workflow dependencies' {
             Should -Match ([regex]::Escape('$testArgs.CliShard = [int]$env:CLI_SHARD'))
         (Get-JobText $buildWorkflow 'e2e-test-ui') | Should -Match 'test-e2e-winui-ui\.ps1'
         (Get-JobText $buildWorkflow 'e2e-test-ui') | Should -Match 'test-ui-coordination\.ps1'
-        $matrix = Get-JobText $buildWorkflow 'project-arch'
-        $matrix | Should -Match '(?m)^\s+needs: \[build-artifacts, project-arch-changes\]\r?$'
-        $matrix | Should -Match ([regex]::Escape("if: needs.project-arch-changes.outputs.run == 'true'"))
-        $matrix | Should -Not -Match 'needs: build-and-package'
-        $matrix | Should -Match 'tests/project-arch/ProjectArch\.Tests\.ps1'
-        $matrix | Should -Match 'fail-fast: false'
-        $matrix | Should -Match 'timeout-minutes:'
-        $changes = Get-JobText $buildWorkflow 'project-arch-changes'
-        $changes | Should -Not -Match '(?m)^\s+needs:'
-        $changes | Should -Match 'fetch-depth: 2'
-        $changes | Should -Match "IS_PR -ne 'true'"
     }
 
     It 'runs both CLI shards, auxiliary suites once, and UI Automation on isolated runners' {
@@ -144,7 +133,7 @@ Describe 'Artifact-first workflow dependencies' {
     }
 
     It 'retains all samples and preserves the main doc drift warning behavior' {
-        $expected = 'cpp-app, cpp-winui-app, dotnet-app, electron, flutter-app, maui-app, node-winui, packaging-cli, rust-app, sparse-app, tauri-app, wpf-app, winui-app, winui-solution, winui-unpackaged-app'
+        $expected = 'cpp-app, cpp-winui-app, dotnet-app, dotnet-file-app, electron, flutter-app, maui-app, node-winui, packaging-cli, rust-app, sparse-app, tauri-app, wpf-app, winui-app, winui-solution, winui-unpackaged-app'
         $sampleWorkflow | Should -Match ([regex]::Escape("sample: [$expected]"))
         (Get-JobText $buildWorkflow 'validate-docs') |
             Should -Match ([regex]::Escape("-FailOnDrift:(`$env:IS_PR -eq 'true')"))
@@ -181,7 +170,7 @@ Describe 'Partial reruns replace only owned artifacts' {
             Get-UploadSteps $sampleWorkflow
             Get-UploadSteps $reportAction
         )
-        $uploads.Count | Should -Be 14
+        $uploads.Count | Should -Be 12
         foreach ($upload in $uploads) {
             $upload | Should -Match '(?m)^        overwrite: true\r?$' -Because $upload
         }
@@ -200,15 +189,6 @@ Describe 'Partial reruns replace only owned artifacts' {
             foreach ($lane in @('Cli-1', 'Cli-2', 'Auxiliary', 'UIAutomation')) {
                 $laneName.Replace('${{ matrix.lane }}', $lane)
             }
-            $shardUploads = @(Get-UploadSteps (Get-JobText $buildWorkflow 'project-arch'))
-            $shardUploads.Count | Should -Be 2
-            $shards = [regex]::Match((Get-JobText $buildWorkflow 'project-arch'), '(?m)^        shard: \[(.+)\]').Groups[1].Value
-            foreach ($shardUpload in $shardUploads) {
-                $shardName = [regex]::Match($shardUpload, '(?m)^        name: (.+?)\r?$').Groups[1].Value
-                foreach ($shard in ($shards -split ', ')) {
-                    $shardName.Replace('${{ matrix.shard }}', $shard)
-                }
-            }
             $sampleUpload = @(Get-UploadSteps (Get-JobText $sampleWorkflow 'test-sample'))
             $sampleUpload.Count | Should -Be 1
             $sampleName = [regex]::Match($sampleUpload[0], '(?m)^        name: (.+?)\r?$').Groups[1].Value
@@ -220,7 +200,7 @@ Describe 'Partial reruns replace only owned artifacts' {
                 [regex]::Match($step, '(?m)^        name: (.+?)\r?$').Groups[1].Value
             }
         )
-        $names.Count | Should -Be 35
+        $names.Count | Should -Be 28
         @($names | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count | Should -Be 0
         @($names | Group-Object | Where-Object Count -GT 1).Count | Should -Be 0
         (Get-JobText $sampleWorkflow 'build') | Should -Match 'if: \$\{\{ !inputs.use-existing-artifacts \}\}'
@@ -267,15 +247,14 @@ Describe 'Failed validation reports without promoting the main baseline' {
 Describe 'Required build check outcomes' {
     BeforeEach {
         $script:results = @{}
-        foreach ($job in @('build-artifacts', 'validate-tests', 'validate-docs', 'e2e-test-ui', 'samples', 'metrics', 'project-arch')) {
+        foreach ($job in @('build-artifacts', 'validate-tests', 'validate-docs', 'e2e-test-ui', 'samples', 'metrics')) {
             $results[$job] = @{ result = 'success' }
         }
-        $results['project-arch-changes'] = @{ result = 'success'; outputs = @{ run = 'true' } }
         $env:IS_PR = 'true'
     }
 
     It 'passes a PR only when every dependency succeeds' {
-        $env:NEEDS_JSON = $results | ConvertTo-Json -Compress -Depth 4
+        $env:NEEDS_JSON = $results | ConvertTo-Json -Compress
         { & $buildGate } | Should -Not -Throw
     }
 
@@ -283,7 +262,7 @@ Describe 'Required build check outcomes' {
         foreach ($job in @($results.Keys)) {
             foreach ($outcome in @('failure', 'cancelled', 'skipped')) {
                 $results[$job].result = $outcome
-                $env:NEEDS_JSON = $results | ConvertTo-Json -Compress -Depth 4
+                $env:NEEDS_JSON = $results | ConvertTo-Json -Compress
                 { & $buildGate } | Should -Throw -ExpectedMessage "*$job did not meet*"
             }
             $results[$job].result = 'success'
@@ -293,27 +272,11 @@ Describe 'Required build check outcomes' {
     It 'allows only the deliberate sample skip on main and manual runs' {
         $env:IS_PR = 'false'
         $results.samples.result = 'skipped'
-        $env:NEEDS_JSON = $results | ConvertTo-Json -Compress -Depth 4
+        $env:NEEDS_JSON = $results | ConvertTo-Json -Compress
         { & $buildGate } | Should -Not -Throw
         $results.'validate-tests'.result = 'skipped'
-        $env:NEEDS_JSON = $results | ConvertTo-Json -Compress -Depth 4
+        $env:NEEDS_JSON = $results | ConvertTo-Json -Compress
         { & $buildGate } | Should -Throw
-    }
-
-    It 'requires the architecture matrix exactly when the change check asks for it' {
-        $results['project-arch-changes'].outputs.run = 'false'
-        $results['project-arch'].result = 'skipped'
-        $env:NEEDS_JSON = $results | ConvertTo-Json -Compress -Depth 4
-        { & $buildGate } | Should -Not -Throw
-
-        $results['project-arch'].result = 'success'
-        $env:NEEDS_JSON = $results | ConvertTo-Json -Compress -Depth 4
-        { & $buildGate } | Should -Throw -ExpectedMessage '*project-arch did not meet*'
-
-        $results['project-arch-changes'].outputs.run = 'true'
-        $results['project-arch'].result = 'skipped'
-        $env:NEEDS_JSON = $results | ConvertTo-Json -Compress -Depth 4
-        { & $buildGate } | Should -Throw -ExpectedMessage '*project-arch did not meet*'
     }
 }
 
