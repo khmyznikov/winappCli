@@ -257,13 +257,21 @@ internal sealed partial class UiAutomationService
         const int Shown = 5;
         var listing = new System.Text.StringBuilder();
         listing.AppendLine($"Selector matched {matches.Count} elements:");
-        var nextId = 0;
         foreach (var candidate in matches.Take(Shown))
         {
             try
             {
-                var suggestion = ToUiElement(candidate, "", ref nextId);
-                listing.AppendLine($"  {suggestion.Type} \"{suggestion.Name}\"  -> {suggestion.Selector ?? "(run inspect for an exact selector)"}");
+                // Identity properties only: describing a candidate must not read its control patterns.
+                var type = GetControlTypeName(candidate.get_CurrentControlType());
+                var name = SafeGetBstr(() => s_getCurrentBstr(candidate, UIA_PROPERTY_ID.UIA_NamePropertyId));
+                var automationId = SafeGetBstr(() => s_getCurrentBstr(candidate, UIA_PROPERTY_ID.UIA_AutomationIdPropertyId));
+                string? slug = null;
+                try
+                {
+                    unsafe { slug = SlugGenerator.GenerateSlugFromSafeArray(type, automationId, name, candidate.GetRuntimeId()); }
+                }
+                catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or InvalidCastException) { }
+                listing.AppendLine($"  {type} \"{name}\"  -> {slug ?? "(run inspect for an exact selector)"}");
             }
             catch (System.Runtime.InteropServices.COMException)
             {
