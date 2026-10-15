@@ -37,6 +37,33 @@ public partial class RealUiAutomationTests
     }
 
     [TestMethod]
+    public async Task QueryFilterOnly_AmbiguousAction_ListsTheFirstMatchesWithSelectors()
+    {
+        using var fx = new UiaTestFixture();
+        var svc = NewService();
+        var target = SessionFor(fx);
+        var query = new UiSelector { ControlType = "Button" };
+        var all = await svc.SearchAsync(target, query, 1000, CancellationToken.None);
+        Assert.IsTrue(all.Length > 5, "The fixture needs more than five buttons to exercise the overflow line.");
+
+        var error = await Assert.ThrowsAsync<UiAmbiguousSelectorException>(() =>
+            svc.FindSingleElementAsync(target, query, requireUnique: true, CancellationToken.None));
+
+        var lines = error.Message.Split('\n').Select(l => l.TrimEnd('\r')).ToArray();
+        Assert.AreEqual($"Selector matched {all.Length} elements:", lines[0]);
+        var listed = lines.Skip(1).Take(5).ToArray();
+        Assert.IsTrue(listed.All(l => l.StartsWith("  Button \"", StringComparison.Ordinal) && l.Contains("  -> ")),
+            error.Message);
+        Assert.AreEqual($"  ... and {all.Length - 5} more", lines[6]);
+        Assert.AreEqual("Use a unique slug from 'inspect' or narrow --root, --type, or --class-name.", lines[7]);
+
+        // Each listed selector must be one the user can pass straight back.
+        var slug = listed[0][(listed[0].LastIndexOf("-> ", StringComparison.Ordinal) + 3)..];
+        var picked = await svc.FindSingleElementAsync(target, new UiSelector { Slug = slug }, requireUnique: true, CancellationToken.None);
+        Assert.AreEqual("Button", picked?.Type);
+    }
+
+    [TestMethod]
     public async Task QueryFilterOnly_TypeAloneUnderRoot_MatchesOnlyThatSubtree()
     {
         using var fx = new UiaTestFixture();

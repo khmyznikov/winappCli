@@ -95,7 +95,7 @@ Use `--root`, `--type`, and `--class-name` together or separately on `search`,
 `get-property`, `get-value`, `wait-for`, and the commands that act on one
 selected element (`invoke`, `set-value`, `click`, `focus`, and so on; not `send-keys --target`).
 `--type` and `--class-name` work without a selector; commands other than `search` then need
-exactly one match. `--root` alone is not a query. For `set-value`, pass `""` as the selector.
+exactly one match, and an ambiguous match lists the first five with their slugs. `--root` alone is not a query. For `set-value`, pass `""` as the selector.
 For `touch` and `pen`, filters can't be combined with `--at` or `--path`. The root must be unique; only its
 descendants match. `wait-for` re-resolves it every poll, including when it is
 initially absent. Type names and literal whole ClassName values ignore case.

@@ -156,9 +156,9 @@ internal sealed partial class UiAutomationService
         }
         if (requireUnique && results.Count > 1)
         {
-            throw new UiAmbiguousSelectorException(
-                $"Selector matched {results.Count} elements. " +
-                "Use a unique slug from 'inspect' or narrow --root, --type, or --class-name.");
+            throw new UiAmbiguousSelectorException(FormatAmbiguousMatches(
+                results.Select(r => r.Element).ToList(),
+                "Use a unique slug from 'inspect' or narrow --root, --type, or --class-name."));
         }
         return results;
 
@@ -247,4 +247,35 @@ internal sealed partial class UiAutomationService
         (selector.ControlType is null || (int)element.get_CurrentControlType() == UiControlTypes.GetId(selector.ControlType))
         && (selector.ClassName is null || string.Equals(
             GetBstr(() => s_getCurrentBstr(element, UIA_PROPERTY_ID.UIA_ClassNamePropertyId)), selector.ClassName, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// The message for a selector that had to match one element but matched several: the count, the first
+    /// five matches with a selector for each, and <paramref name="advice"/>.
+    /// </summary>
+    private static string FormatAmbiguousMatches(List<IUIAutomationElement> matches, string advice)
+    {
+        const int Shown = 5;
+        var listing = new System.Text.StringBuilder();
+        listing.AppendLine($"Selector matched {matches.Count} elements:");
+        var nextId = 0;
+        foreach (var candidate in matches.Take(Shown))
+        {
+            try
+            {
+                var suggestion = ToUiElement(candidate, "", ref nextId);
+                listing.AppendLine($"  {suggestion.Type} \"{suggestion.Name}\"  -> {suggestion.Selector ?? "(run inspect for an exact selector)"}");
+            }
+            catch (System.Runtime.InteropServices.COMException)
+            {
+                // A match that went away while listing must not hide the ambiguity itself.
+                listing.AppendLine("  (element is no longer available)");
+            }
+        }
+        if (matches.Count > Shown)
+        {
+            listing.AppendLine($"  ... and {matches.Count - Shown} more");
+        }
+        listing.Append(advice);
+        return listing.ToString();
+    }
 }

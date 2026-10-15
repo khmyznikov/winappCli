@@ -75,7 +75,8 @@ The selector and every supplied filter must match the **same element**.
 
 `--type` and `--class-name` also work without a selector. `search` lists every element
 they match. Every other command needs exactly one match and fails with
-`ambiguous_selector` otherwise; add `--root` or the other filter to narrow it. Without a
+`ambiguous_selector` otherwise. The error lists the first five matches with a slug for each;
+pass one of those slugs, or add `--root` or the other filter to narrow it. Without a
 selector, `inspect`, `screenshot`, `record`, and `focus` then act on that element instead
 of the whole window. `--root` alone is not a query: give it a selector, `--type`, or
 `--class-name`, or run `inspect <root>` to see everything inside it. `set-value` takes the
