@@ -1788,6 +1788,11 @@ Every verb takes `sandbox` as its first argument. Except for `snapshot`, these c
 can prepare or start the Sandbox. See [Windows Sandbox execution](sandbox-execution.md)
 for prerequisites, permissions, lifecycle, and recovery.
 
+Every `target` verb accepts `--expect-sandbox <GUID>` or `WINAPP_EXPECT_SANDBOX`
+to require an already-running Sandbox with that ID. The option overrides the
+environment variable; a missing or different instance fails without starting one.
+See [expected-instance binding](sandbox-execution.md#using-only-a-sandbox-you-started).
+
 #### target exec
 
 Run a command as the guest user.

@@ -895,14 +895,17 @@ public class WindowsSandboxLifecycleTests
     }
 
     [TestMethod]
-    public async Task Expected_Reconcile_RunningButNotOwned_ReportsNotRunning()
+    public async Task Expected_Reconcile_RunningButNotOwned_ReportsRunningWithoutAnEpoch()
     {
         _expectedSandbox = ExpectedId;
         _cli.SetRunning(ExpectedId);
 
         var result = await NewLifecycle().ReconcileAsync(TestContext.CancellationTokenSource.Token);
 
-        Assert.AreEqual(TargetLifecycleState.Terminated, result.State);
+        Assert.AreEqual(TargetLifecycleState.Running, result.State);
+        Assert.AreEqual(ExpectedId, result.InstanceId);
+        Assert.IsTrue(result.Epoch.IsNone);
+        Assert.IsNull(_stateStore.Read(WindowsSandboxTarget.Default));
     }
 
     [TestMethod]

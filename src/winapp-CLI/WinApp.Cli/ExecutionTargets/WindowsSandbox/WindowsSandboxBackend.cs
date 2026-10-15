@@ -494,7 +494,7 @@ internal sealed class WindowsSandboxBackend(
         // case where connection material on disk describes an agent that is actually there. Anything
         // else has no agent to attach to, and manufacturing one is what this method exists not to do.
         var state = stateStore?.Read(Target);
-        var isWarm = string.Equals(
+        var isWarm = !reconciliation.Epoch.IsNone && string.Equals(
             state?.BootstrappedEpoch, reconciliation.Epoch.Value, StringComparison.Ordinal);
 
         if (!isWarm)

@@ -16,7 +16,7 @@ namespace WinApp.Cli.Helpers;
 internal static class UiHelpRenderer
 {
     internal const int Width = 88;
-    internal const string GlobalOptionsLine = "Global options: -v, -q, --on <target>, --cli-schema   (see winapp --help)";
+    internal const string GlobalOptionsLine = "Global options: -v, -q, --on <target>, --expect-sandbox <guid>, --cli-schema";
 
     private const int MinNameColumn = 18;
     private const int MaxNameColumn = 24;
@@ -52,6 +52,7 @@ internal static class UiHelpRenderer
         AppendRows(sb,
         [
             ("--on <target>", "Run on 'sandbox' (Windows Sandbox) or 'local' (default)"),
+            ("--expect-sandbox <guid>", "Use only this Sandbox ID with --on sandbox"),
             ("-h, --help", "Show help"),
         ]);
         return sb.ToString();

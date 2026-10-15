@@ -116,6 +116,27 @@ public class SandboxAdoptionTests
     }
 
     [TestMethod]
+    public async Task ExpectedId_Inspection_UnpreparedInstanceIsRunningWithoutAttachingOrClaiming()
+    {
+        using var harness = new AdoptionHarness();
+        var id = Guid.NewGuid().ToString();
+        harness.Cli.SetRunning(id);
+        harness.Lifecycle.GetEnvironmentVariable = name =>
+            name == SandboxExpectation.EnvironmentVariable ? id : null;
+        harness.Backend.ReconnectTransport = (_, _, _) =>
+            throw new AssertFailedException("An unmanaged instance has no authenticated agent to reconnect.");
+
+        var attachment = await harness.Backend.TryAttachAsync(TestContext.CancellationToken);
+
+        Assert.IsTrue(attachment.Running);
+        Assert.IsTrue(attachment.Epoch.IsNone);
+        Assert.IsNull(attachment.Connection);
+        Assert.IsNull(harness.ReadState());
+        Assert.IsEmpty(harness.Cli.Operations, "Inspection must not prepare the expected instance.");
+        Assert.IsEmpty(harness.Cli.Stopped);
+    }
+
+    [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
     public async Task ExpectedId_Inspection_UnavailableAgentDoesNotPrepare(bool warm)

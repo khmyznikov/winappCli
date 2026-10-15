@@ -43,9 +43,9 @@ internal enum SandboxInstanceOrigin
 }
 
 /// <summary>Outcome of reconciling persisted state against what is actually running.</summary>
-/// <param name="State">How the managed instance is currently classified.</param>
-/// <param name="InstanceId">The managed instance, when one exists.</param>
-/// <param name="Epoch">Generation identity of that instance.</param>
+/// <param name="State">How the observed instance is currently classified.</param>
+/// <param name="InstanceId">The observed instance, when one has been identified.</param>
+/// <param name="Epoch">Generation identity, or <see cref="ExecutionTargetEpoch.None"/> when not yet managed.</param>
 /// <param name="Revision">State revision the caller must pass when committing.</param>
 internal sealed record SandboxReconciliation(
     TargetLifecycleState State,
@@ -314,8 +314,8 @@ internal sealed class WindowsSandboxLifecycle(
             return new SandboxReconciliation(TargetLifecycleState.Running, managedId, epoch, revision);
         }
 
-        // Running, but winapp has not taken it over yet, so there is no winapp state to report.
-        return new SandboxReconciliation(TargetLifecycleState.Terminated, null, ExecutionTargetEpoch.None, revision);
+        return new SandboxReconciliation(
+            TargetLifecycleState.Running, expectation.InstanceId, ExecutionTargetEpoch.None, revision);
     }
 
     /// <summary>

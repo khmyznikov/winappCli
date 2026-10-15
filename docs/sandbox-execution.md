@@ -77,10 +77,10 @@ guest agent stops answering, winapp may repair it without changing existing pack
 ownership. `target snapshot` remains read-only and reports `attached: false` when the
 agent is unavailable.
 
-Pass only the provider GUID from `wsb list`, not `ExecutionTarget.Epoch`. The option
-does not detect a guest restarted under the same GUID. PowerToys automation must keep
-its existing private generation checks to detect guest restarts. This option does not
-provide owned-session creation or boot-identity guarantees.
+Pass only the provider GUID from `wsb list`, not `ExecutionTarget.Epoch`. This checks
+the Sandbox ID only: use a new GUID for each `wsb start`. Restarting a guest under the
+same GUID is not detected. This option does not provide owned-session creation or
+boot-identity guarantees.
 
 `--expect-sandbox` works with `run`, `unregister`, `ui`, and `target` commands. To apply it
 to every command in a script, set `WINAPP_EXPECT_SANDBOX` to the same value. The option
