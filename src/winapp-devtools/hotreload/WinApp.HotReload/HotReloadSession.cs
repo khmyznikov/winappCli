@@ -190,7 +190,7 @@ internal sealed partial class HotReloadSession
     /// to the assembly, and a build while the app runs overwrites that one. The copy records the copied PDB instead
     /// (or, when that path is longer than the room the build left, a path that doesn't exist, which falls back to it).
     /// </summary>
-    private static void PointToOwnPdb(string assemblyCopy)
+    internal static void PointToOwnPdb(string assemblyCopy)
     {
         var bytes = File.ReadAllBytes(assemblyCopy);
         using (var reader = new System.Reflection.PortableExecutable.PEReader(new MemoryStream(bytes)))

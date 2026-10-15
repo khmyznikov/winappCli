@@ -120,7 +120,18 @@ internal sealed partial class HotReloadSession
                     }
                 }
             }
-            start.Host = XamlCompilerHost.Start(exe, inputs, Path.Combine(markupDirectory, "xaml"), projectDirectory);
+            // Stable connection IDs: the service continues the build's ledger, so it numbers elements as the build did.
+            var outputDirectory = Path.Combine(markupDirectory, "xaml");
+            var ledger = Path.Combine(start.Intermediate, "XamlHotReload");
+            if (Directory.Exists(ledger))
+            {
+                Directory.CreateDirectory(Path.Combine(outputDirectory, "XamlHotReload"));
+                foreach (var file in Directory.EnumerateFiles(ledger))
+                {
+                    File.Copy(file, Path.Combine(outputDirectory, "XamlHotReload", Path.GetFileName(file)), overwrite: true);
+                }
+            }
+            start.Host = XamlCompilerHost.Start(exe, inputs, outputDirectory, projectDirectory);
         }
         catch (Exception ex) when (ex is IOException or JsonException or InvalidOperationException or System.ComponentModel.Win32Exception or System.Xml.XmlException)
         {
@@ -160,8 +171,10 @@ internal sealed partial class HotReloadSession
             }
             if (!pass1.Success || !pass2.Success)
             {
-                _xamlUnavailable = "the XAML compiler service couldn't compile the app as built: " +
-                    string.Join("; ", pass1.Diagnostics.Concat(pass2.Diagnostics).Where(d => d.IsError).Take(3).Select(FormatXaml));
+                // Usually a file saved while the app started (the compile reads what's on disk now): each save's own
+                // compile reports errors, and the next full compile records the type information.
+                Log("the XAML compiler's warm-up compile failed: " +
+                    string.Join("; ", pass1.Diagnostics.Concat(pass2.Diagnostics).Where(d => d.IsError).Take(3).Select(FormatXaml)));
                 return;
             }
             // The service's output should match the build's byte for byte; a difference becomes a change in the first update.
@@ -359,7 +372,7 @@ internal sealed partial class HotReloadSession
     }
 
     /// <summary>"x:Name 'Later' changes from TextBlock to TextBox", for the first named field whose type changes.</summary>
-    private static string? FieldTypeChange(string before, string after)
+    internal static string? FieldTypeChange(string before, string after)
     {
         static Dictionary<string, string> Fields(string text) => CSharpSyntaxTree.ParseText(text).GetRoot().DescendantNodes().OfType<FieldDeclarationSyntax>()
             .SelectMany(f => f.Declaration.Variables.Select(v => (v.Identifier.ValueText, f.Declaration.Type.ToString())))

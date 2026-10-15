@@ -1,0 +1,77 @@
+// Copyright (c) Microsoft Corporation and Contributors. All rights reserved.
+// Licensed under the MIT License.
+
+using System.Reflection.PortableExecutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.Emit;
+
+namespace WinApp.HotReload.Tests;
+
+[TestClass]
+public sealed class CompilerPipelineTests
+{
+    [TestMethod]
+    public void NamedElementWhoseTypeChangesIsReported()
+    {
+        const string before = """
+            partial class MainPage
+            {
+                private global::Microsoft.UI.Xaml.Controls.TextBlock Later;
+                private global::Microsoft.UI.Xaml.Controls.Button Go;
+            }
+            """;
+        const string after = """
+            partial class MainPage
+            {
+                private global::Microsoft.UI.Xaml.Controls.TextBox Later;
+                private global::Microsoft.UI.Xaml.Controls.Button Go;
+            }
+            """;
+
+        Assert.AreEqual("x:Name 'Later' changes from TextBlock to TextBox", HotReloadSession.FieldTypeChange(before, after));
+    }
+
+    [TestMethod]
+    public void NamedElementsAddedOrRemovedAreNotTypeChanges()
+    {
+        const string before = "partial class P { private global::X.TextBlock A; private global::X.Button B; }";
+        const string after = "partial class P { private global::X.TextBlock A; private global::X.Grid C; }";
+
+        Assert.IsNull(HotReloadSession.FieldTypeChange(before, after));
+    }
+
+    [TestMethod]
+    public void BaselineCopyRecordsItsOwnPdb()
+    {
+        var directory = Directory.CreateTempSubdirectory("winapp-pdb-test").FullName;
+        try
+        {
+            // Built "in obj", with a long PDB path recorded, then copied elsewhere as the session does.
+            var obj = Path.Combine(directory, "obj", "x64", "Debug", "net10.0-windows10.0.26100.0", "win-x64");
+            Directory.CreateDirectory(obj);
+            var assembly = Path.Combine(obj, "App.dll");
+            var compilation = CSharpCompilation.Create("App", [CSharpSyntaxTree.ParseText("class C { }")],
+                [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)], new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            using (var pe = File.Create(assembly))
+            using (var pdb = File.Create(Path.ChangeExtension(assembly, ".pdb")))
+            {
+                Assert.IsTrue(compilation.Emit(pe, pdb, options: new EmitOptions(debugInformationFormat: DebugInformationFormat.PortablePdb, pdbFilePath: Path.ChangeExtension(assembly, ".pdb"))).Success);
+            }
+            var copy = Path.Combine(directory, "b", "App.dll");
+            Directory.CreateDirectory(Path.GetDirectoryName(copy)!);
+            File.Copy(assembly, copy);
+
+            HotReloadSession.PointToOwnPdb(copy);
+
+            using var reader = new PEReader(File.OpenRead(copy));
+            var codeView = reader.ReadDebugDirectory().Single(e => e.Type == DebugDirectoryEntryType.CodeView);
+            Assert.AreEqual(Path.ChangeExtension(copy, ".pdb"), reader.ReadCodeViewDebugDirectoryData(codeView).Path);
+            Assert.IsTrue(reader.HasMetadata);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+}
