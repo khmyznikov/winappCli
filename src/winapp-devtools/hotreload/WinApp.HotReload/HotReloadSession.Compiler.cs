@@ -42,6 +42,12 @@ internal sealed partial class HotReloadSession
     /// <summary>The XAML files the compiler was given by the build, by full path.</summary>
     private HashSet<string> _xamlInputs = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>App.xaml's x:Key values, as the app has them (launched with, or last reloaded).</summary>
+    private readonly Dictionary<string, HashSet<string>> _applicationKeys = new(StringComparer.OrdinalIgnoreCase);
+
+    private static HashSet<string> Keys(XElement root) =>
+        root.DescendantsAndSelf().Select(e => e.Attribute(XName.Get("Key", "http://schemas.microsoft.com/winfx/2006/xaml"))?.Value).OfType<string>().ToHashSet(StringComparer.Ordinal);
+
     /// <summary>The app's assembly (metadata only) for pass 2, when its C# changed since the build; null reads the build's.</summary>
     private byte[]? _xamlImage;
     private bool _xamlImageStale;
@@ -61,21 +67,37 @@ internal sealed partial class HotReloadSession
         return document.WithTextLoader(TextLoader.From(TextAndVersion.Create(text, VersionStamp.Create(), path)));
     }
 
-    /// <summary>Starts the XAML compiler and warms it up in the background (the first save waits for it).</summary>
-    private void StartXamlCompiler()
+    /// <summary>The XAML compiler, started before the session exists (see CreateAsync).</summary>
+    private sealed class XamlStart
     {
-        _xamlIntermediate = Project.Documents.Select(d => d.FilePath).OfType<string>()
-            .FirstOrDefault(p => p.EndsWith("XamlTypeInfo.g.cs", StringComparison.OrdinalIgnoreCase)) is { } typeInfo ? Path.GetDirectoryName(typeInfo)! : "";
-        var inputs = _xamlIntermediate.Length > 0 ? Path.Combine(_xamlIntermediate, "input.json") : "";
+        public XamlCompilerHost? Host;
+        public string Intermediate = "";
+        public string? Unavailable;
+        public HashSet<string> Inputs = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, HashSet<string>> ApplicationKeys = new(StringComparer.OrdinalIgnoreCase);
+        public Task<(XamlCompileOutput Pass1, XamlCompileOutput Pass2)?> Warm = Task.FromResult<(XamlCompileOutput, XamlCompileOutput)?>(null);
+    }
+
+    /// <summary>
+    /// Starts the XAML compiler on the inputs the app's build gave it (input.json, next to XamlTypeInfo.g.cs) and warms it
+    /// up in the background with a full compile, as the build ran it: that loads the compiler's references once and
+    /// records which types XamlTypeInfo has, so a later page compile can tell when it needs regenerating.
+    /// </summary>
+    private static XamlStart StartXamlCompiler(string[] cscArgs, string projectDirectory, string markupDirectory)
+    {
+        var start = new XamlStart();
+        var typeInfo = cscArgs.Select(a => a.Trim('"')).FirstOrDefault(a => a.EndsWith("XamlTypeInfo.g.cs", StringComparison.OrdinalIgnoreCase));
+        start.Intermediate = typeInfo is null ? "" : Path.GetDirectoryName(Path.GetFullPath(Path.Combine(projectDirectory, typeInfo)))!;
+        var inputs = start.Intermediate.Length > 0 ? Path.Combine(start.Intermediate, "input.json") : "";
         if (!File.Exists(inputs))
         {
-            _xamlUnavailable = "the XAML compiler's inputs from the app's build (input.json next to XamlTypeInfo.g.cs) weren't found";
-            return;
+            start.Unavailable = "the XAML compiler's inputs from the app's build (input.json next to XamlTypeInfo.g.cs) weren't found";
+            return start;
         }
         if (XamlCompilerHost.Locate() is not { } exe)
         {
-            _xamlUnavailable = $"the XAML compiler service wasn't found (set {XamlCompilerHost.LocationVariable} to a folder with XamlCompiler.exe that supports --serve)";
-            return;
+            start.Unavailable = $"the XAML compiler service wasn't found (set {XamlCompilerHost.LocationVariable} to a folder with XamlCompiler.exe that supports --serve)";
+            return start;
         }
         try
         {
@@ -88,32 +110,54 @@ internal sealed partial class HotReloadSession
                     {
                         if (item.TryGetProperty("ItemSpec", out var spec) && spec.GetString() is { } file)
                         {
-                            _xamlInputs.Add(Path.GetFullPath(Path.Combine(_projectDirectory, file)));
+                            var full = Path.GetFullPath(Path.Combine(projectDirectory, file));
+                            start.Inputs.Add(full);
+                            if (list == "XamlApplications" && File.Exists(full))
+                            {
+                                start.ApplicationKeys[full] = Keys(XDocument.Load(full).Root!);
+                            }
                         }
                     }
                 }
             }
-            _xaml = XamlCompilerHost.Start(exe, inputs, Path.Combine(_markupDirectory, "xaml"), _projectDirectory);
+            start.Host = XamlCompilerHost.Start(exe, inputs, Path.Combine(markupDirectory, "xaml"), projectDirectory);
         }
-        catch (Exception ex) when (ex is IOException or JsonException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        catch (Exception ex) when (ex is IOException or JsonException or InvalidOperationException or System.ComponentModel.Win32Exception or System.Xml.XmlException)
         {
-            _xamlUnavailable = "the XAML compiler service couldn't start: " + ex.Message;
-            return;
+            start.Unavailable = "the XAML compiler service couldn't start: " + ex.Message;
+            return start;
         }
-        _xamlReady = Task.Run(WarmUpXamlCompilerAsync);
+        var host = start.Host;
+        start.Warm = Task.Run<(XamlCompileOutput, XamlCompileOutput)?>(async () =>
+        {
+            var pass1 = await host.Pass1Async(null, CancellationToken.None).ConfigureAwait(false);
+            var pass2 = await host.Pass2Async(null, null, typeInfo: true, CancellationToken.None).ConfigureAwait(false);
+            return (pass1, pass2);
+        });
+        return start;
     }
 
-    /// <summary>
-    /// A full compile, as the build ran it: loads the compiler's references once, and records which types XamlTypeInfo
-    /// has, so a later page compile can tell when it needs regenerating.
-    /// </summary>
-    private async Task WarmUpXamlCompilerAsync()
+    private void UseXamlCompiler(XamlStart start)
+    {
+        _xaml = start.Host;
+        _xamlIntermediate = start.Intermediate;
+        _xamlUnavailable = start.Unavailable;
+        _xamlInputs = start.Inputs;
+        foreach (var (path, keys) in start.ApplicationKeys)
+        {
+            _applicationKeys[path] = keys;
+        }
+        _xamlReady = CheckWarmUpAsync(start.Warm);
+    }
+
+    private async Task CheckWarmUpAsync(Task<(XamlCompileOutput Pass1, XamlCompileOutput Pass2)?> warm)
     {
         try
         {
-            var watch = System.Diagnostics.Stopwatch.StartNew();
-            var pass1 = await _xaml!.Pass1Async(null, CancellationToken.None).ConfigureAwait(false);
-            var pass2 = await _xaml.Pass2Async(null, null, typeInfo: true, CancellationToken.None).ConfigureAwait(false);
+            if (await warm.ConfigureAwait(false) is not var (pass1, pass2))
+            {
+                return;
+            }
             if (!pass1.Success || !pass2.Success)
             {
                 _xamlUnavailable = "the XAML compiler service couldn't compile the app as built: " +
@@ -124,21 +168,26 @@ internal sealed partial class HotReloadSession
             var differs = new List<string>();
             foreach (var (path, text) in pass1.GeneratedText.Concat(pass2.GeneratedText).Where(p => IsGenerated(p.Key)))
             {
-                var document = Project.Documents.FirstOrDefault(d => string.Equals(d.FilePath, InIntermediate(path), StringComparison.OrdinalIgnoreCase));
-                if (document is not null && !(await document.GetTextAsync().ConfigureAwait(false)).ToString().TrimStart('\uFEFF').TrimEnd().Equals(text.TrimStart('\uFEFF').TrimEnd(), StringComparison.Ordinal))
+                var document = _committed.GetProject(_projectId)!.Documents.FirstOrDefault(d => string.Equals(d.FilePath, InIntermediate(path), StringComparison.OrdinalIgnoreCase));
+                if (document is null)
                 {
-                    differs.Add(Path.GetFileName(path));
+                    continue;
+                }
+                var built = (await document.GetTextAsync().ConfigureAwait(false)).ToString().TrimStart('\uFEFF').TrimEnd().Split('\n');
+                var served = text.TrimStart('\uFEFF').TrimEnd().Split('\n');
+                var line = Enumerable.Range(0, Math.Max(built.Length, served.Length)).FirstOrDefault(i => i >= built.Length || i >= served.Length || built[i].TrimEnd() != served[i].TrimEnd(), -1);
+                if (line >= 0)
+                {
+                    differs.Add($"{Path.GetFileName(path)} line {line + 1}: build '{(line < built.Length ? built[line].Trim() : "")}' service '{(line < served.Length ? served[line].Trim() : "")}'");
                 }
             }
-            Log($"XAML compiler warm in {watch.ElapsedMilliseconds} ms ({pass1.ElapsedMs:0} + {pass2.ElapsedMs:0} ms); differs from the build: {(differs.Count == 0 ? "nothing" : string.Join(", ", differs))}");
+            Log($"XAML compiler warm ({pass1.ElapsedMs:0} + {pass2.ElapsedMs:0} ms); differs from the build: {(differs.Count == 0 ? "nothing" : string.Join(", ", differs))}");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _xamlUnavailable = "the XAML compiler service stopped: " + ex.Message;
         }
-    }
-
-    /// <summary>A path in the compiler's output folder, as the same file in the build's obj folder.</summary>
+    }    /// <summary>A path in the compiler's output folder, as the same file in the build's obj folder.</summary>
     private string InIntermediate(string outputPath) =>
         Path.GetFullPath(Path.Combine(_xamlIntermediate, Path.GetRelativePath(_xaml!.OutputDirectory, outputPath)));
 
@@ -176,6 +225,13 @@ internal sealed partial class HotReloadSession
         }
         if (xaml.FirstOrDefault(p => !_xamlInputs.Contains(p)) is { } added)
         {
+            // A new page saved before its code-behind: a rebuild would fail the same way until the class exists.
+            var newClass = XDocument.Parse(await ReadSharedAsync(added, cancellationToken).ConfigureAwait(false)).Root?
+                .Attribute(XName.Get("Class", "http://schemas.microsoft.com/winfx/2006/xaml"))?.Value;
+            if (newClass is not null && (await Project.GetCompilationAsync(cancellationToken).ConfigureAwait(false))!.GetTypeByMetadataName(newClass) is null)
+            {
+                return (null, new SaveResult(Outcome.Waiting, $"{Relative(added)}: waiting for its class {newClass} to be written", [added]));
+            }
             return (null, new SaveResult(Outcome.Restart, $"{Relative(added)} is new since the app was built: a new XAML file takes effect when the app is rebuilt"));
         }
         foreach (var path in xaml)
@@ -244,7 +300,17 @@ internal sealed partial class HotReloadSession
                 : className is not null ? MarkupKind.Component
                 : Relative(path).Replace('/', '\\').EndsWith(@"Themes\Generic.xaml", StringComparison.OrdinalIgnoreCase) ? MarkupKind.Generic
                 : MarkupKind.Dictionary;
-            compiled.Markup.Add(new MarkupPayload { Kind = kind, Uri = UriFor(path), Xbf = bytes, Manifest = new ComponentManifest { ClassName = className ?? "" } });
+            var payload = new MarkupPayload { Kind = kind, Uri = UriFor(path), Xbf = bytes, Manifest = new ComponentManifest { ClassName = className ?? "" } };
+            if (kind == MarkupKind.Application)
+            {
+                var keys = Keys(root);
+                if (_applicationKeys.TryGetValue(path, out var before))
+                {
+                    payload.DroppedKeys = [.. before.Except(keys)];
+                }
+                _applicationKeys[path] = keys;
+            }
+            compiled.Markup.Add(payload);
             _sources[UriFor(path)] = path;
             if (kind == MarkupKind.Component)
             {

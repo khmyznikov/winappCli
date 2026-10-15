@@ -206,7 +206,7 @@ internal static class XamlReload
         s_deferredBinds = [];
         s_settled = [];
         s_savedFiles = request.SavedFiles;
-        s_pageUpdate = Compiler ? PageUpdateStrategies.Get(request.PageUpdate) : null;
+        s_pageUpdate = PageUpdateStrategies.Get(request.PageUpdate);
         CodeAddedItems.LaunchItems(request.LaunchItems);
         try
         {
@@ -222,6 +222,11 @@ internal static class XamlReload
             {
                 ClearErrorInfo();
                 LineMaps[markup.Uri] = markup.LineMap;
+                if (markup.Xbf is { } xbf)
+                {
+                    everything |= ApplyCompiledMarkup(markup, xbf);
+                    continue;
+                }
                 if (markup.Kind == MarkupKind.Component && markup.Manifest.ClassName.Length > 0)
                 {
                     ClassUris[markup.Manifest.ClassName] = markup.Uri;
@@ -248,21 +253,6 @@ internal static class XamlReload
                         ReportError(Describe(ex, markup.Uri));
                         continue;
                     }
-                }
-                if (markup.Xbf is { } xbf)
-                {
-                    // The XAML compiler's own .xbf: the compiled InitializeComponent and Connect do the rest.
-                    Manifests.Remove(markup.Uri);
-                    if (markup.Manifest.ClassName.Length > 0)
-                    {
-                        ClassUris[markup.Manifest.ClassName] = markup.Uri;
-                    }
-                    var binaryResult = s_service!.SetComponentMarkup(markup.Uri, binary: true, xbf);
-                    if (binaryResult < 0)
-                    {
-                        ReportError($"{markup.Uri}: {Marshal.GetExceptionForHR(binaryResult)?.Message}");
-                    }
-                    continue;
                 }
                 if (markup.Kind == MarkupKind.Component)
                 {
@@ -558,6 +548,73 @@ internal static class XamlReload
     }
 
     /// <summary>Re-loads app-level dictionaries merged from <paramref name="uri"/>; window and page dictionaries reload with them.</summary>
+    /// <summary>
+    /// Takes the XAML compiler's .xbf for a markup URI (the compiler pipeline). Pages and controls load it when their
+    /// compiled InitializeComponent runs again; App.xaml's resources are loaded again into the application; a merged
+    /// dictionary is loaded again where it's merged. Returns whether every window must be rebuilt (resources changed).
+    /// </summary>
+    private static bool ApplyCompiledMarkup(MarkupPayload markup, byte[] xbf)
+    {
+        var hr = s_service!.SetComponentMarkup(markup.Uri, binary: true, xbf);
+        if (hr < 0)
+        {
+            ReportError($"{markup.Uri}: {Marshal.GetExceptionForHR(hr)?.Message}");
+            return false;
+        }
+        switch (markup.Kind)
+        {
+            case MarkupKind.Component:
+                // The compiled InitializeComponent and Connect wire it; nothing of the rewrite pipeline's.
+                Manifests.Remove(markup.Uri);
+                if (markup.Manifest.ClassName.Length > 0)
+                {
+                    ClassUris[markup.Manifest.ClassName] = markup.Uri;
+                }
+                return false;
+            case MarkupKind.Application:
+                try
+                {
+                    // Swapping them re-templates controls (a TextBox inside one is briefly gone): what the user typed is read first.
+                    TakeStatesBeforeResourceChange();
+                    var app = Application.Current;
+                    var old = app.Resources;
+                    Application.LoadComponent(app, new Uri(markup.Uri), Microsoft.UI.Xaml.Controls.Primitives.ComponentResourceLocation.Application);
+                    if (!ReferenceEquals(old, app.Resources))
+                    {
+                        // Resources the app's code added (in OnLaunched, say) stay; those the markup dropped go.
+                        KeepMissing(old, app.Resources, markup.DroppedKeys);
+                    }
+                    else
+                    {
+                        foreach (var key in markup.DroppedKeys)
+                        {
+                            old.Remove(key);
+                        }
+                    }
+                }
+                catch (Exception ex) when (ex is COMException or XamlParseException or ArgumentException or InvalidOperationException)
+                {
+                    ReportError(Describe(ex, markup.Uri));
+                    return false;
+                }
+                return true;
+            case MarkupKind.Dictionary:
+                try
+                {
+                    TakeStatesBeforeResourceChange();
+                    ReplaceDictionaries(Application.Current.Resources, new Uri(markup.Uri));
+                }
+                catch (Exception ex) when (ex is COMException or XamlParseException)
+                {
+                    ReportError(Describe(ex, markup.Uri));
+                }
+                return true;
+            default:
+                // A Generic.xaml: the runtime reads it through the override when it looks up a default style.
+                return true;
+        }
+    }
+
     private static void ReplaceDictionaries(ResourceDictionary dictionary, Uri uri)
     {
         var merged = dictionary.MergedDictionaries;
@@ -566,7 +623,11 @@ internal static class XamlReload
             if (merged[i].Source is { } source && string.Equals(AppRelativePath(source), AppRelativePath(uri), StringComparison.OrdinalIgnoreCase))
             {
                 var updated = new ResourceDictionary { Source = uri };
-                KeepMissing(merged[i], updated);
+                if (!Compiler)
+                {
+                    // On the compiler pipeline the dictionary is what its markup defines, as after a restart.
+                    KeepMissing(merged[i], updated);
+                }
                 merged[i] = updated;
             }
             else
@@ -579,12 +640,13 @@ internal static class XamlReload
     /// <summary>
     /// Keys a dictionary no longer defines stay resolvable with their old values until the app restarts, as removed
     /// fields do: a resource renamed where it's defined first doesn't break the markup that still uses the old key.
+    /// <paramref name="dropped"/> (the compiler pipeline) are keys the markup no longer defines: they go, as after a restart.
     /// </summary>
-    private static void KeepMissing(ResourceDictionary old, ResourceDictionary updated)
+    private static void KeepMissing(ResourceDictionary old, ResourceDictionary updated, ICollection<string>? dropped = null)
     {
         foreach (var (key, value) in old.ToList())
         {
-            if (!updated.ContainsKey(key))
+            if (!updated.ContainsKey(key) && !(key is string name && dropped?.Contains(name) == true))
             {
                 try
                 {
@@ -684,7 +746,7 @@ internal static class XamlReload
                         Renavigate(frame, page);
                         UiState.RestoreWhenLoaded((frame.Content as Page)?.Content as FrameworkElement, state, s_dispatcher);
                     }
-                    else if (Compiler && s_pageUpdate is { } strategy && replay.Contains(type))
+                    else if (s_pageUpdate is { } strategy && replay.Contains(type))
                     {
                         var update = new PageUpdate(page, frame, ClassUris.GetValueOrDefault(type) ?? "", s_savedFiles, InPlace, () => Recreate(frame, page),
                             s_notes ?? [], s_restarts ?? [], s_settled ?? []);

@@ -14,8 +14,8 @@ public sealed class PageUpdateStrategyAttribute(string name) : Attribute
 }
 
 /// <summary>
-/// How a live page shows a save of its own XAML or code, when the XAML compiler's output is applied (the "compiler"
-/// pipeline). Windows, user controls, App.xaml and resource dictionaries don't go through it: they're reloaded in place.
+/// How a live page shows a save of its own XAML or code, on either pipeline (WINAPP_HOT_RELOAD_PIPELINE). Windows, user
+/// controls, App.xaml and resource dictionaries don't go through it: they're reloaded in place.
 /// </summary>
 public interface IPageUpdateStrategy
 {

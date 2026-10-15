@@ -70,7 +70,7 @@ internal sealed partial class HotReloadSession
         _enc = enc;
         _baseDirectory = baseDirectory;
         _cscArgs = cscArgs;
-        _markupDirectory = Path.Combine(Path.GetTempPath(), "winapp-hotreload", options.PipeName);
+        _markupDirectory = MarkupDirectory(options.PipeName);
         Directory.CreateDirectory(_markupDirectory);
         // Lets winapp tell this folder from one a killed session left behind.
         File.WriteAllText(Path.Combine(_markupDirectory, "owner.pid"), Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -104,6 +104,9 @@ internal sealed partial class HotReloadSession
     public static async Task<HotReloadSession> CreateAsync(SessionOptions options, CancellationToken cancellationToken)
     {
         var projectDirectory = Path.GetDirectoryName(Path.GetFullPath(options.ProjectFile))!;
+        var cscArgs = ReadCompilerArguments(options.CscArgsFile);
+        // Started first: its warm-up (the app's references, a full compile) overlaps the app's start and the workspace's.
+        var xaml = UseCompiler ? StartXamlCompiler(cscArgs, projectDirectory, MarkupDirectory(options.PipeName)) : null;
         var agent = await AgentClient.ConnectAsync(options.PipeName, options.Token, cancellationToken).ConfigureAwait(false);
         var hello = await agent.SendAsync(new HotReloadRequest { Op = "hello" }, cancellationToken).ConfigureAwait(false);
         if (!hello.Ok)
@@ -114,7 +117,6 @@ internal sealed partial class HotReloadSession
         var assemblies = MefHostServices.DefaultAssemblies.Concat(
             new[] { "Microsoft.CodeAnalysis.Features", "Microsoft.CodeAnalysis.CSharp.Features", "Microsoft.CodeAnalysis.ExternalAccess.HotReload" }.Select(Assembly.Load));
         var workspace = new AdhocWorkspace(MefHostServices.Create(assemblies));
-        var cscArgs = ReadCompilerArguments(options.CscArgsFile);
         var info = CreateProjectInfo(workspace, options.ProjectFile, cscArgs);
         info = info.WithCompilationOutputInfo(info.CompilationOutputInfo.WithAssemblyPath(SnapshotBaseline(info.CompilationOutputInfo.AssemblyPath!, options.PipeName)));
         info = info.WithDocuments(info.Documents.Select(document => AsBuilt(document, options.CscArgsFile, projectDirectory)));
@@ -133,9 +135,21 @@ internal sealed partial class HotReloadSession
 
         session = new HotReloadSession(options, agent, workspace, info.Id, solution, enc, hello.BaseDirectory ?? "", cscArgs) { _xamlReload = hello.XamlReload, XamlReloadUnavailable = hello.XamlReloadUnavailable };
         await session.LoadComponentsAsync(cancellationToken).ConfigureAwait(false);
-        if (UseCompiler)
+        if (xaml is not null)
         {
-            session.StartXamlCompiler();
+            session.UseXamlCompiler(xaml);
+            session._warmUp = Task.Run(async () =>
+            {
+                // Edit and continue's first update compiles everything once; done before the first save asks.
+                try
+                {
+                    await session.UpdatesAsync(cancellationToken).ConfigureAwait(false);
+                    session.Discard();
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                }
+            }, cancellationToken);
         }
         else
         {
@@ -143,6 +157,8 @@ internal sealed partial class HotReloadSession
         }
         return session;
     }
+
+    private static string MarkupDirectory(string pipeName) => Path.Combine(Path.GetTempPath(), "winapp-hotreload", pipeName);
 
     /// <summary>
     /// A copy of the assembly and PDB the running app was built from: edit-and-continue diffs against them, and another

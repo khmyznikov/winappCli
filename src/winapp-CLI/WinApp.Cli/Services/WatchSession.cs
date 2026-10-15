@@ -290,6 +290,10 @@ internal sealed class WatchSession
         $"CustomAfterMicrosoftCommonTargets={_targets}",
         "WinAppHotReloadCapture=true",
         $"WinAppHotReloadOut={_compilerArgs}",
+        // The compiler pipeline applies the XAML compiler's code as .NET hot reload deltas: stable connection IDs keep an
+        // element's generated members when elements are inserted or removed before it.
+        .. string.Equals(Environment.GetEnvironmentVariable("WINAPP_HOT_RELOAD_PIPELINE"), "compiler", StringComparison.OrdinalIgnoreCase)
+            ? new[] { "EnableHotReloadStableConnectionIds=true" } : [],
     ];
 
     public IReadOnlyDictionary<string, string?> Augment(IReadOnlyDictionary<string, string?>? environment)

@@ -131,7 +131,7 @@ internal static class HotReloadAgent
         try
         {
             XamlReload.Compiler = request.Pipeline == "compiler";
-            if (XamlReload.Compiler && PageUpdateStrategies.Get(request.PageUpdate) is null)
+            if (PageUpdateStrategies.Get(request.PageUpdate) is null)
             {
                 return new HotReloadResponse { Error = $"unknown page update strategy '{request.PageUpdate}' (WINAPP_HOT_RELOAD_PAGE_UPDATE): use {string.Join(", ", PageUpdateStrategies.Names.Order())}" };
             }

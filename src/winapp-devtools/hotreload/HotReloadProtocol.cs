@@ -79,8 +79,13 @@ internal sealed class MarkupPayload
     public List<int[]> LineMap { get; set; } = [];
     /// <summary>The markup as the runtime parses it (for a component, already transformed).</summary>
     public string Xaml { get; set; } = "";
-    /// <summary>SPIKE: the XAML compiler's .xbf for the page, sent to the runtime as binary markup instead of <see cref="Xaml"/>.</summary>
+    /// <summary>The XAML compiler's .xbf (the compiler pipeline), sent to the runtime as binary markup instead of <see cref="Xaml"/>.</summary>
     public byte[]? Xbf { get; set; }
+    /// <summary>
+    /// App.xaml on the compiler pipeline: the x:Key values the saved markup no longer defines. Other keys the reloaded
+    /// resources lack were added by the app's code, and are kept.
+    /// </summary>
+    public List<string> DroppedKeys { get; set; } = [];
 }
 
 /// <summary>What the runtime text parser cannot express, applied by the agent after every load of the URI.</summary>
