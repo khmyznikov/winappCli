@@ -15,19 +15,19 @@
     {
       "id": "B",
       "title": "real compiler, page re-initialized in place",
-      "env": { "WINAPP_HOT_RELOAD_PIPELINE": "compiler", "WINAPP_HOT_RELOAD_PAGE_UPDATE": "inplace", "WINAPP_HOT_RELOAD_REAL_COMPILER": "1" },
+      "env": { "WINAPP_HOT_RELOAD_PIPELINE": "compiler", "WINAPP_HOT_RELOAD_PAGE_UPDATE": "inplace" },
       "buildProperties": [ "EnableHotReloadStableConnectionIds=true" ]
     },
     {
       "id": "C",
       "title": "real compiler, page re-created",
-      "env": { "WINAPP_HOT_RELOAD_PIPELINE": "compiler", "WINAPP_HOT_RELOAD_PAGE_UPDATE": "recreate", "WINAPP_HOT_RELOAD_REAL_COMPILER": "1", "WINAPP_HOT_RELOAD_SPIKE_RECREATE": "1" },
+      "env": { "WINAPP_HOT_RELOAD_PIPELINE": "compiler", "WINAPP_HOT_RELOAD_PAGE_UPDATE": "recreate" },
       "buildProperties": [ "EnableHotReloadStableConnectionIds=true" ]
     },
     {
       "id": "D",
       "title": "real compiler, in place plus a shadow copy compared",
-      "env": { "WINAPP_HOT_RELOAD_PIPELINE": "compiler", "WINAPP_HOT_RELOAD_PAGE_UPDATE": "shadow", "WINAPP_HOT_RELOAD_REAL_COMPILER": "1" },
+      "env": { "WINAPP_HOT_RELOAD_PIPELINE": "compiler", "WINAPP_HOT_RELOAD_PAGE_UPDATE": "shadow" },
       "buildProperties": [ "EnableHotReloadStableConnectionIds=true" ]
     }
   ],

@@ -71,11 +71,23 @@ if (-not $ReportOnly) {
             $log = Join-Path $dir 'runner.log'
             Write-Host "[scoreboard] $($a.id) $j ..."
             $clock = [Diagnostics.Stopwatch]::StartNew()
-            try { & pwsh @arguments *>&1 | Tee-Object -FilePath $log | ForEach-Object { Write-Host "  $_" } }
+            # The runner's own output, minus the lock's twice-a-minute "waiting" lines (they stay in the log).
+            $lastWait = [datetime]::MinValue
+            try {
+                & pwsh @arguments *>&1 | Tee-Object -FilePath $log | ForEach-Object {
+                    $line = "$_"
+                    if ($line -match '^\[desktop-lock\] .* waiting ') {
+                        if (((Get-Date) - $lastWait).TotalMinutes -lt 10) { return }
+                        $lastWait = Get-Date
+                    }
+                    Write-Host "  $line"
+                }
+            }
             finally { foreach ($name in $allNames) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) } }
             [pscustomobject]@{
                 Approach = $a.id; Title = $a.title; Journey = $j; Winapp = $cli; WinappVersion = $version
                 Env = $a.env; BuildProperties = @($a.buildProperties); Seconds = [int]$clock.Elapsed.TotalSeconds; Finished = (Get-Date -Format s)
+                XamlCompilerService = $(if ($env:WINAPP_XAML_COMPILER_SERVICE) { $env:WINAPP_XAML_COMPILER_SERVICE } elseif (Test-Path 'C:\hr-shared\xcsvc\LATEST.txt') { "LATEST.txt: $((Get-Content 'C:\hr-shared\xcsvc\LATEST.txt' -Raw).Trim())" })
             } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $dir 'meta.json')
         }
     }

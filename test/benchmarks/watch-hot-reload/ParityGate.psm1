@@ -114,14 +114,24 @@ function Get-ParitySnapshot {
         $element = if ($PagePath -and $path -ne $PagePath) { $path.Substring($PagePath.Length + 1) } elseif ($PagePath) { '(root)' } else { $path }
         $snapshot[$path] = [pscustomobject]@{ Path = $path; Page = $Page; Element = $element; Type = $Node.type; Values = $values; Unreadable = $unreadable }
         $counts = @{}
-        foreach ($child in @($children[$Node.handle])) {
-            if ($null -eq $child) { continue }
+        $kids = @($children[$Node.handle] | Where-Object { $null -ne $_ })
+        if ($Node.type -match '\.(ListView|GridView|ListBox|ItemsControl|ItemsRepeater|FlipView|ComboBox|TreeView)$') {
+            # Item containers are realized and recycled by the list: a collapsed one holds no item, and their order in the
+            # tree isn't the order on screen. Compare the items that are shown, ordered by what they show.
+            $kids = @($kids | Where-Object { -not (Test-Collapsed $_) } | Sort-Object { Get-SubtreeText $_ })
+        }
+        foreach ($child in $kids) {
             $name = if ($child.name -and -not $child.name.StartsWith('__hr_')) { "#$($child.name)" } else { '' }
             $key = (ConvertTo-ShortType $child.type) + $name
             $index = [int]$counts[$key]
             $counts[$key] = $index + 1
             Add-Node $child $path $Page $PagePath ($key + $(if ($index -gt 0) { "[$index]" } else { '' }))
         }
+    }
+    function Test-Collapsed($Row) { return @($Row.fields | Where-Object { $_.name -eq 'Visibility' -and [string]$_.value -eq 'Collapsed' }).Count -gt 0 }
+    function Get-SubtreeText($Row) {
+        $own = @($Row.fields | Where-Object { $_.name -in 'Text', 'Content' -and $_.valueState -in 'value', 'binding' } | ForEach-Object { [string]$_.value })
+        return (@($own) + @($children[$Row.handle] | Where-Object { $null -ne $_ } | ForEach-Object { Get-SubtreeText $_ })) -join '|'
     }
     foreach ($start in $starts) {
         $name = if ($start.name -and -not $start.name.StartsWith('__hr_')) { "#$($start.name)" } else { '' }
