@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System.Text.Json;
+using WinApp.Cli.Services.DevTools.Comments;
 using System.Diagnostics.Tracing;
 using WinApp.Cli.Commands;
 using WinApp.Cli.ExecutionTargets.Abstractions;
@@ -50,6 +51,39 @@ public class ProgramJsonBridgeTests : BaseCommandTests
         using var document = JsonDocument.Parse(stderr);
         Assert.AreEqual(ExecutionTargetErrorCodes.TargetInvalid,
             document.RootElement.GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [TestMethod]
+    public async Task SavedCommentDeletionWithoutApp_RejectsExpectationAndPreservesTheHostStore()
+    {
+        var storePath = Path.Combine(_tempDirectory.FullName, ".winapp", "ui-comments.json");
+        var store = new CommentStore();
+        var comment = new Comment
+        {
+            Id = "cmt_a91f0c31",
+            Text = "preserve this local comment",
+            Status = CommentStatus.Open,
+            CreatedAt = CommentTimestamps.Now(),
+            UpdatedAt = CommentTimestamps.Now(),
+            Anchor = new CommentAnchor
+            {
+                SourceFile = "MainWindow.xaml",
+                Identity = new CommentIdentity { Type = "Button", Name = "SaveButton" },
+            },
+        };
+        store.Add(storePath, comment);
+        var original = File.ReadAllBytes(storePath);
+
+        var (stdout, stderr, exitCode) = await InvokeProgramAsync(
+            ["devtools", "comments", "delete", comment.Id, "--source-root", _tempDirectory.FullName,
+             "--expect-sandbox", "11111111-2222-4333-8444-555555555555", "--json"]);
+
+        Assert.AreEqual(TargetOutput.InvalidCommandLineExitCode, exitCode, "An explicit expectation must not become a host deletion.");
+        CollectionAssert.AreEqual(original, File.ReadAllBytes(storePath));
+        Assert.AreEqual(string.Empty, stderr);
+        using var document = JsonDocument.Parse(stdout);
+        Assert.IsFalse(document.RootElement.GetProperty("ok").GetBoolean());
+        StringAssert.Contains(document.RootElement.GetProperty("error").GetString()!, "--expect-sandbox");
     }
 
     [TestMethod]

@@ -108,6 +108,20 @@ test('buildUiRecordArgs: the expected Sandbox GUID precedes the selector termina
   assert.ok(option < args.indexOf('--'));
 });
 
+test('uiRecord forwards an explicitly empty expected ID for CLI rejection', async () => {
+  const result = await _uiRecordWithCapture(
+    { on: 'sandbox', durationSec: 1, captureScreen: true, expectSandbox: '', selector: 'Save' },
+    async (args) => {
+      const option = args.indexOf('--expect-sandbox');
+      assert.ok(option >= 0, 'an invalid explicit expectation must not disappear');
+      assert.deepEqual(args.slice(option, option + 2), ['--expect-sandbox', '']);
+      assert.ok(option < args.indexOf('--'));
+      return { exitCode: 1, stdout: '', stderr: 'invalid expected Sandbox ID' };
+    }
+  );
+  assert.equal(result.exitCode, 1);
+});
+
 test('buildUiRecordArgs: all options produce correct arg list', () => {
   const opts: UiRecordOptions = {
     app: 'myapp',

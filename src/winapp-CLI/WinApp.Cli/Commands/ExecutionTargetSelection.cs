@@ -269,19 +269,21 @@ internal static class ExecutionTargetSelection
         }
 
         // Under `winapp target` the target is a positional argument the command itself validates.
-        if (!IsTargetAware(parseResult))
+        for (Command? command = parseResult.CommandResult.Command; command is not null;
+             command = command.Parents.OfType<Command>().FirstOrDefault())
         {
-            return null;
+            if (command is TargetCommand)
+            {
+                return null;
+            }
         }
 
-        var target = Resolve(parseResult);
-
-        return target.Kind == ExecutionTargetRef.SandboxKind
+        return IsTargetAware(parseResult) && Resolve(parseResult).Kind == ExecutionTargetRef.SandboxKind
             ? null
             : ExecutionTargetException.Create(
                 ExecutionTargetErrorCodes.TargetInvalid,
-                $"{SandboxExpectation.OptionName} only applies with --on sandbox.",
-                userAction: $"Add --on sandbox, or remove {SandboxExpectation.OptionName}.",
+                $"{SandboxExpectation.OptionName} only applies to commands targeting Windows Sandbox.",
+                userAction: $"Use a command that supports --on sandbox, or remove {SandboxExpectation.OptionName}.",
                 example: $"winapp run . --on sandbox {SandboxExpectation.OptionName} <sandbox-id>").Error;
     }
 

@@ -213,6 +213,8 @@ public class TargetSelectionParserTests : BaseCommandTests
     [DataRow("ui", "inspect", "--on", "sandbox", "--expect-sandbox", SandboxId)]
     [DataRow("target", "snapshot", "sandbox", "--expect-sandbox", SandboxId)]
     [DataRow("target", "exec", "sandbox", "--expect-sandbox", SandboxId, "--", "cmd")]
+    [DataRow("devtools", "comments", "delete", "c1", "--app", "MyApp", "--on", "sandbox", "--expect-sandbox", SandboxId)]
+    [DataRow("devtools", "comments", "update", "c1", "--status", "resolved", "--app", "MyApp", "--on", "sandbox", "--expect-sandbox", SandboxId)]
     public void ExpectSandbox_WithASandboxTarget_IsAccepted(params string[] args)
     {
         var parsed = Parse(args);
@@ -227,9 +229,18 @@ public class TargetSelectionParserTests : BaseCommandTests
     [DataRow("ui", "inspect", "--on", "local", "--expect-sandbox", SandboxId)]
     [DataRow("ui", "inspect", "--on", "sandbox", "--expect-sandbox", "sandbox")]
     [DataRow("ui", "inspect", "--on", "sandbox", "--expect-sandbox", SandboxId + ":ABCDEF")]
+    [DataRow("run", ".", "--on", "sandbox", "--expect-sandbox", "")]
+    [DataRow("target", "record", "sandbox", "--duration-sec", "1", "--expect-sandbox", "")]
+    [DataRow("ui", "record", "--on", "sandbox", "--duration-sec", "1", "--capture-screen", "--expect-sandbox", "")]
+    [DataRow("devtools", "comments", "list", "--expect-sandbox", SandboxId)]
+    [DataRow("devtools", "comments", "get", "c1", "--expect-sandbox", SandboxId)]
+    [DataRow("devtools", "comments", "update", "c1", "--status", "resolved", "--expect-sandbox", SandboxId)]
+    [DataRow("devtools", "comments", "delete", "c1", "--expect-sandbox", SandboxId)]
     public void ExpectSandbox_WithoutASandboxTargetOrMalformed_IsRefused(params string[] args)
     {
-        var error = ExecutionTargetSelection.Validate(Parse(args));
+        var parsed = Parse(args);
+        Assert.IsEmpty(parsed.Errors, string.Join("; ", parsed.Errors.Select(error => error.Message)));
+        var error = ExecutionTargetSelection.Validate(parsed);
 
         Assert.IsNotNull(error, string.Join(' ', args));
         Assert.AreEqual(ExecutionTargetErrorCodes.TargetInvalid, error.Code);
