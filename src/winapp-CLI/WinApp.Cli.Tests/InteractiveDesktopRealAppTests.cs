@@ -360,17 +360,44 @@ public class InteractiveDesktopRealAppTests : IDisposable
     [TestMethod]
     public async Task AReasoningGapHandsOverTheTurnAndForcesReplay()
     {
+        var recordingStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var recorder = StartAgent(OwnerA, WithTarget(
+            "ui", "record", "--duration-sec", "0", "--capture-screen",
+            "-o", Path.Combine(_scratchDirectory, "reasoning-gap.mp4")),
+            redirectStandardInput: true,
+            onErrorLine: line =>
+            {
+                if (line.Contains("\"recording-started\"", StringComparison.Ordinal))
+                {
+                    recordingStarted.TrySetResult();
+                }
+            });
+        await WaitForAgentStateAsync(
+            recorder,
+            s => recordingStarted.Task.IsCompletedSuccessfully
+                && s.Owner?.Key == KeyOf(OwnerA)
+                && s.OwnerCommands.Any(c => c.Pid == recorder.Process.Id && c.Status == UiCommandStatus.Running),
+            "agent A's recording must pin its turn before agent B starts");
+
         await OpenMenuAsOwnerAsync(OwnerA);
 
         var agentB = StartAgent(OwnerB, WithTarget("ui", "click", "btnInvoke"));
         await WaitForAgentStateAsync(
             agentB,
-            s => s.Waiters.Count == 1,
+            s => s.Waiters.Any(w => w.Pid == agentB.Process.Id),
             "agent B must queue while agent A still holds the turn");
 
+        // Child startup can exceed the idle grace on a busy runner. Release the real pin only
+        // after B has queued, so the reasoning gap never depends on process startup speed.
+        Assert.IsTrue(_fixture.IsFileMenuOpen, "the menu must survive while agent B starts and queues");
+        _graceWatch = Stopwatch.StartNew();
+        await recorder.Process.StandardInput.WriteLineAsync();
+        await recorder.Process.StandardInput.FlushAsync();
+        Assert.AreEqual(0, await recorder.Completion.WaitAsync(TimeSpan.FromSeconds(20)),
+            $"agent A's recording must finish before the idle handover. Output: {await recorder.Output}");
+
         // The reasoning gap: agent A issues nothing while its model thinks. The grace is not renewed,
-        // so ownership legitimately transfers. The grace started when A's command completed, not when B
-        // queued, so it is measured from there.
+        // so ownership legitimately transfers after the final pinned command completes.
         Assert.AreEqual(0, await agentB.Completion, $"agent B must acquire the turn after the gap. Output: {await agentB.Output}");
         Assert.IsTrue(
             _graceWatch!.ElapsedMilliseconds >= InteractiveDesktopScheduler.IdleGraceMs - 500,
