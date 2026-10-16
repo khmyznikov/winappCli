@@ -390,11 +390,11 @@ public class InteractiveDesktopRealAppTests : IDisposable
         // Child startup can exceed the idle grace on a busy runner. Release the real pin only
         // after B has queued, so the reasoning gap never depends on process startup speed.
         Assert.IsTrue(_fixture.IsFileMenuOpen, "the menu must survive while agent B starts and queues");
-        _graceWatch = Stopwatch.StartNew();
         await recorder.Process.StandardInput.WriteLineAsync();
         await recorder.Process.StandardInput.FlushAsync();
         Assert.AreEqual(0, await recorder.Completion.WaitAsync(TimeSpan.FromSeconds(20)),
             $"agent A's recording must finish before the idle handover. Output: {await recorder.Output}");
+        _graceWatch = Stopwatch.StartNew();
 
         // The reasoning gap: agent A issues nothing while its model thinks. The grace is not renewed,
         // so ownership legitimately transfers after the final pinned command completes.
