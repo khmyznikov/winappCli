@@ -47,7 +47,6 @@ public class InteractiveDesktopRealAppTests : IDisposable
     private UiaTestFixture _fixture = null!;
     private InteractiveDesktopStateStore _store = null!;
     private InteractiveDesktopLock _coordinator = null!;
-    private Stopwatch? _graceWatch;
     private readonly List<Process> _children = [];
 
     public TestContext TestContext { get; set; } = null!;
@@ -341,7 +340,6 @@ public class InteractiveDesktopRealAppTests : IDisposable
     {
         var (exitCode, output) = await RunAgentAsync(ownerId, WithTarget("ui", "invoke", "File Menu"));
         Assert.AreEqual(0, exitCode, $"the agent's menu-opening command should succeed. Output: {output}");
-        _graceWatch = Stopwatch.StartNew();
 
         // UIA Invoke posts the click; the drop-down appears a moment later.
         var deadline = Stopwatch.StartNew();
@@ -466,7 +464,9 @@ public class InteractiveDesktopRealAppTests : IDisposable
     /// pins, and would leave the assertion below racing the other owner's grace.
     /// </remarks>
     [TestMethod]
-    public async Task AReasoningGapHandsOverTheTurnAndForcesReplay()
+    [DataRow(0)]
+    [DataRow(1000)]
+    public async Task AReasoningGapHandsOverTheTurnAndForcesReplay(int postExitObservationDelayMs)
     {
         var recordingStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var recorder = StartAgent(OwnerA, WithTarget(
@@ -498,23 +498,38 @@ public class InteractiveDesktopRealAppTests : IDisposable
         // Child startup can exceed the idle grace on a busy runner. Release the real pin only
         // after B has queued, so the reasoning gap never depends on process startup speed.
         Assert.IsTrue(_fixture.IsFileMenuOpen, "the menu must survive while agent B starts and queues");
+        long idleDeadline = 0;
         await recorder.Process.StandardInput.WriteLineAsync();
         await recorder.Process.StandardInput.FlushAsync();
+        Assert.IsTrue(await WaitForStateAsync(s =>
+        {
+            if (s.Owner?.Key != KeyOf(OwnerA) || s.OwnerCommands.Count != 0 ||
+                !s.Waiters.Any(w => w.Pid == agentB.Process.Id))
+            {
+                return false;
+            }
+
+            idleDeadline = s.IdleExpiresTick64;
+            return idleDeadline > 0;
+        }), "A's final command must publish an idle deadline while B is queued");
         Assert.AreEqual(0, await recorder.Completion.WaitAsync(TimeSpan.FromSeconds(20)),
             $"agent A's recording must finish before the idle handover. Output: {await recorder.Output}");
-        _graceWatch = Stopwatch.StartNew();
+        // Slow shutdown or output observation must not shorten the scheduler's grace.
+        if (postExitObservationDelayMs > 0)
+        {
+            await Task.Delay(postExitObservationDelayMs);
+        }
 
         // The reasoning gap: agent A issues nothing while its model thinks. The grace is not renewed,
         // so ownership legitimately transfers after the final pinned command completes.
-        Assert.AreEqual(0, await agentB.Completion, $"agent B must acquire the turn after the gap. Output: {await agentB.Output}");
-        Assert.IsTrue(
-            _graceWatch!.ElapsedMilliseconds >= InteractiveDesktopScheduler.IdleGraceMs - 500,
-            $"handover must wait out the {InteractiveDesktopScheduler.IdleGraceMs} ms idle grace, "
-                + $"but took {_graceWatch.ElapsedMilliseconds} ms from agent A's last command");
-
+        Assert.AreEqual(0, await agentB.Completion.WaitAsync(TimeSpan.FromSeconds(20)),
+            $"agent B must acquire the turn after the gap. Output: {await agentB.Output}");
         Assert.IsTrue(
             await WaitForStateAsync(s => s.Owner?.Key == KeyOf(OwnerB), timeoutMs: 5_000),
             "the turn must transfer to agent B after agent A's grace expires");
+        var handover = ReadState();
+        Assert.IsGreaterThanOrEqualTo(idleDeadline, handover.TurnStartedTick64,
+            $"B's turn at {handover.TurnStartedTick64} must not precede A's idle deadline {idleDeadline}");
 
         var menuGone = Stopwatch.StartNew();
         while (menuGone.ElapsedMilliseconds < 5_000 && _fixture.IsFileMenuOpen)
