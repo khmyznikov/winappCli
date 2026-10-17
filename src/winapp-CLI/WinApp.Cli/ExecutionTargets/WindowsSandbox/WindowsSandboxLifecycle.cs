@@ -137,12 +137,13 @@ internal sealed class WindowsSandboxLifecycle(
     /// <summary>Clock seam, so reconciliation bounds are exercised without real time passing.</summary>
     internal Func<DateTimeOffset> UtcNow { get; set; } = () => DateTimeOffset.UtcNow;
 
-    /// <summary>Environment seam for <see cref="SandboxExpectation.EnvironmentVariable"/>.</summary>
-    internal Func<string, string?> GetEnvironmentVariable { get; set; } = Environment.GetEnvironmentVariable;
+    /// <summary>The invocation's resolved expectation; standalone callers use the environment.</summary>
+    internal Func<SandboxExpectation?> GetExpectation { get; set; } =
+        () => SandboxExpectation.FromEnvironment(Environment.GetEnvironmentVariable);
 
     /// <summary>The Sandbox the caller requires, or null when any Sandbox may be used.</summary>
     /// <exception cref="ExecutionTargetException">The expectation is set but malformed.</exception>
-    public SandboxExpectation? CurrentExpectation() => SandboxExpectation.FromEnvironment(GetEnvironmentVariable);
+    public SandboxExpectation? CurrentExpectation() => GetExpectation();
 
     /// <summary>
     /// Classifies the managed instance by comparing persisted state against <c>wsb list</c>.

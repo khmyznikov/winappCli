@@ -171,8 +171,8 @@ public class SandboxAdoptionTests
                 WasPackaged = true,
             },
             expectedRevision: 0);
-        harness.Lifecycle.GetEnvironmentVariable = name =>
-            name == SandboxExpectation.EnvironmentVariable && expectedId ? id : null;
+        harness.Lifecycle.GetExpectation = () => expectedId
+            ? SandboxExpectation.Parse(id, SandboxExpectation.OptionName) : null;
         harness.Backend.ReconnectTransport = (_, _, _) =>
             throw ExecutionTargetException.Create(ExecutionTargetErrorCodes.TransportFailed, "Agent stopped");
         var developmentModeSteps = harness.Cli.Operations.Count(op =>
@@ -202,8 +202,7 @@ public class SandboxAdoptionTests
         harness.Cli.SetRunning(id);
         await harness.RunUntilAgentLaunchAsync(TestContext.CancellationToken);
         harness.MarkBootstrapped();
-        harness.Lifecycle.GetEnvironmentVariable = name =>
-            name == SandboxExpectation.EnvironmentVariable ? id : null;
+        harness.Lifecycle.GetExpectation = () => SandboxExpectation.Parse(id, SandboxExpectation.OptionName);
         harness.Backend.ReconnectTransport = (_, _, _) =>
             throw ExecutionTargetException.Create(ExecutionTargetErrorCodes.TransportFailed, "Connect timed out");
 
@@ -216,8 +215,7 @@ public class SandboxAdoptionTests
         using var harness = new AdoptionHarness();
         var id = Guid.NewGuid().ToString();
         harness.Cli.SetRunning(id);
-        harness.Lifecycle.GetEnvironmentVariable = name =>
-            name == SandboxExpectation.EnvironmentVariable ? id : null;
+        harness.Lifecycle.GetExpectation = () => SandboxExpectation.Parse(id, SandboxExpectation.OptionName);
         harness.Backend.ReconnectTransport = (_, _, _) =>
             throw new AssertFailedException("An unmanaged instance has no authenticated agent to reconnect.");
 
@@ -245,8 +243,7 @@ public class SandboxAdoptionTests
             harness.MarkBootstrapped();
         }
         var state = harness.ReadState()!;
-        harness.Lifecycle.GetEnvironmentVariable = name =>
-            name == SandboxExpectation.EnvironmentVariable ? id : null;
+        harness.Lifecycle.GetExpectation = () => SandboxExpectation.Parse(id, SandboxExpectation.OptionName);
         harness.Backend.ReconnectTransport = (_, _, _) =>
             throw ExecutionTargetException.Create(ExecutionTargetErrorCodes.TransportFailed, "Replacement guest");
         var operations = harness.Cli.Operations.Count;
@@ -268,8 +265,7 @@ public class SandboxAdoptionTests
         harness.Cli.SetRunning(id);
         await harness.RunUntilAgentLaunchAsync(TestContext.CancellationToken);
         var state = harness.ReadState()!;
-        harness.Lifecycle.GetEnvironmentVariable = name =>
-            name == SandboxExpectation.EnvironmentVariable ? id : null;
+        harness.Lifecycle.GetExpectation = () => SandboxExpectation.Parse(id, SandboxExpectation.OptionName);
         harness.Backend.ReconnectTransport = (_, _, _) =>
             throw new AssertFailedException("An interrupted first bootstrap has no warm agent to reconnect.");
 
@@ -295,8 +291,7 @@ public class SandboxAdoptionTests
         await harness.RunUntilAgentLaunchAsync(TestContext.CancellationToken);
         harness.MarkBootstrapped();
         var before = harness.ReadState()!;
-        harness.Lifecycle.GetEnvironmentVariable = name =>
-            name == SandboxExpectation.EnvironmentVariable ? id : null;
+        harness.Lifecycle.GetExpectation = () => SandboxExpectation.Parse(id, SandboxExpectation.OptionName);
         var operations = harness.Cli.Operations.Count;
         var enumerations = harness.Cli.ListCalls;
         var pair = new LoopbackTransportPair();
@@ -334,8 +329,7 @@ public class SandboxAdoptionTests
         harness.Cli.SetRunning(id);
         await harness.RunUntilAgentLaunchAsync(TestContext.CancellationToken);
         harness.MarkBootstrapped();
-        harness.Lifecycle.GetEnvironmentVariable = name =>
-            name == SandboxExpectation.EnvironmentVariable ? id : null;
+        harness.Lifecycle.GetExpectation = () => SandboxExpectation.Parse(id, SandboxExpectation.OptionName);
         var operations = harness.Cli.Operations.Count;
         var before = harness.ReadState()!;
         harness.Backend.ReconnectTransport = (_, _, _) =>
@@ -386,12 +380,17 @@ public class SandboxAdoptionTests
     }
 
     [TestMethod]
-    public async Task WarmReconnect_AuthenticatesCachedGenerationWithoutEnumeratingOrMutating()
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task WarmReconnect_AuthenticatesCachedGenerationWithoutEnumeratingOrMutating(bool expected)
     {
         using var harness = new AdoptionHarness();
-        harness.Cli.SetRunning(ManualInstanceId);
+        var id = Guid.NewGuid().ToString();
+        harness.Cli.SetRunning(id);
         await harness.RunUntilAgentLaunchAsync(TestContext.CancellationToken);
         harness.MarkBootstrapped();
+        harness.Lifecycle.GetExpectation = () => expected
+            ? SandboxExpectation.Parse(id, SandboxExpectation.OptionName) : null;
         var before = harness.ReadState()!;
         var enumerations = harness.Cli.ListCalls;
         var operations = harness.Cli.Operations.Count;
@@ -438,16 +437,23 @@ public class SandboxAdoptionTests
     }
 
     [TestMethod]
-    [DataRow("bootstrap")]
-    [DataRow("nonce")]
-    [DataRow("instance")]
-    [DataRow("address")]
-    public async Task WarmReconnect_IncompleteOrDifferentOwnership_DoesNotConnect(string changed)
+    [DataRow("bootstrap", false)]
+    [DataRow("bootstrap", true)]
+    [DataRow("nonce", false)]
+    [DataRow("nonce", true)]
+    [DataRow("instance", false)]
+    [DataRow("instance", true)]
+    [DataRow("address", false)]
+    [DataRow("address", true)]
+    public async Task WarmReconnect_IncompleteOrDifferentOwnership_DoesNotConnect(string changed, bool expected)
     {
         using var harness = new AdoptionHarness();
-        harness.Cli.SetRunning(ManualInstanceId);
+        var id = Guid.NewGuid().ToString();
+        harness.Cli.SetRunning(id);
         await harness.RunUntilAgentLaunchAsync(TestContext.CancellationToken);
         harness.MarkBootstrapped();
+        harness.Lifecycle.GetExpectation = () => expected
+            ? SandboxExpectation.Parse(id, SandboxExpectation.OptionName) : null;
         var state = harness.ReadState()!;
         harness.WriteState(changed switch
         {

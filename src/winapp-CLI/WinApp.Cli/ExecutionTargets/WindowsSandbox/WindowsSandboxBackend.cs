@@ -427,15 +427,10 @@ internal sealed class WindowsSandboxBackend(
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        // The shortcut trusts saved state without listing what is running, so it cannot tell the
-        // expected Sandbox from one that replaced it. The authoritative path still reconnects warm.
-        if (lifecycle.CurrentExpectation() is not null)
-        {
-            return null;
-        }
-
+        var expectation = lifecycle.CurrentExpectation();
         var state = stateStore?.Read(Target);
         if (state?.InstanceId is not { } instanceId ||
+            (expectation is not null && !expectation.IsInstance(instanceId)) ||
             string.IsNullOrWhiteSpace(instanceId) ||
             string.IsNullOrWhiteSpace(state.BootNonce) ||
             string.IsNullOrWhiteSpace(state.GuestAddress))

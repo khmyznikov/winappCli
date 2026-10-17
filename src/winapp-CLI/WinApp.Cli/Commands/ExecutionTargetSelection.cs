@@ -247,6 +247,21 @@ internal static class ExecutionTargetSelection
             : null;
     }
 
+    /// <summary>Whether this invocation routes to Sandbox through a selector or the target namespace.</summary>
+    public static bool TargetsSandbox(ParseResult parseResult)
+    {
+        for (Command? command = parseResult.CommandResult.Command; command is not null;
+             command = command.Parents.OfType<Command>().FirstOrDefault())
+        {
+            if (command is TargetCommand)
+            {
+                return true;
+            }
+        }
+
+        return IsTargetAware(parseResult) && Resolve(parseResult).Kind == ExecutionTargetRef.SandboxKind;
+    }
+
     /// <summary>
     /// <c>--expect-sandbox</c> constrains which Sandbox is used, so it is only meaningful where a
     /// Sandbox is the target. Accepting it with <c>--on local</c> would look like a safety check
@@ -268,17 +283,7 @@ internal static class ExecutionTargetSelection
             return ex.Error;
         }
 
-        // Under `winapp target` the target is a positional argument the command itself validates.
-        for (Command? command = parseResult.CommandResult.Command; command is not null;
-             command = command.Parents.OfType<Command>().FirstOrDefault())
-        {
-            if (command is TargetCommand)
-            {
-                return null;
-            }
-        }
-
-        return IsTargetAware(parseResult) && Resolve(parseResult).Kind == ExecutionTargetRef.SandboxKind
+        return TargetsSandbox(parseResult)
             ? null
             : ExecutionTargetException.Create(
                 ExecutionTargetErrorCodes.TargetInvalid,

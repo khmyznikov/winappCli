@@ -28,10 +28,13 @@ internal sealed record SandboxExpectation(string InstanceId, string Source)
     public const string OptionName = "--expect-sandbox";
 
     /// <summary>
-    /// The environment variable. <c>--expect-sandbox</c> is copied into it before dispatch, so the
-    /// option takes precedence and the lifecycle has a single place to read.
+    /// The environment variable, used when <c>--expect-sandbox</c> is not supplied.
     /// </summary>
     public const string EnvironmentVariable = "WINAPP_EXPECT_SANDBOX";
+
+    /// <summary>Resolves the option before the environment, preserving its source.</summary>
+    public static SandboxExpectation? Resolve(string? optionValue, Func<string, string?> getEnvironmentVariable) =>
+        optionValue is not null ? Parse(optionValue, OptionName) : FromEnvironment(getEnvironmentVariable);
 
     /// <summary>Reads the current expectation, or null when none is set.</summary>
     /// <exception cref="ExecutionTargetException">The value is set but malformed.</exception>

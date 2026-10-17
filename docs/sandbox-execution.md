@@ -90,9 +90,10 @@ the Sandbox ID only: use a new GUID for each `wsb start`. Restarting a guest und
 same GUID is not detected. This option does not provide owned-session creation or
 boot-identity guarantees.
 
-`--expect-sandbox` works with `run`, `unregister`, `ui`, and `target` commands. To apply it
+`--expect-sandbox` works with `run`, `unregister`, `ui`, `devtools`, and `target` commands. To apply it
 to every command in a script, set `WINAPP_EXPECT_SANDBOX` to the same value. The option
-overrides the environment variable.
+overrides the environment variable without changing it or exporting the flag to child
+processes. Invalid IDs are rejected before host builds or Sandbox prerequisite checks.
 
 ## Running and rebuilding
 

@@ -200,8 +200,7 @@ public class WindowsSandboxLifecycleTests
         var lifecycle = new WindowsSandboxLifecycle(_cli, _stateStore, _progress)
         {
             UtcNow = () => _now,
-            GetEnvironmentVariable = name =>
-                name == SandboxExpectation.EnvironmentVariable ? _expectedSandbox : null,
+            GetExpectation = () => SandboxExpectation.FromEnvironment(_ => _expectedSandbox),
         };
 
         lifecycle.Delay = (delay, _) =>
@@ -935,6 +934,40 @@ public class WindowsSandboxLifecycleTests
 
         Assert.AreEqual(ExecutionTargetErrorCodes.TargetInvalid, ex.Error.Code);
         Assert.AreEqual(SandboxExpectation.EnvironmentVariable, ex.Error.Context!["source"]);
+    }
+
+    [TestMethod]
+    public void Expectation_OptionOverridesEnvironmentWithoutReadingOrChangingIt()
+    {
+        var expectation = SandboxExpectation.Resolve($" {ExpectedId} ", _ =>
+            throw new AssertFailedException("An explicit option must not read the environment."));
+
+        Assert.IsNotNull(expectation);
+        Assert.AreEqual(ExpectedId, expectation.InstanceId);
+        Assert.AreEqual(SandboxExpectation.OptionName, expectation.Source);
+        var error = Assert.ThrowsExactly<ExecutionTargetException>(() => expectation.RequireOnlyRunning([]));
+        Assert.AreEqual(SandboxExpectation.OptionName, error.Error.Context!["source"]);
+    }
+
+    [TestMethod]
+    public void Expectation_EnvironmentRetainsItsSource()
+    {
+        var expectation = SandboxExpectation.Resolve(null, _ => ExpectedId);
+
+        Assert.IsNotNull(expectation);
+        Assert.AreEqual(SandboxExpectation.EnvironmentVariable, expectation.Source);
+        var error = Assert.ThrowsExactly<ExecutionTargetException>(() => expectation.RequireOnlyRunning([]));
+        Assert.AreEqual(SandboxExpectation.EnvironmentVariable, error.Error.Context!["source"]);
+    }
+
+    [TestMethod]
+    public void Expectation_MalformedOptionDoesNotFallBackToAValidEnvironment()
+    {
+        var error = Assert.ThrowsExactly<ExecutionTargetException>(
+            () => SandboxExpectation.Resolve("not-a-guid", _ => ExpectedId));
+
+        Assert.AreEqual(ExecutionTargetErrorCodes.TargetInvalid, error.Error.Code);
+        Assert.AreEqual(SandboxExpectation.OptionName, error.Error.Context!["source"]);
     }
 
     [TestMethod]

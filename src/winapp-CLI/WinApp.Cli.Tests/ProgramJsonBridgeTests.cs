@@ -6,6 +6,7 @@ using WinApp.Cli.Services.DevTools.Comments;
 using System.Diagnostics.Tracing;
 using WinApp.Cli.Commands;
 using WinApp.Cli.ExecutionTargets.Abstractions;
+using WinApp.Cli.ExecutionTargets.WindowsSandbox;
 using WinApp.Cli.Helpers;
 
 namespace WinApp.Cli.Tests;
@@ -23,6 +24,72 @@ namespace WinApp.Cli.Tests;
 [DoNotParallelize]
 public class ProgramJsonBridgeTests : BaseCommandTests
 {
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task MalformedSandboxEnvironment_IsRejectedBeforeHostChecks(bool run)
+    {
+        var original = Environment.GetEnvironmentVariable(SandboxExpectation.EnvironmentVariable);
+        Environment.SetEnvironmentVariable(SandboxExpectation.EnvironmentVariable, "not-a-provider-guid");
+        try
+        {
+            var arguments = run
+                ? new[] { "run", _tempDirectory.FullName, "--no-build", "--on", "sandbox", "--json" }
+                : ["target", "snapshot", "sandbox", "--json"];
+            var (stdout, stderr, exitCode) = await InvokeProgramAsync(arguments);
+
+            Assert.AreEqual(TargetOutput.InvalidCommandLineExitCode, exitCode);
+            StringAssert.Contains(stdout + stderr, SandboxExpectation.EnvironmentVariable);
+            StringAssert.Contains(stdout + stderr, "provider GUID");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(SandboxExpectation.EnvironmentVariable, original);
+        }
+    }
+
+    [TestMethod]
+    public async Task SandboxFlag_DoesNotChangeTheEnvironmentInheritedByHostBuilds()
+    {
+        const string originalValue = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+        var original = Environment.GetEnvironmentVariable(SandboxExpectation.EnvironmentVariable);
+        Environment.SetEnvironmentVariable(SandboxExpectation.EnvironmentVariable, originalValue);
+        try
+        {
+            var (_, _, exitCode) = await InvokeProgramAsync(
+                ["run", _tempDirectory.FullName, "--no-build", "--on", "sandbox", "--json",
+                 "--expect-sandbox", "11111111-2222-4333-8444-555555555555"]);
+
+            Assert.AreNotEqual(0, exitCode, "The empty test directory is not a runnable project.");
+            Assert.AreEqual(originalValue, Environment.GetEnvironmentVariable(SandboxExpectation.EnvironmentVariable));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(SandboxExpectation.EnvironmentVariable, original);
+        }
+    }
+
+    [TestMethod]
+    [DataRow("ui", "--help")]
+    [DataRow("devtools", "--help")]
+    [DataRow("target", "--help")]
+    public async Task MalformedSandboxEnvironment_DoesNotBreakHelp(params string[] arguments)
+    {
+        var original = Environment.GetEnvironmentVariable(SandboxExpectation.EnvironmentVariable);
+        Environment.SetEnvironmentVariable(SandboxExpectation.EnvironmentVariable, "not-a-provider-guid");
+        try
+        {
+            var (_, stderr, exitCode) = await InvokeProgramAsync(arguments);
+
+            Assert.AreEqual(0, exitCode);
+            Assert.AreEqual(string.Empty, stderr);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(SandboxExpectation.EnvironmentVariable, original);
+        }
+    }
+
     [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
