@@ -93,6 +93,14 @@ static const wchar_t* OriginChip(const DevToolsCardRow& r)
 
 static const wchar_t* const kAddCommentHint = L"Enter to save \u00B7 Shift+Enter for a new line \u00B7 Esc to close";
 
+// Rebuilding the properties pane (selecting another element, or the element disappearing) recreates the comment
+// box. Text typed there but not saved is kept here so the rebuild never discards it: it comes back when the same
+// element is selected again, and is offered for copying when the element is gone.
+struct CommentBoxSaved { std::wstring id, text; };
+static std::map<InstanceHandle, std::wstring> g_commentDrafts; // unsaved text, per element
+static winrt::weak_ref<DevToolsXC::TextBox> g_commentBox;
+static std::shared_ptr<CommentBoxSaved> g_commentBoxSaved; // what the live box last loaded or saved
+
 // Each property is its own named row so filtering, virtualization, and per-row actions can target one element.
 static std::wstring BuildPropsFragment(const std::wstring& type, const std::wstring& name,
                                        const std::wstring& label, const std::wstring& breadcrumb,
@@ -392,6 +400,66 @@ static void ShowPaneNotice(const wchar_t* text)
     }
 }
 
+// Call before the pane is rebuilt, while g_selWire still names the element the box belongs to.
+static void StashCommentDraft()
+{
+    auto box = g_commentBox.get();
+    g_commentBox = nullptr;
+    if (!box || !g_selWire) return;
+    try {
+        // A read-only box is mid-save: the writer already has this text, so it is not an unsaved draft.
+        if (box.IsReadOnly()) return;
+        std::wstring value(box.Text());
+        const bool unchanged = g_commentBoxSaved && DevToolsCommentText::Unchanged(value, g_commentBoxSaved->text);
+        if (!DevToolsCommentText::IsBlank(value) && !unchanged) g_commentDrafts[g_selWire] = std::move(value);
+        else g_commentDrafts.erase(g_selWire);
+    } catch (const winrt::hresult_error&) {}
+}
+
+// The element-gone notice, plus the unsaved comment and a button that copies it. The element can't take the
+// comment any more, so this is the user's only way to keep what they typed.
+static void ShowCommentDraftNotice(const wchar_t* text, const std::wstring& draft)
+{
+    if (!g_ctx.propsHostChildren) return;
+    std::wstring m = L"<StackPanel xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\""
+                     L" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" Margin=\"12,12,12,12\" Spacing=\"8\">"
+                     L"<TextBlock" DT_FG_SECONDARY L" FontSize=\"12\" TextWrapping=\"Wrap\" Text=\"";
+    m += DevToolsXmlEscape(text);
+    m += L" Your comment wasn't saved. Copy it so you can add it to another element.\"/>"
+         L"<TextBox x:Name=\"DraftText\" IsReadOnly=\"True\" AcceptsReturn=\"True\" TextWrapping=\"Wrap\" MaxHeight=\"120\""
+         L" FontSize=\"12\" AutomationProperties.Name=\"Unsaved comment\""
+         L" AutomationProperties.AutomationId=\"WinAppDevToolsUnsavedComment\"/>"
+         L"<Button x:Name=\"DraftCopy\" Content=\"Copy comment\" Padding=\"8,3\" FontSize=\"12\""
+         L" AutomationProperties.AutomationId=\"WinAppDevToolsCopyUnsavedComment\"/>"
+         L"<TextBlock x:Name=\"DraftStatus\"" DT_FG_SECONDARY L" FontSize=\"12\" AutomationProperties.LiveSetting=\"Polite\"/>"
+         L"</StackPanel>";
+    IInspectable* frag = nullptr;
+    if (FAILED(LoadMarkupWin(m, &frag)) || !frag) {
+        DevToolsOverlayLog(L"route1.props draft notice FAILED to load");
+        ShowPaneNotice(text);
+        return;
+    }
+    try {
+        winrt::Windows::Foundation::IInspectable object{ nullptr };
+        winrt::copy_from_abi(object, frag);
+        auto root = object.as<DevToolsX::FrameworkElement>();
+        auto box = root.FindName(L"DraftText").try_as<DevToolsXC::TextBox>();
+        auto copy = root.FindName(L"DraftCopy").try_as<DevToolsXC::Button>();
+        auto status = root.FindName(L"DraftStatus").try_as<DevToolsXC::TextBlock>();
+        if (box) box.Text(draft);
+        if (copy && status) {
+            copy.Click([draft, status](auto&&, auto&&) {
+                status.Text(CopyTextToClipboard(draft) ? L"Copied." : L"Couldn't copy. Select the text and press Ctrl+C.");
+            });
+        }
+        DevToolsVecAppend(g_ctx.propsHostChildren, reinterpret_cast<IInspectable*>(winrt::get_abi(root.as<DevToolsX::UIElement>())));
+    } catch (const winrt::hresult_error& e) {
+        DevToolsOverlayLog(L"route1.props draft notice wiring failed hr=0x%08X", e.code().value);
+        ShowPaneNotice(text);
+    }
+    frag->Release();
+}
+
 // Debounce for the live tree refresh. DevToolsTreeWatch already coalesces a burst of mutations into one
 // delivery, but a navigation is several bursts across several dispatcher turns, and a row rebuild is far more
 // expensive than a notification. Re-arming the SAME timer id resets its elapsed time, so N notifications
@@ -491,12 +559,21 @@ static void OnAppTreeChanged()
     if (live) return;
     DevToolsOverlayLog(L"route1.treechange selected wire %llu is gone -> dropping the selection",
                   (unsigned long long)g_selWire);
+    const InstanceHandle gone = g_selWire;
+    StashCommentDraft();
     g_selWire = 0;
     g_selectedWire = 0;
     LiveUnwatch();
     SelectRowVisual(nullptr);
     ShowPropsForNode(0, L"(no selection)", L"", true);
-    ShowPaneNotice(L"The selected element is gone. The app navigated or removed it.");
+    static const wchar_t* const kGone = L"The selected element is gone. The app navigated or removed it.";
+    if (auto it = gone ? g_commentDrafts.find(gone) : g_commentDrafts.end(); it != g_commentDrafts.end()) {
+        const std::wstring draft = std::move(it->second);
+        g_commentDrafts.erase(it);
+        ShowCommentDraftNotice(kGone, draft);
+    } else {
+        ShowPaneNotice(kGone);
+    }
 }
 
 
@@ -656,28 +733,29 @@ static void RebuildExpansion(void* rowFe, const DevToolsCardRow& r, const std::w
 
 static bool RefreshCommittedValue(const std::wstring& prop);
 
-static bool FocusExpansionEditor(void* rowFe, const std::wstring& path);
-
 static void ApplyRowExpansionState(void* rowFe, const std::wstring& path, bool open);
 
 struct RowExpandSink : DevToolsSinkBase
 {
+    ~RowExpandSink() { if (rowFe) reinterpret_cast<IUnknown*>(rowFe)->Release(); }
+
     virtual HRESULT STDMETHODCALLTYPE Invoke(void*, void*)
     {
         if (gen != g_route1Gen || wire != g_selWire || !rowFe || !row) return S_OK;
-        const bool wantOpen = wantsEditor ? true : !PropIsExpanded(row->name);
+        const bool wantOpen = open;
         if (wantOpen) {
             // The row is a snapshot; opening it reads the property live, unless a write is still unconfirmed.
             const bool opening = !PropIsExpanded(row->name);
             if (opening && g_pendingWrites.empty() && g_pendingKind.empty() && RefreshCommittedValue(path)) {
                 RebuildExpansion(rowFe, ExpansionRow(), path, edit);
             } else if (!EnsureExpansion(rowFe, ExpansionRow(), path, edit)) {
+                ApplyRowExpansionState(rowFe, path, false);
+                SetStatusText(L"Couldn't open " + path);
                 return S_OK;
             }
         }
         PropSetExpanded(row->name, wantOpen);
         ApplyRowExpansionState(rowFe, path, wantOpen);
-        if (wantOpen && wantsEditor) FocusExpansionEditor(rowFe, path);
         return S_OK;
     }
     const DevToolsCardRow& ExpansionRow() const
@@ -685,39 +763,37 @@ struct RowExpandSink : DevToolsSinkBase
         const auto* current = wire == g_selWire ? FindPropertyRow(g_propRows, path) : nullptr;
         return current ? *current : *row;
     }
-    void Init(std::shared_ptr<const DevToolsCardRow> r, const std::wstring& p, int e, void* fe, bool editor)
+    void Init(std::shared_ptr<const DevToolsCardRow> r, const std::wstring& p, int e, void* fe, bool expanding)
     {
-        row = std::move(r); path = p; edit = e; rowFe = fe; wantsEditor = editor; wire = g_selWire;
-        InitSink(IID_RoutedEventHandler_Del, g_route1Gen);
+        row = std::move(r); path = p; edit = e; rowFe = fe; open = expanding; wire = g_selWire;
+        if (rowFe) reinterpret_cast<IUnknown*>(rowFe)->AddRef();
+        const auto& iid = expanding
+            ? DevToolsIid<winrt::Windows::Foundation::TypedEventHandler<DevToolsXC::Expander, DevToolsXC::ExpanderExpandingEventArgs>>()
+            : DevToolsIid<winrt::Windows::Foundation::TypedEventHandler<DevToolsXC::Expander, DevToolsXC::ExpanderCollapsedEventArgs>>();
+        InitSink(iid, g_route1Gen);
     }
     std::shared_ptr<const DevToolsCardRow> row;
     std::wstring path;
     InstanceHandle wire = 0;
     int edit = -1;
     void* rowFe = nullptr;
-    bool wantsEditor = false;
+    bool open = false;
 };
 
-// Show or hide a realized row's expansion and turn its triangle to match. One function so the three callers
-// (the sink, the initial realize of an already-expanded property, and the rebuild after a commit) cannot
-// disagree about which glyph means open.
+// Keep restored rows and editor rebuilds in sync with the platform's expansion state.
 static void ApplyRowExpansionState(void* rowFe, const std::wstring& path, bool open)
 {
-    if (IInspectable* blk = FindInRow(rowFe, L"PExpand")) {
-        ShowEl(blk, open);
-        blk->Release();
-    }
-    if (IInspectable* ch = FindInRow(rowFe, L"PChevron")) {
-        void* cc = nullptr;
-        if (SUCCEEDED(ch->QueryInterface(DevToolsIid<DevToolsXC::IContentControl>(), &cc)) && cc) {
-            IInspectable* boxed = nullptr;
-            if (SUCCEEDED(BoxString(open ? L"\uE70D" : L"\uE76C", &boxed)) && boxed) {
-                DevToolsPutContent(cc, boxed);
-                boxed->Release();
-            }
-            reinterpret_cast<IUnknown*>(cc)->Release();
+    if (IInspectable* header = FindInRow(rowFe, L"PHeader")) {
+        void* expander = nullptr;
+        if (SUCCEEDED(header->QueryInterface(DevToolsIid<DevToolsXC::IExpander>(), &expander)) && expander) {
+            bool current = false;
+            HRESULT hr = DevToolsGetIsExpanded(expander, &current);
+            if (SUCCEEDED(hr) && current != open)
+                hr = DevToolsAbi<DevToolsXC::IExpander>(expander)->put_IsExpanded(open);
+            if (FAILED(hr))
+                DevToolsOverlayLog(L"route1.props expansion state failed for '%s' hr=0x%08X", path.c_str(), hr);
+            reinterpret_cast<IUnknown*>(expander)->Release();
         }
-        SetAutomationTextOn(ch, (open ? L"Collapse " : L"Expand ") + path, L"", L"");
-        ch->Release();
+        header->Release();
     }
 }
